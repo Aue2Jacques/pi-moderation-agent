@@ -60,7 +60,7 @@ export function sceneFromYaml(y: ScenesYaml[Scene]): SceneConfig {
 export type LoadedBundle = { bundle: PolicyBundle; contractTests: Record<string, ContractTestYaml[]>; texts: Record<string, string> };
 
 export function loadBundle(rulesDir: string, scenesFile: string): LoadedBundle {
-  const files = readdirSync(rulesDir).filter((f) => f.endsWith(".yaml") && f !== "mapping.yaml").sort();
+  const files = readdirSync(rulesDir).filter((f) => /^[A-Z]+-\d+\.yaml$/.test(f)).sort();   // rule files only (mapping.yaml, wordlist.yaml are not rules)
   const parts: string[] = [];
   const rules: Rule[] = [];
   const contractTests: Record<string, ContractTestYaml[]> = {};
