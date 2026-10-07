@@ -1,6 +1,6 @@
-# 开发文档 v1.4：pi-moderation-agent
+# 开发文档 v1.3：pi-moderation-agent
 
-日期：2026-10-09。基于冻结的项目文档 `docs/project-doc-v2.md` v2.3。v1.4 对 v1.3 做定点修订，并入第八轮外部审查（`docs/reviews/round-8-dev-doc-v1.3-review.md`，基于 afbf267）的 13 项检查；处理记录见附录 V。v1.3 并入第七轮自审（附录 X）。历史版本在 `docs/history/`（v1.0–v1.3）。**本文自包含。** 按第八轮意见，此后不再整篇重写：阶段 1 起每个问题对应一个先失败、修复后通过的测试。
+日期：2026-10-09。基于冻结的项目文档 `docs/project-doc-v2.md` v2.3。v1.3 并入第七轮自审（`docs/reviews/round-7-self-review.md`，三个子 agent 分角度 + 本人复核，基于 e0ea08c）的全部 32 条；逐项处理见附录 W。第六轮、第五轮的处理记录在附录 X、Y。历史版本在 `docs/history/`（v1.0、v1.1、v1.2）。**本文自包含。**
 
 写法约定：
 - 与 v2.3 冲突时以 v2.3 为准，并在附录 Z 记录。
@@ -30,7 +30,6 @@
 | 分阶段开工顺序与停止条件 | §14 |
 | 开工前验证清单 | §15 |
 | v2.3 契约覆盖表（机制 → 用例 → 阶段/周次） | 附录 W |
-| 第八轮审查处理记录 | 附录 V |
 
 ---
 
@@ -96,8 +95,7 @@ app.db 是唯一业务事实源（v2.3 §5.3）。SQLite WAL，`synchronous=NORM
 | judge_call | 每次判官调用（调用级：输入指纹、证据集合、状态、延迟、费用） | G、W | 评测、费用 |
 | judge_answer | 判官调用里的每个问题的答案（问题指纹、choice、概率） | 与 judge_call 同事务 | effective、allowedActions |
 | model_call | 主模型每个 generation task 的逻辑记录 | W hooks | 评测对账 |
-| tool_slot | 每次逻辑工具调用的额度占用（硬限制） | W（经 core） | 预算 |
-| tool_request | 每次物理外发请求的账单（结算按请求幂等） | W（经 core） | 预算、费用对账 |
+| tool_slot | 每次逻辑工具调用的额度占用、物理请求数、费用结算 | W（经 core） | 预算 |
 | worker_command | G → W 控制命令 | G | W 轮询 |
 | human_queue | 人审队列（含关闭标记） | 与 release / 人工裁决同事务 | 人审页 |
 | feedback | 人审标注回流 | 人审页 | 校准器 |
@@ -169,17 +167,15 @@ CREATE TABLE review (
   cost_status      TEXT CHECK(cost_status IN ('settled','estimated')),
   over_budget_micro INTEGER,
   yield_continues  INTEGER NOT NULL DEFAULT 0,
-  rules_ver TEXT NOT NULL,                -- 策略包版本 = rules/ + config/scenes.yaml 的联合 sha（§10）
-  calib_ver TEXT NOT NULL, evidence_ver TEXT NOT NULL, prices_ver TEXT NOT NULL,
+  rules_ver TEXT NOT NULL, calib_ver TEXT NOT NULL, evidence_ver TEXT NOT NULL, prices_ver TEXT NOT NULL,
   judge_model      TEXT NOT NULL,
   agent_model      TEXT,
   conversation_id  TEXT,
-  submission_id    TEXT,                  -- durable submission id，对账用（§11.5）；缺失时按 §7.3 步 8 幂等补齐
+  submission_id    TEXT,                  -- durable submission id，对账用（§11.5）
   release_reason   TEXT,                  -- timeout | budget_tools | budget_cost | evidence_gap | judge_down | model_release | backpressure | revoked | preprocess_error
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
   UNIQUE(content_id, seq),
   UNIQUE(content_id, trigger_request_id),
-  UNIQUE(review_id, content_id, seq),     -- 供 ruling 的三列外键引用
   CHECK((lease_owner IS NULL) = (lease_until IS NULL))
 );
 CREATE INDEX review_state_deadline ON review(state, deadline_at);
@@ -202,7 +198,7 @@ CREATE TABLE ruling (
   ingest_seq   INTEGER NOT NULL,
   created_at   INTEGER NOT NULL,
   UNIQUE(content_id, seq),
-  FOREIGN KEY(review_id, content_id, seq) REFERENCES review(review_id, content_id, seq),   -- 三列联合身份：裁决只能指向同一行审次
+  FOREIGN KEY(content_id, seq) REFERENCES review(content_id, seq),
   CHECK(actor <> 'agent' OR attempt IS NOT NULL)
 );
 CREATE INDEX ruling_content_ingest ON ruling(content_id, ingest_seq);
@@ -305,25 +301,17 @@ CREATE TABLE model_call (
 );
 CREATE INDEX model_call_review ON model_call(review_id);
 
-CREATE TABLE tool_slot (                        -- 逻辑工具调用：额度占用与聚合
+CREATE TABLE tool_slot (
   review_id TEXT NOT NULL REFERENCES review(review_id), call_id TEXT NOT NULL,
   attempt INTEGER NOT NULL, tool TEXT NOT NULL,
   counts_toward_limit INTEGER NOT NULL CHECK(counts_toward_limit IN (0,1)),
-  reserved_micro INTEGER NOT NULL,        -- 调用前对"一次物理请求"的保守估计
-  status TEXT NOT NULL CHECK(status IN ('reserved','blocked')),
+  reserved_micro INTEGER NOT NULL,
+  physical_requests INTEGER NOT NULL DEFAULT 0,
+  settled_micro INTEGER,
+  status TEXT NOT NULL CHECK(status IN ('reserved','settled','unknown','blocked')),
   block_reason TEXT,                      -- budget_tools | budget_cost | deadline | revoked
-  created_at INTEGER NOT NULL,
-  PRIMARY KEY(review_id, call_id)
-);
-
-CREATE TABLE tool_request (                     -- 物理请求账单：一次外发一行，结算按行幂等（§7.5）
-  review_id TEXT NOT NULL, call_id TEXT NOT NULL, request_no INTEGER NOT NULL,   -- 同一逻辑调用内递增
-  judge_call_id TEXT,                     -- 判官请求指向 judge_call；主模型请求不在此表（在 pi.usage）
-  cost_micro INTEGER,
-  cost_status TEXT NOT NULL CHECK(cost_status IN ('inflight','settled','unknown')),
   created_at INTEGER NOT NULL, settled_at INTEGER,
-  PRIMARY KEY(review_id, call_id, request_no),
-  FOREIGN KEY(review_id, call_id) REFERENCES tool_slot(review_id, call_id)
+  PRIMARY KEY(review_id, call_id)
 );
 
 CREATE TABLE worker_command (
@@ -459,29 +447,28 @@ visibility：裁决 pass → visible；limit → self_only；takedown → hidden
 | T2 | `fastDispose(contentId, decision, judgeCallIds)` | S1 全部 | review_id `<content_id>#fast#1` 冲突 → 读回已有 ruling；intake.judged_review_id 已非空 → 直接返回该审次，不二次路由 |
 | T2' | `createSuspiciousReview(contentId, pins, judgeCallIds, reason?)` | S2 / S2'；`snapshot_seq = ledger_seq.value`（只读当前值） | 同上 |
 | T3 | `acquireLease(reviewId, workerId, ttl)` | S3 / S3' | `WHERE (state='queued' OR (state='investigating' AND lease_until < now)) AND deadline_at > now AND attempt < MAX_ATTEMPTS`；0 行时回读 state：investigating 且租约有效 → `E_LEASE_HELD{lease_until}`；其余 → `E_STATE_INVALID` |
-| T3' | `renewLease(reviewId, workerId, attempt, ttl)` | S4 | `WHERE state='investigating' AND lease_owner=? AND attempt=? AND lease_until >= now AND revoked_attempt IS NOT attempt`；0 行 → `E_LEASE_LOST`。**过期租约不能续**：过期后只能走 S3' 新代次 |
-| T4 | `submitRuling(input)` | S5 / S9（ruling.ingest_seq 取号） | §5；ruling 的 `content_id/seq` 从已读取的 review 行派生，不接受调用方指定 |
-| T5 | `releaseToHuman(reviewId, actor, attempt?, workerId?, reason, usedMicro?)` | S6 / S11 | actor=agent：`WHERE state='investigating' AND lease_owner=? AND attempt=? AND lease_until >= now AND revoked_attempt IS NOT attempt`，0 行 → `E_ATTEMPT_STALE`；actor=control（S11）不检查租约；已 human_queue → duplicate；终态 → `E_STATE_INVALID` |
+| T3' | `renewLease(reviewId, workerId, attempt, ttl)` | S4 | `WHERE lease_owner=? AND attempt=?`；0 行 → `E_LEASE_LOST` |
+| T4 | `submitRuling(input)` | S5 / S9（ruling.ingest_seq 取号） | §5 |
+| T5 | `releaseToHuman(reviewId, actor, attempt?, workerId?, reason, usedMicro?)` | S6 / S11 | actor=agent：`WHERE lease_owner=? AND attempt=?`，0 行 → `E_ATTEMPT_STALE`；actor=control（S11）不检查租约；已 human_queue → duplicate；终态 → `E_STATE_INVALID` |
 | T6 | `revokeAndRelease(reviewId, reason)` | S7 | command_id `<review_id>#abort#<attempt>` 去重；used_micro 按回退口径（§7.5） |
 | T7 | `requeue(reviewId)` | S8 | `WHERE state='investigating' AND lease_until < now AND attempt < MAX_ATTEMPTS AND deadline_at > now` |
 | T8 | `outboxMark(eventId, status, nextAt)` | outbox | 条件更新 |
 | T9 | `createFollowupReview(contentId, trigger, triggerRequestId, payloadSha)` | S10 | ① 查 `(content_id, trigger_request_id)`：存在且 payload_sha 相同 → 返回原审次；存在且不同 → `E_REQUEST_CONFLICT`；② 该内容最新审次（max seq）state ∉ {disposed, human_disposed} → `E_STATE_INVALID`；③ seq = max+1 插入 |
 | T10 | `consumer.apply(event)` | delivery_receipt + consumer_log + downstream_state + downstream_human | 见下 |
 | T11 | `reserveToolSlot(reviewId, attempt, callId, tool, estMicro)` | tool_slot | `INSERT OR IGNORE`；新插入且 `usedToolSlots(reviewId) > budget_tools` → status=blocked, block_reason=budget_tools，返回 `E_BUDGET_EXCEEDED`；已存在 → 返回原状态 |
-| T11' | `openToolRequest(reviewId, callId)` → request_no | tool_request(inflight) | 工具每次真正向外部发请求前调用；重放产生新的 request_no |
-| T12 | `settleToolRequest(reviewId, callId, requestNo, micro \| null, judgeCallId?)` | tool_request | `WHERE cost_status='inflight'`：有费用 → settled；null → unknown。同一 request_no 重复结算是空操作（幂等）；缓存命中不开新请求 |
+| T11' | `bumpPhysicalRequest(reviewId, callId)` | tool_slot.physical_requests+1 | 工具每次真正向外部发请求前调用 |
+| T12 | `settleToolSlot(reviewId, callId, micro \| null)` | tool_slot | 累加 settled_micro；null → unknown |
 | T13 | `recordModelCall(taskId, review, usage)` | model_call | `INSERT OR IGNORE` |
 | T14 | `bumpYield(reviewId, max)` | review.yield_continues | `WHERE yield_continues < max` |
 | T15 | `appendRejectAudit(...)` | audit | 业务事务 ROLLBACK 之后独立 BEGIN IMMEDIATE 提交 |
 | T16 | `recordJudgeCall(call, answers)` | judge_call + judge_answer | 主键去重 |
-| T17 | `updateReviewCost(reviewId, usedMicro, costStatus, overMicro)` | review.used_micro / cost_status / over_budget_micro | 可多次更新（后到用量）；不碰 ruling |
 
 `usedToolSlots(reviewId) = SELECT COALESCE(SUM(counts_toward_limit),0) FROM tool_slot WHERE review_id=? AND status<>'blocked'`。T11 与 §5.2 步 6 都用这一个函数。
 
 **T10 消费规则（按审次管理人审生命周期）**：
 ```
 无条件 INSERT delivery_receipt(event_id, now)
-event_id 已在 consumer_log → 重复投递：返回原结果，不改状态（与"第一次送达但已过时"不同，后者才产生 stale / stale_notification）
+event_id 已在 consumer_log → 返回原结果，不改状态
 kind = ruling（review r, seq s）：
     if s > downstream_state.applied_seq → upsert applied_action/applied_seq, result=applied
     else result=stale
@@ -546,12 +533,10 @@ trustedCalls = judge_call where review_id = this AND status='ok'
 answers(q)   = judge_answer where question_sha = q.sha AND judge_call_id ∈ trustedCalls AND calibrated_probs IS NOT NULL
 对问题 q：
   按 judge_call.evidence_set 分组（evidence_set 只含 content-bearing 证据：account_history / thread_context / image_check / similar；不含 rule / judge）
-  组内：choice 不一致 → group.inconsistent；否则 group.p = 最新一条的校准概率
-  group.confirmed(action) = 组内存在一对答案 (a, b)：b.confirms_call_id = a.judge_call_id；两者 input_sha、question_sha、model、calib_ver 相同；
-                            且 a 与 b **各自都满足 action 的条件**（放行：两次 p 都 < thresholds.pass 且 choice 都是该问题的放行选项；拦截：两次 p 都 ≥ block）
+  组内：choice 不一致 → group.inconsistent；否则 group.p = 最新一条的校准概率，group.confirmed = 组内 ≥2 条一致（含 shuffle 复问，confirms_call_id 指向同组）
   有效组 = evidence_set 为唯一极大元的组（⊇ 其他所有组）；不存在唯一极大 → effective(q) = none
 ```
-含义：补了新证据（证据集合变大）的复判替代此前判断；同证据反复调用若结果不一致 → inconsistent；两条互不包含的证据路径 → none，只能继续补证或 release。`load_rule` 不改变证据集合，所以反复读规则不会制造新的单样本。**确认不是"两次 choice 相同"**：0.20 → 0.02 两次都选"正常"也不算确认，因为第一次不满足放行条件（U-12、H-25f）。**放行选项**：每个问题在规则 YAML 里声明 `pass_choices`（例如 `none`、`benign_mention`）；`unknown` 永远不是放行选项，两次都选 unknown 且 p 很低也不放行（H-25g）。
+含义：补了新证据（证据集合变大）的复判替代此前判断；同证据反复调用若结果不一致 → inconsistent；两条互不包含的证据路径 → none，只能继续补证或 release。`load_rule` 不改变证据集合，所以反复读规则不会制造新的单样本。
 
 **第二步：allowedActions（`allowed.ts`）。**
 
@@ -560,7 +545,7 @@ for rule r in applicable(scene, rulesVer):                 // r 有一个规则�
     e = effective(q_r)
     exc_r = for each exception x: effective(q_x).choice ∈ {applies, not_applies, unknown}；无 → unknown
     block_support(r) = e ≠ none AND !e.inconsistent AND e.p ≥ r.thresholds.block AND all(exc_r == not_applies)
-    pass_support(r)  = e ≠ none AND !e.inconsistent AND e.confirmed(pass)          // 两次都满足放行条件（见上）
+    pass_support(r)  = e ≠ none AND !e.inconsistent AND e.confirmed AND e.p < r.thresholds.pass
     suspicious(r)    = e ≠ none AND !pass_support(r) AND !block_support(r)
 covered(c) = ∀ r ∈ rules(c, scene): pass_support(r)         // 类别 c 的全部规则都支持放行
 required   = requiredCategories(scene) ∪ (has_images ? {image_check} : ∅)
@@ -572,11 +557,11 @@ return allowed                                                // release 永远�
 ```
 规则：
 - 高风险有效答案 → pass 不在集合；豁免成立（exc=applies）→ 该规则不支持下架；补证据后有效答案变为低风险**且经复问确认** → pass 进入集合。
-- `confirmed(pass)` 是放行侧的硬要求，**对 fastpath 与 agent 同样适用**：任何自动放行都必须由同输入的第二次（打乱选项的）答案确认，且两次各自满足放行条件（§9.2）。快判的确认在同一次 System One 调用内完成（§9.2），所以 G 的单次调用预算不变，但每个规则问题的 token 数约翻倍，快判成本与延迟按新口径重测（E-03）。
+- `confirmed` 是放行侧的硬要求：任何支持放行的有效答案都必须由同证据集合的第二次（打乱选项的）调用确认（§9.2）。这堵住"每加一条证据就得到一次新的单样本"的路径：单次低分永远不够。
 - 文本已有 block_support 时其他类别不要求覆盖（v2.3 §6.4 提前结束）。
 - 证据 ID 只是引用，授权来自有效判官答案与规则。
 
-验收：H-17、H-25（a–g），其中 d：证据集合逐步扩大、每组单样本 → 不放行；e：上一组 inconsistent，超集组单条低分 → 不放行，超集组两条各自满足放行 → 放行；f：0.20 → 0.02 两次 choice 相同 → 不放行；g：两次都选 unknown 且 p 很低 → 不放行。
+验收：H-17、H-25（含 H-25d：证据集合逐步扩大、每组单样本 → 不放行；H-25e：上一组 inconsistent，超集组单条低分 → 不放行，超集组两条一致低分 → 放行）。
 
 ### 5.5 错误码全表
 
@@ -675,7 +660,7 @@ W 调查：   每次外部调用前经 guard() 检查执行资格（§7.3）
 迟到：     旧代次 dispose 到达 T4 → 步 2 或步 4 拒绝；不新增、不覆盖
 人工：     人审页 submit(actor=human) → 跳过机器条件 → human_disposed
 ```
-单次生成的时间上界【计算】= `stream.timeoutMs` × (1 + `retry.maxRetries`) + 重试等待 = 15s × 2 + `baseDelayMs`（durable 默认 2000ms【源码，agent.ts DEFAULT_RETRY_POLICY】，一次重试）≈ 32s（§8.1），小于 60s 截止；超出截止的在飞请求结果由 T4 步 5 拒绝。实际墙钟在 H-27/E-01 观测。
+单次生成的时间上界 = `stream.timeoutMs` × (1 + `retry.maxRetries`) = 20s × 2 = 40s（§8.1），小于 60s 截止；超出截止的在飞请求结果由 T4 步 5 拒绝。
 
 ### 7.2 abort 为何只是尽力
 
@@ -704,8 +689,7 @@ durable 事实：`Harness.open()` 不启动调度（scheduler `open()` "Dispatch
 7. resume()。此后：
    - active：纯重放。
    - finalize：恢复的终结工具按 finalize 路径读回业务结果、memo、terminate；恢复的是 generation 任务时，模型随后发出的 dispose/release 在 beforeTool 放行（§8.4），同样走 finalize 路径。
-   - revoked：宿主控制循环立即 conversation.abort()。abort 落地前 durable 可能已为其恢复的 generation 任务发出模型请求；次数是 H-27 的观测结果，不预设上界。
-8. **提交缝隙补齐**（在 resume 之后，因为 submit 会启动调度）：对每个 active grant，若 `review.submission_id` 为空 → 用固定首次 requestId（`review_id`）`submit()`；durable 对同 requestId 返回已有 submission【原文】，所以"submit 已持久化但未回写 id"与"从未 submit"两种崩溃状态都由这一步幂等收口，然后 `bindSubmission()`。不会产生第二份逻辑审核（H-31）。
+   - revoked：宿主控制循环立即 conversation.abort()。abort 落地前 durable 可能已为其恢复的 generation 任务发出模型请求，次数【估计】≤ 1 + retry.maxRetries，H-27 实测并记录。
 ```
 
 **执行资格表（唯一行为表）**
@@ -733,16 +717,14 @@ durable 事实：`Harness.open()` 不启动调度（scheduler `open()` "Dispatch
 **硬限制 = 工具次数**；**软限制 = 费用**。
 
 - 工具次数：`beforeTool` 与 `guard()` 都调 T11。`counts_toward_limit`：dispose/release = 0，其余 = 1。超限 → block（dispose/release 仍放行）。本轮出现 blocked 行且审次未终结 → `afterTools` 让宿主控制循环 release(reason=budget_tools)（H-08）。
-- 物理请求：每次真正外发前 T11' 开一行 `tool_request(inflight)`；重放产生新的 request_no。逻辑次数（limit，tool_slot）与物理次数（tool_request 行数）分开报。
-- 工具费用：T12 按 `(review_id, call_id, request_no)` 结算，幂等；判官请求的费用来自 judge_call.usage，只记在 tool_request 一处（judge_call.cost_micro 是同一个数的副本，**不参与求和**）。
-- 主模型费用事实源 = durable `pi.usage`（`UsageDoc`：按 provider/model 与工具名累计，失败和中止的尝试也计入【原文，README "Usage and Cost"】）。`HookApi` 与 `ToolExecutionApi` 都实现 `DocumentReader`（`snapshot(token, conversationId, ctx)`【原文】）。
-- **费用公式（唯一口径，所有路径共用）**：
-  `spent = micro(pi.usage.models) + Σ tool_request.cost_micro(settled) + Σ_{tool_request inflight|unknown} tool_slot.reserved_micro`
-  同一逻辑调用内已结算的请求与仍未知的请求各算各的，不会互相覆盖；不依赖 `pi.usage.tools`。
-- `model_call` 只做逻辑记录（T13）；`first_usage` 可能来自失败尝试，仅供对账参考。
-- 软限制执行：`beforeTool`/`guard()` 发现 `spent ≥ budget_micro` → block 非终结工具（E_BUDGET_COST）；`afterTools`/`onYield` 发现超限 → 宿主控制循环 release(budget_cost)。超出量写 `review.over_budget_micro`，评测卡报告分布；不宣称绝对费用上限，也不预设"多一次请求"的上界。
+- 物理请求：T11' 每次真正外发前 +1；重放会再加。逻辑次数（limit）与物理次数分开报。
+- 工具费用：T12 结算（判官 usage → 微元；无 usage/超时 → unknown，按 reserved 计）。
+- 主模型费用事实源 = durable `pi.usage`（`UsageDoc`：按 provider/model 与工具名累计，失败和中止的尝试也计入【原文，README "Usage and Cost"】）。`HookApi` 与 `ToolExecutionApi` 都实现 `DocumentReader`（`snapshot(token, conversationId, ctx)`【原文】），所以 hooks 与 guard 都能读。
+- **费用判断公式**：`spent = micro(pi.usage.models) + Σ tool_slot.settled_micro(status=settled) + Σ tool_slot.reserved_micro(status IN (reserved, unknown))`。判官调用的费用来自 tool_slot（工具自报），不依赖 `pi.usage.tools`。
+- `model_call` 只做逻辑记录（T13，`INSERT OR IGNORE`，主键 = generation task id）；`first_usage` 可能来自失败尝试（`afterResponse` 收到每个终态响应【原文】），仅供对账参考。
+- 软限制执行：`beforeTool`/`guard()` 发现 `spent ≥ budget_micro` → block 非终结工具（E_BUDGET_COST）；`afterTools`/`onYield` 发现超限 → 宿主控制循环 release(budget_cost)。超出上界 = 一次在飞生成（≤ 40s，`max_tokens` 固定）+ 该轮已占用的工具；实际超出量写 `review.over_budget_micro`，评测卡报告分布。不宣称绝对费用上限。
 - `onYield` 续跑：T14 写 review 行。
-- **费用可以后续更新，裁决不能**：S5/S6/S7/S11 时用上面公式写 `used_micro`；只要存在 inflight/unknown 的请求或 pi.usage 可能未定（撤权后在飞请求仍会结束），`cost_status=estimated`；宿主控制循环在会话 idle 后、对账时再用同一公式 T17 更新一次，全部 settled 才标 `settled`。G 的 T6（S7/S11）没有 pi.usage，用 `Σ model_call.first_usage 换算 + Σ tool_request.settled + Σ reserved(inflight|unknown)` 作 estimated 初值，W 的宿主循环随后 T17 修正。
+- `used_micro` **只在终结时写一次**：S5/S6 由 W 把 `spent` 作为 T4/T5 入参（cost_status=settled）；S7/S11 由 T6 按回退口径算：`Σ model_call.first_usage 换算 + Σ judge_call.cost_micro + Σ tool_slot.settled/reserved`（cost_status=estimated）。
 
 验收 H-22。
 
@@ -766,14 +748,14 @@ const registry = createRegistry();
 registry.install(Moderation);
 const harness = await Harness.open(await openNodeSqliteStorage(SESSION_DB), {
   models, registry,
-  settings: { stream: { timeoutMs: 15_000, maxRetries: 0 }, retry: { maxRetries: 1, baseDelayMs: 2000 },
+  settings: { stream: { timeoutMs: 20_000, maxRetries: 0 }, retry: { maxRetries: 1 },
               toolExecution: "sequential", compaction: { enabled: false } },
   onReport: (e) => log.warn({ err: redact(e) }, "extension failure"),
 }, ctx);
 // 不在这里 resume()；见 §7.3
 ```
 
-`stream.timeoutMs=15s`、`retry.maxRetries=1`、`baseDelayMs=2s` → 单次生成 ≈ ≤ 32s【计算】< 60s 截止（§7.1）。`toolExecution:"sequential"`：轨迹可读；预算正确性不依赖它。`compaction.enabled=false`。
+`stream.timeoutMs=20s`、`retry.maxRetries=1` → 单次生成 ≤ 40s < 60s 截止。`toolExecution:"sequential"`：轨迹可读；预算正确性不依赖它。`compaction.enabled=false`。
 
 ### 8.2 一审次一会话
 
@@ -815,7 +797,7 @@ const dispose = defineTool({
 const done = (s: RulingSummary) => ({ content: text(`disposed ${s.action}`), details: s, control: { terminate: true } });
 ```
 
-`control:{terminate:true}` 只在"该轮每个结果都要求"时结束 run【原文，README "Tools"】，被 block 的结果不满足它。**最终保障在宿主层**：dispose/release 成功后，工具向宿主控制循环投递 `{kind:"finished"}`，控制循环对该会话 `conversation.abort()` → `waitForIdle()` → 删除 grant；业务已终结后模型的任何后续调用都被 guard/beforeTool 拒绝。系统提示仍要求终结工具单独成轮（降低多余请求），但不靠它保证正确性；多余的模型请求次数是 H-22 的观测值。`api.commit(change, ctx)` 两个参数【原文】。
+`control:{terminate:true}` 只在"该轮每个结果都要求"时结束 run【原文，README "Tools"】。所以系统提示要求终结工具单独成轮，`beforeTool` 对"同轮已含终结工具的其他调用"block（§8.4）；若模型仍同轮混发，多一次模型请求，H-22 计数。`api.commit(change, ctx)` 两个参数【原文】。
 
 其余工具：
 
@@ -843,7 +825,7 @@ hook(ToolTask, {
     if (g.mode === "revoked") return { block: "E_LEASE_LOST" };
     if (call.name === "escalate_model" && !FLAGS.escalation) return { block: "escalation disabled" };
     if (!ALLOWED_TOOLS.has(call.name)) return { block: "tool not allowed" };
-    if (core.hasTerminal(g.reviewId)) return { block: "审次已终结" };                 // 终结后的同轮其他工具
+    if (roundHasTerminal(api.taskId) && !TERMINAL.has(call.name)) return { block: "终结工具必须单独成轮" };
     const st = core.leaseStatus(g.reviewId, WORKER_ID, g.attempt);
     if (!st.held) return { block: "E_LEASE_LOST" };
     if (st.deadlinePassed) return { block: "E_DEADLINE_PASSED" };
@@ -883,7 +865,7 @@ hook(GenerationTask, {
 }),
 ```
 
-`beforeTool` 收到的 `api.taskId` 是当前 ToolTask 的 id，不是生成轮次（同轮各工具是不同的 ToolTask【源码，tool.ts ToolTaskInput {assistant, callId}】），所以不按轮次记账，改为查 app.db 的终结状态。`HookApi`（taskId、conversationId、memo、DocumentReader）**没有 `conversation()`**【原文】，所以 hook 只向宿主控制循环（`host-loop.ts`）投递请求，控制循环用 `harness.conversation(id)` 执行 T5 → `abort()` → `waitForIdle()` → 删除 grant。abort 的实际取消行为在 §15.1 验证。
+`roundHasTerminal(taskId)`：W 进程内按 generation task 记录本轮已 beforeTool 通过的工具名（同轮工具的 `beforeTool` 顺序执行）。`HookApi`（taskId、conversationId、memo、DocumentReader）**没有 `conversation()`**【原文】，所以 hook 只向宿主控制循环（`host-loop.ts`）投递请求，控制循环用 `harness.conversation(id)` 执行 T5 → `abort()` → `waitForIdle()` → 删除 grant。abort 的实际取消行为在 §15.1 验证。
 
 ### 8.5 证据：as-of 边界、模型可见片段、白名单
 
@@ -957,10 +939,7 @@ export const judgeProvider = () => createProvider({
 ### 9.2 校准与复问
 
 - 温度缩放：T 在开发集上最小化 NLL；文件 `calib/<judge>/<rule>@<ver>.json`。桶键 = 判官模型 id × 规则版本 × 场景 × 选项数；任一变化 → 文件缺失 → `calibrated: null` → 不进入有效答案。isotonic ≥1,000 样本才启用。
-- **确认（confirm）**：同一 input_sha、同一问题、打乱选项顺序（`shuffle_seed`）的第二个答案，`confirms_call_id` 指向原调用。统一口径：**所有自动放行（fastpath 与 agent）都必须确认**。实现两种：
-  - G 快判：在同一次 System One 调用里，每个规则问题放两份（原序 + 打乱序，question_sha 相同、`variant` 不同），一次调用得到原答案与确认答案（Jev 一次调用多问题【实测】；两份答案是否足够独立 **待 E-03 用一致率与分开两次调用对比后决定**，不独立则改为两次调用）。
-  - W：`confirm` 工具单独调用一次。
-  - 规则：确认对 (a, b) 的两次各自满足放行条件才算 `confirmed(pass)`；argmax 不一致 → 该组 inconsistent。成本：放行侧 token 约翻倍（快判）或 +1 次调用（W）【估计】，E-03 重测。
+- **复问（confirm）**：对同一 input_sha、打乱选项顺序（`shuffle_seed`）再调一次，`confirms_call_id` 指向原调用。规则：(1) G 快判落在 suspicious 边界 ±0.05 的样本复问一次；(2) **W 内任何将用于放行的有效答案必须复问**（§5.4 `confirmed`）；(3) 复问 argmax 不一致 → 该组 inconsistent。复问成本：放行侧 +1 次判官调用【估计】。
 
 ### 9.3 策略引擎（`policy/engine.ts`）
 
@@ -973,8 +952,8 @@ export const judgeProvider = () => createProvider({
 
 ## 10. 规则、校准、版本固定
 
-- 规则 YAML 字段（v2.3 §6.3）+ 本文新增：`question.pass_choices`（放行选项列表，§5.4）；无 `allowed_actions` 字段，规则级允许动作 = `{pass} ∪ {default_action}`；场景级白名单在 `config/scenes.yaml`。
-- **策略包版本** `rules@<sha>` = `rules/` 目录 **与 `config/scenes.yaml`** 的联合 git tree sha（`git rev-parse HEAD:rules` 与 `HEAD:config/scenes.yaml` 拼接后 sha256）。scenes.yaml 决定必查类别、动作白名单、image_check 阈值、可见性与截止，是安全策略的一部分，必须随审次固定；改 scenes.yaml = 发布新策略包，走影子/门槛/灰度。其余版本：`calib@<sha>`、`prices@<sha>`、`evidence@<ver>`。审次创建时写入 review 行；W 按 review 行读取（`policy.bundleAt(ver)` 同时给出规则与场景配置）。
+- 规则 YAML 字段（v2.3 §6.3）+ 本文新增：无 `allowed_actions` 字段，规则级允许动作 = `{pass} ∪ {default_action}`；场景级白名单在 `config/scenes.yaml`。
+- 版本号：`rules@<sha>`（rules/ 的 git tree sha）、`calib@<sha>`、`prices@<sha>`、`evidence@<ver>`。审次创建时写入 review 行；W 按 review 行读取（`policy.rulesAt(ver)`）。
 - 灰度：`hash(content_id) % 100 < rollout_pct` 的新审次用新版本。
 - 影子回放两类：只改 thresholds/scenes/default_action/路由 → 复用旧 judge_answer 校准概率重算三态；改 text/exceptions/question/选项 → 用固定证据重新调用判官，费用计入报告。`insufficient` 的判定：影子规则需要的问题在旧 judge_answer 里没有且无法在固定证据上重调（例如需要新工具证据）→ 该样本标 insufficient，不计入可上线结论。
 - 发布门槛绑定配置：`gate_run(config_sha)`；`/api/rules/rollout` 要求匹配且 passed=1，否则 409（D-14）。四项门槛：contract tests 100%；目标样本翻转率达预期；回归池无退化；成本与转人审量不超限。
@@ -995,13 +974,11 @@ export const judgeProvider = () => createProvider({
 | 组 | 实现 | 审次生命周期 |
 |---|---|---|
 | B | 判官一次：内容 + scene → 三态 | **不走** T3–T4；无 review 行 |
-| B+ | 固定取证 → 全部证据 model_view + 内容 → 判官一次 | 不走 T3–T4；取证用案例清单里冻结的 snapshot_seq |
+| B+ | 固定取证 → 全部证据 model_view + 内容 → 判官一次 | 不走 T3–T4；取证用 C 组同样本审次的 snapshot_seq（从 C 组库读）或冻结时统一取号 |
 | A | W 脚本驱动模式：同样的生命周期（T3、deadline、T11、hooks、T4、allowedActions、confirm），工具顺序固定（历史 → 线程 → 相似 → 规则 → judge → confirm）后主模型一次判断并调用 dispose/release | 完整 |
 | C | 完整 W | 完整 |
 
-B/B+ 的指标映射：pass/block = 自动完成，suspicious = 转人审；它们的时延与成本不含审次开销，**不与 A/C 横比时延**，只比质量指标。主比较 C 对 A。
-
-**证据边界由案例清单冻结，不由任一组的运行产生**：`suspicious.py` 在冻结疑似集时同时为每条内容记下 `snapshot_seq`（= 基线库当时的 ledger_seq）写入案例清单；实验模式下 T2' 从案例清单读取该值而不是取库内当前值（`EXPERIMENT_CASELIST=<file>`）。于是 A/B/B+/C 对同一内容看到完全相同的历史，组内先后完成的其他裁决不会进入后续审次的证据。各组独立环境（`sqlite3 app.base.db ".backup app.<group>.db"`；独立 `SESSION_DB`、`OUT_DIR`、`CACHE_NS`）只是防缓存与写冲突，不是证据隔离的依据。"连续审核如何影响后续历史"若要研究，另做系统级实验。执行约束：`FLAG_ESCALATION=false`；主模型固定；人审配额 `K=30/千条`【估计】；人工 oracle 介入前后分开报。
+B/B+ 的指标映射：pass/block = 自动完成，suspicious = 转人审；它们的时延与成本不含审次开销，**不与 A/C 横比时延**，只比质量指标。主比较 C 对 A。执行约束：`FLAG_ESCALATION=false`；主模型固定；各组独立环境（`sqlite3 app.base.db ".backup app.<group>.db"`；独立 `SESSION_DB`、`OUT_DIR`、`CACHE_NS`）；人审配额 `K=30/千条`【估计】；人工 oracle 介入前后分开报。
 
 ### 11.4 指标定义
 
@@ -1025,15 +1002,12 @@ B/B+ 的指标映射：pass/block = 自动完成，suspicious = 转人审；它�
 **即时安全约束（任何时刻可查，含崩溃中途）**：
 1. 不重复（副作用级）：每个 `event_id` 在 delivery_receipt 的收据数 ≥ 1 时，consumer_log 恰 1 行且 downstream 只应用一次；崩溃用例断言收据数 ≥ 2 且 applied=1（D-06、H-05）。
 2. 不倒退：`downstream_state.applied_seq` ≤ 已 sent/acked ruling 事件的 max(seq)，且 ≥ 已 acked ruling 事件的 max(seq)。
-3. 三项分开的检查：
-   - **守恒**（无时限）：content 每行在 intake 有记录；intake 每行处于 `status IN ('received','preprocessed')`（有归属：待 G 处理）或 `status='judged' AND judged_review_id IS NOT NULL`；review 非终态行处于 `queued` / `investigating` / `human_queue AND EXISTS(human_queue 未关闭)` 之一。只证明"有记录、有归属"。
-   - **排队超时**（明确时限，`INTAKE_QUEUE_MAX_MS=60000`、`AGENT_QUEUE_MAX_MS=DEADLINE`）：`received/preprocessed AND created_at < now − INTAKE_QUEUE_MAX_MS` 或 `queued AND deadline_at < now − 2×SCAN_MS` 或 `investigating AND lease_until < now − 2×SCAN_MS` → 报"超时未处理"，这是队列与控制循环的问题，不是丢失。
-   - **控制循环健康**：G 把每次 `control.tick` 的时刻写 `metrics_minute`（或 health 表）；`now − last_tick > 2×SCAN_MS` → 报"控制循环停摆"。
-4. durable 侧（两种模式）：**W 活着** → 调 `GET /sessions`：每个 active grant 的会话有活任务或 submission 状态 settled；没有 app.db 为 active 而 durable 既无活任务又无 settled submission 的审次。**W 已死** → reconcile **取得并持有 `w.lock` 直到关闭存储**，用 `openNodeSqliteStorage` 正常打开 session.sqlite（该函数没有只读选项【源码，storage/sqlite/node.ts】，打开会设置 WAL 等参数）+ `inspect()`，不 resume、不 submit；这是独占离线检查，不是只读读。不用 memo 判断终态。
+3. 守恒（从全部已接收内容开始）：content 每行在 intake 有记录；intake 每行满足 `status='judged' AND judged_review_id IS NOT NULL` 或 `status IN ('received','preprocessed') AND (lease_until ≥ now OR updated_at ≥ now − 2×SCAN_MS)`；review 非终态行满足 `queued AND (deadline_at + 2×SCAN_MS ≥ now)` 或 `investigating AND lease_until + 2×SCAN_MS ≥ now` 或 `human_queue AND EXISTS(human_queue 未关闭)`。
+4. durable 侧（两种模式）：**W 活着** → 调 `GET /sessions`：每个 active grant 的会话有活任务或 submission 状态 settled；没有 app.db 为 active 而 durable 既无活任务又无 settled submission 的审次。**W 已死** → reconcile 以只读方式打开 session.sqlite（`openNodeSqliteStorage` + `inspect()`，不 resume）；这是唯一允许的跨进程读，且只在 W 进程不存在（w.lock 可取得）时进行。不用 memo 判断终态。
 
 **排空后的最终一致**：
 5. `content_state.effective_seq` = ruling 的 max(seq)（对所有有 ruling 的内容，含快判路径）；`downstream_state.applied_seq` = 已 acked ruling 事件的 max(seq)；`downstream_human.pending=1` 的审次集合 = human_queue 未关闭集合。
-6. **进入过 durable 的**终态审次（`conversation_id IS NOT NULL`）其 submission 状态为 done 或 unanswered，无活任务；快判直接完成、未进 W 即转人工后人工完成的审次标"不适用"，不算失败。
+6. 每个终态审次的 durable submission 状态为 done 或 unanswered，无活任务。
 7. 终结：等待 ≤ 3 × deadline，测试任务全部到达终态或 human_queue。
 
 崩溃矩阵（`scripts/crash-matrix.sh`）：CRASH_AT ∈ {A,B,C,D} × 随机。演示前最小量 ≥ 20 次；W7 汇总 ≥ 50 次（v2.3 §9.2 Wilson 上界口径）。每次后跑即时约束，排空后跑最终一致。
@@ -1057,7 +1031,7 @@ B/B+ 的指标映射：pass/block = 自动完成，suspicious = 转人审；它�
 | U-09 | allowed.ts | §5.4 第二步全分支，含 covered(c) 多规则、image_check 内置、例外 unknown 不拦 |
 | U-10 | openai-logprob 解析 | 缺任一选项 → abstain；多 token；前导空格；mass 不足 |
 | U-11 | shadow.ts | 变更分类；insufficient 判定 |
-| U-12 | effective.ts | 唯一极大替代；同证据不一致；不可比 → none；rule 证据不改变集合；confirmed(action) 判定：两次各自满足、choice 同为 pass_choices、0.20→0.02 不算、unknown 不算、确认对的 input/question/model/calib 必须一致 |
+| U-12 | effective.ts | 唯一极大替代；同证据不一致；不可比 → none；rule 证据不改变集合；confirmed 判定 |
 | U-13 | consumer.ts | T10 规则（含收据） |
 | U-14 | control.ts | tick 对过期/过截止/attempt 上限的分支 |
 
@@ -1074,10 +1048,8 @@ B/B+ 的指标映射：pass/block = 自动完成，suspicious = 转人审；它�
 | D-07 | 拒绝审计在 ROLLBACK 后仍存在（T15 新事务） |
 | D-08 | T9：同请求标识重试返回原审次；不同内容冲突；上一审次未终态 → E_STATE_INVALID；同 request_id 换 trigger 不开新审次；两个不同请求得两个序号 |
 | D-09 | content_state 待审初态 NULL/0；CHECK 约束 |
-| D-10 | release → 人工 ruling 同 seq 仍 applied；**重复投递**同 event_id 的 release → 返回原结果 notified（不改状态）；**第一次送达但已过时**的 release（人工 ruling 已先到）→ stale_notification；旧 seq 的 ruling 第一次送达 → stale，重复投递 → 返回原结果；downstream_human 按审次关闭 |
-| D-11 | T11 重放不重复占用；release 不计次；blocked 行不计入 usedToolSlots；T12 同 request_no 重复结算空操作；同一逻辑调用"第一次 settled + 第二次 unknown"时费用公式同时计入已知与估计 |
-| D-17 | ruling 三列外键：review_id 指向审次 A、content_id/seq 指向审次 B 的行被拒；正确组合可插入 |
-| D-18 | T3' 对过期租约（lease_until < now）续租失败 → E_LEASE_LOST；对已撤销代次续租失败 |
+| D-10 | release → 人工 ruling 同 seq 仍 applied；重放 release → stale_notification；重放旧 ruling → stale；downstream_human 按审次关闭 |
+| D-11 | T11 重放不重复占用；release 不计次；blocked 行不计入 usedToolSlots |
 | D-12 | 两连接竞争：A 持写锁 1s，B（busy_timeout 1500）拿到；A 持 3s，B 得 SQLITE_BUSY 后有限重试成功；deferred BEGIN 在他人提交后 BUSY_SNAPSHOT（证明必须 IMMEDIATE）；记录 B 等锁期间事件循环停摆时长 |
 | D-13 | ledger_seq 并发取号严格递增无重复 |
 | D-14 | rollout 在 gate_run.config_sha 不符时 409 |
@@ -1109,18 +1081,15 @@ B/B+ 的指标映射：pass/block = 自动完成，suspicious = 转人审；它�
 | H-19 | release → 人工裁决 → 重放 release → 重放旧 ruling；下游终态 = 最新有效裁决，人审待办关闭 | |
 | H-20 | 旧租约未到期时立即重启：启动等待到期后接管；期间外部调用计数 0；不 abort | §7.3 步 4 |
 | H-21 | 同毫秒裁决、迟到入库早业务时间事件、审次乱序完成：旧审次工具结果不变 | §8.5 |
-| H-22 | 同轮 3 工具已用 11/12 → 1 执行 2 block；release 不计次；工具重放 tool_slot 不变、tool_request 多一行；afterResponse 重放 model_call 不变；费用公式与 pi.usage + tool_request 对账一致 | §7.5 |
+| H-22 | 同轮 3 工具已用 11/12 → 1 执行 2 block；release 不计次；工具重放 tool_slot 不变 physical+1；afterResponse 重放 model_call 不变；同轮混发终结工具时多一次请求被计数 | §7.5 |
 | H-23 | finalize 会话恢复的是 generation 任务：模型随后的 dispose 在 beforeTool 放行并走 finalize 路径，无新裁决 | §7.3 |
 | H-24 | 每个崩溃用例后：即时约束；排空后：最终一致 | §11.5 |
-| H-25 | a 初判 0.70 → 补上下文复判 0.02 + confirm 0.03 → pass 允许；b 同证据 0.70/0.02 → inconsistent → 拒；c 不可比证据路径 → 只能 release；d 证据集合逐步扩大、每组单样本 0.02 → 拒（未 confirm）；e 上一组 inconsistent，超集组单条 0.02 → 拒，超集组两次各自 < pass → 允许；**f** 0.20 → 0.02 两次 choice 都"正常" → 拒（第一次不满足放行）；**g** 两次都选 unknown 且 p 0.01 → 拒 | §5.4 |
+| H-25 | a 初判 0.70 → 补上下文复判 0.02 + confirm → pass 允许；b 同证据 0.70/0.02 → inconsistent → 拒；c 不可比证据路径 → 只能 release；d 证据集合逐步扩大、每组单样本 0.02 → 拒（未 confirm）；e 上一组 inconsistent，超集组单条 0.02 → 拒，超集组 0.02 + confirm 一致 → 允许 | §5.4 |
 | H-26 | 人工裁决先送达、旧 release 后送达 → stale_notification；两个审次待办互不覆盖 | §4 T10 |
 | H-27 | 启动屏障：resume 前 scheduling=paused 且外部调用计数 0；revoked 会话 abort 前的模型请求数记录（预期 ≤ 1 + maxRetries）；生成请求待恢复与工具 intent 待恢复两种起点 | §7.3 |
 | H-28 | 主动重启新代次：心跳停摆 → S8 → abort+waitForIdle → 重新 T3 → 新 requestId；旧在飞调用不得以新 attempt 提交 | §7.4 |
 | H-29 | S8 requeue 后新代次 investigating，旧 attempt 的 dispose 迟到 → E_ATTEMPT_STALE | §5.2 步 4 |
 | H-30 | 准入并发不超过 ADMIT_MAX | v2.3 §5.3 |
-| H-31 | 提交缝隙：(a) conversation 已绑定、submit 前 kill；(b) submit 已持久化、submission_id 回写前 kill → 重启后步 8 幂等取回同一 submission，审次只有一份逻辑审核，ruling ≤ 1 | §7.3 步 8 |
-| H-32 | 业务终结后的宿主收尾：dispose 成功且模型同轮还发了另一个工具 → 该工具被拒；宿主 abort 会话；多余模型请求次数记录 | §8.3 |
-| H-33 | fastpath 远离边界的正常内容（p=0.02）：快判含确认答案 → T2 通过；缺确认答案的快判结果 → T2 拒绝（E_ACTION_NOT_SUPPORTED） | §5.4、§9.2 |
 
 ### 12.4 contract tests 夹具
 
@@ -1132,7 +1101,7 @@ B/B+ 的指标映射：pass/block = 自动完成，suspicious = 转人审；它�
 |---|---|---|
 | E-01 | 20 条短文本走完整 C 组，终态校验 | ¥1 |
 | E-02 | 注入配对：MVP 30 条冒烟；W6 安全赛道 300 条 | ¥2 / ¥20 |
-| E-03 | Jev 100 条 + 校准拟合冒烟；logprob 判官 100 条；**快判含确认答案的新口径**：单次调用内两份问题 vs 分开两次调用的一致率、token 与延迟对比，决定快判确认实现方式 | ¥1 |
+| E-03 | Jev 100 条 + 校准拟合冒烟；logprob 判官 100 条 | ¥0.5 |
 | E-04 | 规则 rollout 生效时延 ≤ 5 分钟 | ¥0 |
 
 ### 12.6 CI
@@ -1145,7 +1114,7 @@ B/B+ 的指标映射：pass/block = 自动完成，suspicious = 转人审；它�
 
 ### 13.1 开发机、13.2 进程与启动
 
-同前（Cloud Studio 2 核 4G；`scripts/start.sh` G → W → replayer；`.env` 以 `.env.example` 为准）。运行参数：`APP_DB`、`SESSION_DB`、`ADMIT_MAX=10`、`LEASE_TTL_MS=30000`、`DEADLINE_MS_SHORT=60000`、`MAX_ATTEMPTS=3`、`SCAN_MS=2000`、`INTAKE_QUEUE_MAX_MS=60000`、`QUEUE_AGENT_MAX=50`、`QUEUE_HUMAN_MAX=500`、`OUTSTANDING_MAX=2000`、`EXPERIMENT_CASELIST`（实验模式）、`FLAG_ESCALATION=false`、`CRASH_AT`、`LOG_LEVEL`。
+同前（Cloud Studio 2 核 4G；`scripts/start.sh` G → W → replayer；`.env` 以 `.env.example` 为准）。运行参数：`APP_DB`、`SESSION_DB`、`ADMIT_MAX=10`、`LEASE_TTL_MS=30000`、`DEADLINE_MS_SHORT=60000`、`MAX_ATTEMPTS=3`、`SCAN_MS=2000`、`QUEUE_AGENT_MAX=50`、`QUEUE_HUMAN_MAX=500`、`OUTSTANDING_MAX=2000`、`FLAG_ESCALATION=false`、`CRASH_AT`、`LOG_LEVEL`。
 
 ### 13.3 中转站 provider 与模型能力
 
@@ -1174,8 +1143,8 @@ Python 回放器与 synth 导入**不直接写 content/synth_event**，而是调
 | 阶段 | 做 | 通过条件 | 停止条件 |
 |---|---|---|---|
 | 0 骨架 | 已完成【实测 2026-10-08】 | – | – |
-| 1 core 语义 | T1–T17、states、effective（confirmed(action)）、allowed、submit-check、budget（tool_request）、control.tick、outbox.dispatchOnce、consumer.apply、reconcile.instant/final（app.db 侧 1–3、5、7）、intake-cli；策略包版本含 scenes.yaml | U-01–U-14、D-01–D-18 全过；每条第七、八轮反例先有失败测试再修复 | 任一反例无法在 node:sqlite 语义下关闭（例如 D-12 的停摆时长使心跳不可靠）→ 停下改设计 |
-| 2 Pi 最小验证 | harness.ts、startup.ts（含步 8 提交缝隙）、grants、guard、host-loop（含业务终结后 abort 收尾）、工具（dispose/release/load_rule/线程/历史/judge/confirm 录制版）、hooks、faux 驱动（每会话独立 provider）、W /sessions、reconcile durable 侧（4、6） | H-01–H-08、H-10、H-17–H-33 过；resume 前 scheduling=paused；abort 实际取消行为被观测到 | Pi 1.0.4 下任一 H 用例无法实现 → 记录原因，评估 Plan B（AgentSession + sink 幂等）或改设计，不绕过 |
+| 1 core 语义 | T1–T16、states、effective、allowed、submit-check、budget、control.tick、outbox.dispatchOnce、consumer.apply、reconcile.instant/final（app.db 侧 1–3、5、7）、intake-cli | U-01–U-14、D-01–D-16 全过 | 任一反例无法在 node:sqlite 语义下关闭（例如 D-12 的停摆时长使心跳不可靠）→ 停下改设计 |
+| 2 Pi 最小验证 | harness.ts、startup.ts、grants、guard、host-loop、工具（dispose/release/load_rule/线程/历史/judge/confirm 录制版）、hooks、faux 驱动（每会话独立 provider）、W /sessions、reconcile durable 侧（4、6） | H-01–H-08、H-10、H-17–H-30 过；resume 前 scheduling=paused；abort 实际取消行为被观测到 | Pi 1.0.4 下任一 H 用例无法实现 → 记录原因，评估 Plan B（AgentSession + sink 幂等）或改设计，不绕过 |
 | 3 真实模型 | Jev 入口判官 + 录制；openai-logprob 判官 + 契约；策略引擎（快判含例外问题）；规则 ABUSE 3 条；主模型接入；费用对账 | E-03 冒烟；contract 100%；E-01 20 条终态一致；over_budget 分布有数 | 判官 abstain 率 > 30%【估计】→ 换判官模型 |
 | 4 接入与界面 | G intake/预处理/快判/S1/S2/S2'；G 定时调用控制循环与 dispatcher；背压；/api/metrics 与静态页；人审页最简；/restricted 鉴权；Clef 录制版 + get_image | 回放 500 条；H-09、H-11–H-16 过；H-24 在回放后通过 | – |
 | 5 故障、效果、演示 | crash-matrix ≥ 20 次（演示前最小量）；synth C0–C3；版本切换与 rollout；演示 3、5、1 降速、2 简版 | 四个演示各走一遍；reconcile 即时与最终一致全绿 | – |
@@ -1195,28 +1164,6 @@ Python 回放器与 synth 导入**不直接写 content/synth_event**，而是调
 7. 数据重叠与计数；云厂商调 1 条。
 
 ---
-
-## 附录 V 第八轮审查（开发文档 v1.3）处理记录
-
-| 审查项 | 处理 | 落点 |
-|---|---|---|
-| 1.1 快判与提交层对确认不一致 | 采纳：统一口径，所有自动放行必须确认；快判在同一次调用内放原序 + 打乱序两份问题，独立性由 E-03 验证，不独立则改两次调用 | §5.4、§9.2、H-33、E-03 |
-| 1.2 两次 choice 相同 ≠ 都支持放行 | 采纳：confirmed(action) 要求两次各自满足条件、确认对的 input/question/model/calib 一致；规则声明 pass_choices，unknown 不放行 | §5.4、§10、U-12、H-25f/g |
-| 2 复合外键不绑定同一行 | 采纳：三列联合外键 + review 三列唯一；T4 的 content_id/seq 从 review 行派生 | §2.2、§4 T4、D-17 |
-| 3.1 submit 前后缝隙 | 采纳：启动步 8 在 resume 后按固定 requestId 幂等 submit 并补绑定 | §7.3、H-31 |
-| 3.2 roundHasTerminal 的 taskId 是 ToolTask；block 不等于 terminate | 采纳：删除按轮记账；终结后 beforeTool 查 app.db 拒绝；宿主在业务终结后 abort 收尾；多余请求数作观测 | §8.3、§8.4、H-32 |
-| 4.1 费用重复计入 | 采纳：judge_call.cost_micro 不参与求和；唯一公式 | §7.5 |
-| 4.2 已知 + 未知混合；结算幂等；费用冻结 | 采纳：tool_request 表按物理请求记账、结算幂等；公式同时计已结算与未知；used_micro 可由 T17 后续更新，裁决不变；有 unknown 不标 settled | §2.2、§4 T11'/T12/T17、§7.5、D-11 |
-| 5.1 守恒 2×SCAN_MS 过严 | 采纳：守恒 / 排队超时 / 控制循环健康三项分开 | §11.5 |
-| 5.2 终态审次不一定有 submission | 采纳：按 conversation_id 判断适用 | §11.5 |
-| 5.3 openNodeSqliteStorage 非只读 | 采纳：改为持锁独占离线检查 | §11.5 |
-| 6.1 scenes.yaml 未入版本 | 采纳：策略包版本 = rules/ + scenes.yaml 联合 sha | §2.2、§10 |
-| 6.2 各组证据环境漂移 | 采纳：案例清单冻结每条内容的 snapshot_seq，实验模式 T2' 读清单 | §11.3 |
-| T3'/T5 过期租约 | 采纳：加 lease_until ≥ now 与撤销标记；过期不能续 | §4、D-18 |
-| D-10 重复 vs 过时 | 采纳 | §4 T10、D-10 |
-| 生成墙钟上界 | 采纳：含重试等待；stream 15s | §7.1、§8.1 |
-| 多选题 unknown | 采纳：pass_choices | §5.4 |
-| CI passWithNoTests | 如实：骨架检查，不代表用例通过；阶段 1 起每个问题对应先失败后通过的测试 | §14 |
 
 ## 附录 W v2.3 契约覆盖表
 

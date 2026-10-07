@@ -6,15 +6,15 @@
 
 ## 现在在哪一步
 
-项目文档 v2.3 已冻结（四轮外部审查通过）。开发文档 v1.3 已并入第五、六轮外审与第七轮自审（[docs/dev-doc-v1.md](docs/dev-doc-v1.md)，附录 W/X 逐项处理，全文自包含）。工程骨架已搭（阶段 0 完成）。下一步：阶段 1 core 语义 → 阶段 2 Pi 最小验证，各有停止条件。尚无业务代码。
+项目文档 v2.3 已冻结（四轮外部审查通过）。开发文档 v1.4 已并入五至八轮审查（[docs/dev-doc-v1.md](docs/dev-doc-v1.md)，附录 V/X 逐项处理，全文自包含）。工程骨架已搭（阶段 0 完成）。下一步：阶段 1 core 语义 → 阶段 2 Pi 最小验证，各有停止条件。尚无业务代码。
 
 ## 文档
 
 | 文件 | 内容 |
 |---|---|
 | [docs/project-doc-v2.md](docs/project-doc-v2.md) | **项目文档（权威）**：目标、业务、范围与分类体系、企业级属性、架构、模块设计、Pi 接口映射、数据、评测、演示、计划、风险；附录 C/D/E 是三轮审查的修订记录 |
-| [docs/dev-doc-v1.md](docs/dev-doc-v1.md) | **开发文档 v1.3**：仓库结构、app.db DDL、状态转换表、事务边界 T1–T16、有效判官结果与 allowedActions、错误码、接口、租约/恢复/预算、Pi 绑定写法（按 pi-durable 1.0.4 的 d.ts 核对）、评测执行协议、用例目录与 CI、部署配置、分阶段开工与停止条件；附录 W 是 v2.3 契约覆盖表，附录 X 是第七轮处理记录；旧版在 docs/history/ |
-| [docs/reviews/](docs/reviews/) | 七轮审查原文：可行性、设计、harness/agent 角度、基于 GitHub 的终审、开发文档 v1.0 审查、v1.1 审查、v1.2 自审 |
+| [docs/dev-doc-v1.md](docs/dev-doc-v1.md) | **开发文档 v1.4**：仓库结构、app.db DDL、状态转换表、事务边界 T1–T16、有效判官结果与 allowedActions、错误码、接口、租约/恢复/预算、Pi 绑定写法（按 pi-durable 1.0.4 的 d.ts 核对）、评测执行协议、用例目录与 CI、部署配置、分阶段开工与停止条件；附录 W 是 v2.3 契约覆盖表，附录 V/X 是第八、七轮处理记录；旧版在 docs/history/ |
+| [docs/reviews/](docs/reviews/) | 八轮审查原文：可行性、设计、harness/agent 角度、基于 GitHub 的终审、开发文档 v1.0 审查、v1.1 审查、v1.2 自审、v1.3 审查 |
 | [docs/requirements-v1.md](docs/requirements-v1.md) | 需求文档 v1（历史，第 12–15 节记录了早期修订） |
 | [docs/dev-eval-plan-v1.md](docs/dev-eval-plan-v1.md) | 开发与评测方案 v1（历史；Pi 源码映射细节仍有参考价值） |
 | [docs/confirmed-items-2026-10-07.md](docs/confirmed-items-2026-10-07.md) | 早期 63 条确认事项清单（历史） |
