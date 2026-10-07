@@ -23,3 +23,5 @@ dist-types/
 *.tsbuildinfo
 .pnpm-store/
 __pycache__/
+run/
+logs/

@@ -220,3 +220,22 @@ export function fastDispose(db: Db, bundle: PolicyBundle, i: FastDisposeInput, a
     throw e;
   }
 }
+
+/** Fast-path variant of trustedAnswers: calls are not bound to a review yet; evidence_set must be empty and input_sha must match. */
+export function trustedAnswersFromCalls(db: Db, contentId: string, judgeCallIds: readonly string[], bundle: PolicyBundle, inputSha: string): AnswerRecord[] {
+  const known = questionsOf(bundle);
+  const violationOf = new Map<string, string>();
+  for (const r of bundle.rules) { violationOf.set(r.question.sha, r.question.violationOption); for (const x of r.exceptions) violationOf.set(x.question.sha, x.question.violationOption); }
+  for (const sc of Object.values(bundle.scenes)) violationOf.set(sc.imageCheck.question.sha, sc.imageCheck.question.violationOption);
+  const out: AnswerRecord[] = [];
+  for (const id of judgeCallIds) {
+    const call = db.prepare("SELECT * FROM judge_call WHERE judge_call_id=?").get(id) as JudgeCallRow | undefined;
+    if (!call || call.content_id !== contentId || call.status !== "ok" || call.input_sha !== inputSha || call.evidence_set !== "[]") continue;
+    for (const a of db.prepare("SELECT * FROM judge_answer WHERE judge_call_id=?").all(id) as JudgeAnswerRow[]) {
+      if (!known.has(a.question_sha)) continue;
+      const cal = parseProbs(a.calibrated_probs);
+      out.push({ judgeCallId: id, questionSha: a.question_sha, choice: a.choice, p: cal ? (cal[violationOf.get(a.question_sha)!] ?? null) : null, evidenceSet: [], inputSha: call.input_sha, model: call.model, calibVer: call.calib_ver, confirmsCallId: call.confirms_call_id, createdAt: call.created_at });
+    }
+  }
+  return out;
+}

@@ -204,6 +204,12 @@ importers:
       '@mod/policy':
         specifier: workspace:*
         version: link:../policy
+      '@mod/worker':
+        specifier: workspace:*
+        version: link:../worker
+      yaml:
+        specifier: 2.8.1
+        version: 2.8.1
 
   packages/inspect:
     dependencies:

@@ -5,5 +5,5 @@
   "version": "0.0.0",
   "description": "process G: intake, preprocessing, fast path, control layer, HTTP",
   "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@earendil-works/pi-ai": "1.0.4", "@mod/core": "workspace:*", "@mod/judges": "workspace:*", "@mod/policy": "workspace:*" }
+  "dependencies": { "@earendil-works/pi-ai": "1.0.4", "@mod/core": "workspace:*", "@mod/judges": "workspace:*", "@mod/policy": "workspace:*", "@mod/worker": "workspace:*", "yaml": "2.8.1" }
 }
