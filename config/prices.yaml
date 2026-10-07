@@ -1,0 +1,16 @@
+# 记账单价：微元（1e-6 元）/ 1M tokens。来源 config/models.json 的官方美元标价 × 汇率。
+# 汇率 7.10 CNY/USD【估计，2026-10】；中转站实际计费可能不同，报告时标注。prices_ver = 本文件的 sha。
+fx_cny_per_usd: 7.10
+unit: micro_yuan_per_1m_tokens
+models:
+  a6api/glm-5.3:            { input: 9940000,  cacheRead: 1846000, output: 31240000 }
+  a6api/glm-5.3-flash:      { input: 1065000,  cacheRead: 213000,  output: 3550000 }
+  a6api/qwen3.8-flash:      { input: 1065000,  cacheRead: 113600,  output: 3337000 }
+  a6api/deepseek-v4.1-flash: { input: 2130000, cacheRead: 42600,   output: 8520000 }   # 峰时价
+  a6api/gpt-6.1-sol:        { input: 14200000, cacheRead: 710000,  output: 71000000 }
+  # 判官
+  jev/jev-latest:           { input: 298200,   output: 298200 }   # $0.042/M【来源：早期调研，待核】
+  cloudflare/clef-flash:    { input: 0,        output: 0 }        # 免费额度内；超出按 neurons 另算
+  laya/laya-mm-322m:        { input: 0,        output: 0 }        # 自托管，按 Modal 时长另算
+  faux/faux-1:              { input: 0,        output: 0 }
+  jev-recorded:             { input: 0,        output: 0 }

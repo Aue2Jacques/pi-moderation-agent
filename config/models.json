@@ -1,0 +1,99 @@
+{
+  "_readme": [
+    "中转站（a6api，OpenAI 兼容）上的模型目录。RELAY_BASE_URL / RELAY_API_KEY 在 .env 里填，这里不放密钥。",
+    "context_window / max_output_tokens 取自各家官方文档（source 列出），2026-10-09 核对；relay 实际上限以中转站为准，首次调用用 E-03/§15.3 实测后把 verified 改成 relay-tested。",
+    "max_tokens 必须按 max_output_tokens 给：思考模型给 2048/8192 会被思考吃光，正文为空（2026-10-06 实测）。",
+    "logprobs 列是 2026-10-06 在中转站实测：qwen3.8-flash、glm-5.3 返回 top_logprobs；deepseek-v4.1-flash、gpt-6.1-sol 不返回；glm-5.3-flash 当次返回非 JSON，待复查。",
+    "price_usd_per_1m 是官方标价（input / cached_input / output），中转站计费可能不同；prices.yaml 里换算成微元供记账。"
+  ],
+  "relay": { "provider_id": "a6api", "api": "openai-completions", "base_url_env": "RELAY_BASE_URL", "api_key_env": "RELAY_API_KEY", "base_url_hint": "https://api.a6api.com/v1" },
+  "models": {
+    "glm-5.3": {
+      "role": ["strong_model"],
+      "context_window": 1000000,
+      "max_output_tokens": 131072,
+      "input": ["text"],
+      "thinking": { "forced": true, "effort": ["low", "high", "max"], "default_effort": "max", "note": "reasoning 不可关闭；--reasoning-effort high 输出从 2.8k 降到 2.0k 且不掉分（实测）" },
+      "temperature": true,
+      "logprobs": "relay-tested:yes",
+      "price_usd_per_1m": { "input": 1.4, "cached_input": 0.26, "output": 4.4 },
+      "verified": "official",
+      "source": ["https://docs.z.ai/guides/llm/glm-5.3", "https://docs.z.ai/guides/overview/pricing"]
+    },
+    "glm-5.3-flash": {
+      "role": ["sensitive_check_text", "agent_model_candidate"],
+      "context_window": 1000000,
+      "max_output_tokens": 131072,
+      "input": ["text", "image", "video", "file"],
+      "thinking": { "forced": true, "note": "thinking.type 只支持 enabled，不可关闭（官方）" },
+      "temperature": true,
+      "logprobs": "relay-tested:unclear（当次返回非 JSON，待复查）",
+      "price_usd_per_1m": { "input": 0.15, "cached_input": 0.03, "output": 0.5 },
+      "verified": "official",
+      "source": ["https://docs.z.ai/guides/llm/glm-5.3-flash", "https://docs.z.ai/guides/overview/pricing"]
+    },
+    "qwen3.8-flash": {
+      "role": ["judge_logprob", "agent_model_candidate", "vision_check"],
+      "context_window": 1000000,
+      "max_input_tokens": 991808,
+      "max_input_tokens_thinking": 983616,
+      "max_output_tokens": 131072,
+      "input": ["text", "image", "video"],
+      "thinking": { "forced": false, "disable_param": { "extra_body": { "enable_thinking": false } }, "note": "判官用途必须关思考（实测参数）" },
+      "temperature": true,
+      "logprobs": "relay-tested:yes",
+      "price_usd_per_1m": { "input": 0.15, "cached_input": 0.016, "output": 0.47 },
+      "verified": "aggregator（Model Studio 卡片数字经二手转述；官方页未直接抓到）",
+      "source": ["https://openrouter.ai/qwen/qwen3.8-flash", "https://www.qwencloud.com/models/qwen3.8-flash", "https://try-qwen-ai.com/models/qwen-context-windows-output-limits/"]
+    },
+    "deepseek-v4.1-flash": {
+      "role": ["agent_model_candidate", "vision_check"],
+      "official_id_note": "DeepSeek 官方 API 名是 deepseek-flash；中转站名是 deepseek-v4.1-flash（实测，不是 deepseek-4.1-flash）",
+      "context_window": 1000000,
+      "max_output_tokens": 393216,
+      "max_output_default": { "non_thinking": 8192, "thinking": 65536, "thinking_max_effort": 131072 },
+      "input": ["text", "image"],
+      "thinking": { "forced": false, "default": "thinking", "disable_param": { "extra_body": { "thinking": { "type": "disabled" } } } },
+      "temperature": true,
+      "logprobs": "relay-tested:no",
+      "price_usd_per_1m": { "input": 0.3, "cached_input": 0.006, "output": 1.2, "note": "峰时价；非峰时减半（UTC 01–04、06–10 周一至周五为峰时）" },
+      "verified": "official",
+      "source": ["https://api-docs.deepseek.com/quick_start/pricing"]
+    },
+    "gpt-6.1-sol": {
+      "role": ["strong_model_candidate"],
+      "context_window": 1050000,
+      "max_input_tokens": 922000,
+      "max_output_tokens": 128000,
+      "input": ["text", "image"],
+      "thinking": { "forced": true, "effort": ["low", "medium", "high", "xhigh", "max"], "default_effort": "medium" },
+      "temperature": false,
+      "temperature_note": "不接受 temperature（实测）；litellm drop_params=True 自动丢",
+      "logprobs": "relay-tested:no",
+      "price_usd_per_1m": { "input": 2.0, "cached_input": 0.1, "output": 10.0, "note": "单次输入超过 272k token 时整单输入与缓存 2 倍、输出 1.5 倍" },
+      "knowledge_cutoff": "2026-04-30",
+      "verified": "official",
+      "source": ["https://developers.openai.com/api/docs/models/gpt-6.1-sol"]
+    }
+  },
+  "judges": {
+    "jev-latest": {
+      "provider_id": "jev", "api": "typesafe-system-one", "base_url_env": "JEV_BASE_URL", "api_key_env": "JEV_API_KEY",
+      "served_model": "jev-1.13.0", "alt_ids": ["jev-preview"],
+      "input": ["text"], "latency_ms_measured": [240, 320], "input_tokens_per_call_measured": 480,
+      "verified": "relay-tested 2026-10-08",
+      "note": "原生 System One 协议；一次调用可含多个问题；概率 0.99–1.00 过度自信，必须校准"
+    },
+    "clef-flash": { "provider_id": "cloudflare", "api": "clef-mm", "base_url_env": "CF_URL", "api_key_env": "CF_API_TOKEN", "input": ["text", "image"], "max_images": 4, "verified": "unverified", "note": "W4 起" },
+    "laya-mm-322m": { "provider_id": "laya", "api": "laya-batch", "base_url_env": "LAYA_URL", "input": ["text"], "verified": "unverified", "note": "W5 起，Modal/本机" }
+  },
+  "defaults": {
+    "AGENT_MODEL": "qwen3.8-flash",
+    "STRONG_MODEL": "glm-5.3",
+    "JUDGE_MODEL": "jev-latest",
+    "JUDGE_LOGPROB_MODEL": "qwen3.8-flash",
+    "SENSITIVE_CHECK_MODEL": "glm-5.3-flash",
+    "VISION_CHECK_MODEL": "qwen3.8-flash",
+    "note": "主模型选 qwen3.8-flash：有视觉、可关思考、最便宜、返回 logprobs；升级模型 glm-5.3。阶段 3 E-03 实测后可改。"
+  }
+}
