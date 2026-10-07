@@ -74,6 +74,7 @@ await worker.pumpHost();
 await worker.waitIdle();
 const wall = now() - t0;
 worker.stopLoops();
+core.outbox.drain(db, (ev) => void core.consumer.apply(db, ev, now()), now());
 
 const rows = ids.map((id, i) => {
   const r = core.requireReview(db, id);
