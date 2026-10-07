@@ -45,7 +45,7 @@ export async function makeWorker(o: { db: core.Db; storage?: Storage; steps: Ste
   const judge = typeof o.judge === "function" ? recordedJudge(o.judge) : (o.judge ?? recordedJudge(lowRisk));
   const worker = await Worker.open({
     db: o.db, storage: o.storage ?? new MemoryStorage(), models, bundle: BUNDLE, ruleTexts: { "ABUSE-001": "rule text", "MARKETING-003": "rule text" },
-    workerId: o.workerId ?? "w1", judge, prices: PRICES, cfg: o.cfg ?? CFG, flags: { escalation: o.escalation ?? false }, now,
+    workerId: o.workerId ?? "w1", judge, prices: PRICES, cfg: o.cfg ?? CFG, flags: { escalation: o.escalation ?? false }, maxModelCalls: 40, now,
     admitMax: o.admitMax ?? 10, modelFor: () => ({ provider: "faux", modelId: "faux-1" }), instructions: "审核这条内容。",
     onExternalCall: (conversationId, kind) => calls.push({ conversationId, kind, at: now() }),
   });

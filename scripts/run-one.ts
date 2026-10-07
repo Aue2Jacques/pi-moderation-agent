@@ -50,11 +50,12 @@ const instructions = [
 const calls: { kind: string; at: number }[] = [];
 const worker = await Worker.open({
   db, storage: await openNodeSqliteStorage(join(dir, "session.sqlite")), models, bundle, ruleTexts: texts, workerId: "w-run-one", judge, prices,
-  cfg: { ...core.DEFAULT_CONFIG, deadlineMs: 120_000 }, flags: { escalation: false }, now, admitMax: 1,
+  cfg: { ...core.DEFAULT_CONFIG, deadlineMs: 120_000 }, flags: { escalation: false }, maxModelCalls: 20, now, admitMax: 1,
   modelFor: () => ({ provider: "a6api", modelId: AGENT }), instructions, onExternalCall: (_c, kind) => calls.push({ kind, at: now() }),
 });
 const t0 = now();
 await worker.start();
+worker.startLoops();
 console.log("admitted", await worker.admitOnce());
 await worker.waitIdle();
 await worker.pumpHost();
@@ -73,4 +74,5 @@ const modelsMicro = usage ? core.microOfModels(prices, usage.models as Record<st
 const spent = core.spentMicro(db, review.review_id, modelsMicro);
 console.log(JSON.stringify({ pi_usage_models: usage?.models, models_micro: modelsMicro, tool_spent: core.toolSpentMicro(db, review.review_id), spent_formula: spent, review_used_micro: r.used_micro, review_cost_status: r.cost_status, yuan: core.yuan(spent.spent) }));
 console.log("sessions", await worker.sessions());
+console.log("transcript_kinds", db.prepare("SELECT tool, status FROM tool_slot WHERE review_id=? ORDER BY created_at").all(review.review_id).length, "tool slots");
 await worker.close();

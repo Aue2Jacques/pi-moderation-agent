@@ -14,6 +14,8 @@ export type Grant = {
   budgetMicro: number;
   /** wall clock when the current tool round started (for roundHadBlocked) */
   roundStartedAt: number;
+  /** model requests seen by afterResponse in this attempt */
+  modelCalls: number;
 };
 
 export class Grants {

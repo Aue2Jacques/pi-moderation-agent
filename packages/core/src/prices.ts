@@ -8,7 +8,8 @@ export type PriceTable = {
 };
 
 export function microOfUsage(prices: PriceTable, key: string, usage: Usage): number {
-  const p = prices.perMillion[key] ?? prices.perMillion[key.split("/").pop() ?? key];
+  const bare = key.split("/").pop() ?? key;
+  const p = prices.perMillion[key] ?? prices.perMillion[bare] ?? Object.entries(prices.perMillion).find(([k]) => k.endsWith(`/${bare}`))?.[1];
   if (!p) throw new Error(`no price for ${key} in ${prices.pricesVer}`);
   const cacheRead = usage.cacheRead ?? 0;
   const inputBillable = Math.max(0, usage.input - cacheRead);

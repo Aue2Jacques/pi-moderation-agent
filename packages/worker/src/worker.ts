@@ -124,7 +124,7 @@ export class Worker {
 
   #grant(mode: Grant["mode"], r: ReviewRow): Grant {
     return { mode, reviewId: r.review_id, contentId: r.content_id, attempt: r.attempt, pins: { rulesVer: r.rules_ver, calibVer: r.calib_ver, evidenceVer: r.evidence_ver, pricesVer: r.prices_ver },
-      modelId: r.agent_model ?? this.#o.modelFor(r).modelId, budgetTools: r.budget_tools, budgetMicro: r.budget_micro, roundStartedAt: this.#o.now() };
+      modelId: r.agent_model ?? this.#o.modelFor(r).modelId, budgetTools: r.budget_tools, budgetMicro: r.budget_micro, roundStartedAt: this.#o.now(), modelCalls: 0 };
   }
 
   /** Admit queued (or lease-expired) reviews up to admitMax. */
@@ -260,7 +260,21 @@ export class Worker {
     return out;
   }
 
+  #timers: NodeJS.Timeout[] = [];
+  /** Real-run loops: heartbeat (T3'), host pump, command poll. Tests drive these by hand instead. */
+  startLoops(o: { heartbeatMs?: number; pumpMs?: number } = {}): void {
+    const guardAsync = (fn: () => Promise<unknown>) => () => { fn().catch((e) => console.error("loop error", core.redact(e))); };
+    this.#timers.push(setInterval(guardAsync(() => this.heartbeat()), o.heartbeatMs ?? 5_000));
+    this.#timers.push(setInterval(guardAsync(async () => { await this.pollCommands(); await this.pumpHost(); }), o.pumpMs ?? 500));
+    for (const t of this.#timers) t.unref();
+  }
+  stopLoops(): void {
+    for (const t of this.#timers) clearInterval(t);
+    this.#timers = [];
+  }
+
   async close(): Promise<void> {
+    this.stopLoops();
     await this.harness.close(ctx);
   }
 }

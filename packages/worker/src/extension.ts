@@ -21,6 +21,8 @@ export type ExtensionDeps = {
   prices: core.PriceTable;
   cfg: core.Config;
   flags: { escalation: boolean };
+  /** hard cap on model requests per attempt; beyond it the host loop releases (model_release) */
+  maxModelCalls: number;
   strongModel?: { provider: string; modelId: string };
   now: () => number;
   /** test hook: counts external calls per conversation */
@@ -101,7 +103,13 @@ async function runJudge(deps: ExtensionDeps, api: ToolExecutionApi, ctx: Context
   const questions = questionsFor(deps, content.scene, ruleIds, hasImages);
   const reqNo = core.openToolRequest(deps.db, g.reviewId, api.callId, deps.now());
   deps.onExternalCall?.(String(api.conversationId), confirms ? "confirm" : "judge");
-  const res = await deps.judge.classify({ contentId: g.contentId, text: content.text, scene: content.scene, evidence: cited.map((e) => ({ evidenceId: e.evidenceId, kind: e.kind, modelView: e.modelView })), questions, ...(confirms ? { shuffleSeed: confirms.seed } : {}) });
+  let res: Awaited<ReturnType<JudgeClient["classify"]>>;
+  try {
+    res = await deps.judge.classify({ contentId: g.contentId, text: content.text, scene: content.scene, evidence: cited.map((e) => ({ evidenceId: e.evidenceId, kind: e.kind, modelView: e.modelView })), questions, ...(confirms ? { shuffleSeed: confirms.seed } : {}) });
+  } catch (e) {
+    core.settleToolRequest(deps.db, g.reviewId, api.callId, reqNo, null, null, deps.now());
+    throw e;
+  }
   const judgeCallId = core.uuid();
   const pins: Pins = { ...g.pins };
   const toAnswers = (src: Record<string, { choice: string; probs: Record<string, number> }>) => questions.flatMap((q) => {
@@ -109,7 +117,7 @@ async function runJudge(deps: ExtensionDeps, api: ToolExecutionApi, ctx: Context
     return a ? [{ questionSha: q.sha, ruleId: q.ruleId ?? null, kind: q.kind, choice: a.choice, rawProbs: a.probs, calibratedProbs: a.probs }] : [];
   });
   const answers = res.status === "ok" ? toAnswers(res.answers) : [];
-  const cost = res.status === "ok" ? core.microOfUsage(deps.prices, res.model, res.usage) : null;
+  const cost = res.status === "ok" ? core.microOfUsage(deps.prices, `${deps.judge.provider}/${res.model}`, res.usage) : null;
   const inputSha = core.inputFingerprint(content.text_sha, content.scene, evidenceSet, review.evidence_ver);
   core.recordJudgeCall(deps.db, {
     judgeCallId, reviewId: g.reviewId, contentId: g.contentId, attempt: g.attempt, provider: deps.judge.provider, model: res.model, api: deps.judge.api,
@@ -362,6 +370,8 @@ export function buildModerationExtension(deps: ExtensionDeps) {
         const g = grants.get(String(api.conversationId));
         if (!g) return;
         core.recordModelCall(db, String(api.taskId), g.reviewId, g.attempt, String(api.conversationId), message.model, message.usage, deps.now());
+        g.modelCalls++;
+        if (g.modelCalls > deps.maxModelCalls && !core.hasTerminal(db, g.reviewId)) hostLoop.request({ conversationId: String(api.conversationId), kind: "release", reason: "model_release" });
       },
       afterTools: async (_assistant, _results, api, ctx) => {
         const g = grants.get(String(api.conversationId));
