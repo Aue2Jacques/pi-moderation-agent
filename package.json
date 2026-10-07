@@ -9,7 +9,7 @@
   "scripts": {
     "check": "tsc -b tsconfig.json",
     "test": "pnpm run test:unit && pnpm run test:harness",
-    "test:unit": "vitest run --passWithNoTests test/unit",
+    "test:unit": "vitest run test/unit",
     "test:harness": "vitest run --passWithNoTests test/harness",
     "contract": "node scripts/contract.mjs",
     "redact-scan": "node scripts/redact-scan.mjs",

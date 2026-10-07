@@ -1,0 +1,78 @@
+// Tool-count hard limit and cost soft limit. docs/dev-doc-v1.md §7.5, T11/T11'/T12/T13.
+import { tx, type Db } from "./db.ts";
+import { CoreError } from "./errors.ts";
+
+export const TERMINAL_TOOLS: ReadonlySet<string> = new Set(["dispose", "release"]);
+
+export function usedToolSlots(db: Db, reviewId: string): number {
+  const row = db.prepare("SELECT COALESCE(SUM(counts_toward_limit),0) AS n FROM tool_slot WHERE review_id=? AND status<>'blocked'").get(reviewId) as { n: number };
+  return row.n;
+}
+
+export type SlotResult = { status: "reserved" | "blocked"; created: boolean };
+
+/** T11. Idempotent on (review_id, call_id). Throws E_BUDGET_EXCEEDED when blocked (new or replayed). */
+export function reserveToolSlot(db: Db, reviewId: string, attempt: number, callId: string, tool: string, estMicro: number, budgetTools: number, at: number): SlotResult {
+  // The blocked row must be committed (it is the audit trail of the block), so decide inside the tx and throw after it.
+  const out = tx(db, (): SlotResult & { replay?: boolean } => {
+    const counts = TERMINAL_TOOLS.has(tool) ? 0 : 1;
+    const res = db.prepare("INSERT OR IGNORE INTO tool_slot(review_id, call_id, attempt, tool, counts_toward_limit, reserved_micro, status, created_at) VALUES (?,?,?,?,?,?,'reserved',?)")
+      .run(reviewId, callId, attempt, tool, counts, estMicro, at);
+    if (res.changes === 0) {
+      const existing = db.prepare("SELECT status FROM tool_slot WHERE review_id=? AND call_id=?").get(reviewId, callId) as { status: "reserved" | "blocked" };
+      return { status: existing.status, created: false, replay: true };
+    }
+    if (counts === 1 && usedToolSlots(db, reviewId) > budgetTools) {
+      db.prepare("UPDATE tool_slot SET status='blocked', block_reason='budget_tools' WHERE review_id=? AND call_id=?").run(reviewId, callId);
+      return { status: "blocked", created: true };
+    }
+    return { status: "reserved", created: true };
+  });
+  if (out.status === "blocked") throw new CoreError("E_BUDGET_EXCEEDED", out.replay ? `call ${callId} was blocked` : `tool budget ${budgetTools} exhausted`, { replay: !!out.replay });
+  return { status: out.status, created: out.created };
+}
+
+export function roundHadBlocked(db: Db, reviewId: string, reason: string, sinceMs: number): boolean {
+  const row = db.prepare("SELECT COUNT(*) AS n FROM tool_slot WHERE review_id=? AND status='blocked' AND block_reason=? AND created_at >= ?").get(reviewId, reason, sinceMs) as { n: number };
+  return row.n > 0;
+}
+
+/** T11'. Opens a physical request row; returns its request_no. Replays open a new row. */
+export function openToolRequest(db: Db, reviewId: string, callId: string, at: number): number {
+  return tx(db, () => {
+    const row = db.prepare("SELECT COALESCE(MAX(request_no),0)+1 AS n FROM tool_request WHERE review_id=? AND call_id=?").get(reviewId, callId) as { n: number };
+    db.prepare("INSERT INTO tool_request(review_id, call_id, request_no, cost_status, created_at) VALUES (?,?,?,'inflight',?)").run(reviewId, callId, row.n, at);
+    return row.n;
+  });
+}
+
+/** T12. Idempotent: only an inflight row settles. */
+export function settleToolRequest(db: Db, reviewId: string, callId: string, requestNo: number, micro: number | null, judgeCallId: string | null, at: number): boolean {
+  return tx(db, () => db.prepare(
+    "UPDATE tool_request SET cost_micro=?, cost_status=?, judge_call_id=?, settled_at=? WHERE review_id=? AND call_id=? AND request_no=? AND cost_status='inflight'",
+  ).run(micro, micro === null ? "unknown" : "settled", judgeCallId, at, reviewId, callId, requestNo).changes === 1);
+}
+
+/** Tool-side part of the cost formula: settled requests + reserved estimate for inflight/unknown requests. */
+export function toolSpentMicro(db: Db, reviewId: string): { settled: number; estimated: number; hasUnknown: boolean } {
+  const row = db.prepare(
+    `SELECT COALESCE(SUM(CASE WHEN r.cost_status='settled' THEN r.cost_micro ELSE 0 END),0) AS settled,
+            COALESCE(SUM(CASE WHEN r.cost_status<>'settled' THEN s.reserved_micro ELSE 0 END),0) AS estimated,
+            COALESCE(SUM(CASE WHEN r.cost_status<>'settled' THEN 1 ELSE 0 END),0) AS unknown_n
+     FROM tool_request r JOIN tool_slot s ON s.review_id=r.review_id AND s.call_id=r.call_id WHERE r.review_id=?`,
+  ).get(reviewId) as { settled: number; estimated: number; unknown_n: number };
+  return { settled: row.settled, estimated: row.estimated, hasUnknown: row.unknown_n > 0 };
+}
+
+/** §7.5 formula: pi.usage.models (priced by caller) + tool settled + reserved for inflight/unknown. */
+export function spentMicro(db: Db, reviewId: string, modelsMicro: number): { spent: number; settled: boolean } {
+  const t = toolSpentMicro(db, reviewId);
+  return { spent: modelsMicro + t.settled + t.estimated, settled: !t.hasUnknown };
+}
+
+/** T13. */
+export function recordModelCall(db: Db, generationTaskId: string, reviewId: string, attempt: number, conversationId: string, model: string, usage: unknown, at: number): boolean {
+  return tx(db, () => db.prepare(
+    "INSERT OR IGNORE INTO model_call(generation_task_id, review_id, attempt, conversation_id, model, first_usage, created_at) VALUES (?,?,?,?,?,?,?)",
+  ).run(generationTaskId, reviewId, attempt, conversationId, model, JSON.stringify(usage), at).changes === 1);
+}
