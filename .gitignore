@@ -1,0 +1,19 @@
+# secrets
+.env
+*.key
+# data and artifacts (never commit datasets or samples)
+data/
+datasets/
+*.sqlite
+*.sqlite3
+*.db
+*.jsonl
+*.parquet
+# runtime
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.log
+# OS
+.DS_Store
