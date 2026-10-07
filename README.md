@@ -6,13 +6,14 @@
 
 ## 现在在哪一步
 
-项目文档 v2.3 已冻结（四轮外部审查通过），下一步写开发文档，然后开发。尚无代码。
+项目文档 v2.3 已冻结（四轮外部审查通过）。开发文档 v1.0 已写（[docs/dev-doc-v1.md](docs/dev-doc-v1.md)），待审查后按其 §14 的 14 天排期开发。尚无代码。
 
 ## 文档
 
 | 文件 | 内容 |
 |---|---|
 | [docs/project-doc-v2.md](docs/project-doc-v2.md) | **项目文档（权威）**：目标、业务、范围与分类体系、企业级属性、架构、模块设计、Pi 接口映射、数据、评测、演示、计划、风险；附录 C/D/E 是三轮审查的修订记录 |
+| [docs/dev-doc-v1.md](docs/dev-doc-v1.md) | **开发文档 v1.0**：仓库结构、app.db DDL、状态转换表、事务边界、提交校验与错误码、接口、租约与取消、Pi 绑定写法（按 pi-durable 1.0.4 的 d.ts 核对）、评测执行协议、用例目录与 CI、部署配置、14 天排期 |
 | [docs/reviews/](docs/reviews/) | 四轮外部审查原文：可行性、设计、harness/agent 角度、基于 GitHub 的终审 |
 | [docs/requirements-v1.md](docs/requirements-v1.md) | 需求文档 v1（历史，第 12–15 节记录了早期修订） |
 | [docs/dev-eval-plan-v1.md](docs/dev-eval-plan-v1.md) | 开发与评测方案 v1（历史；Pi 源码映射细节仍有参考价值） |
