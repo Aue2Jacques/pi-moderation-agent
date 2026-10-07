@@ -4,9 +4,11 @@
 
 **技术中心一句话**：让模型决定需要查什么，但不让模型决定自己拥有什么权限、采用哪套规则、哪些结果可以提交。
 
+**系统位置一句话**：判官（Jev）是机审与大模型审核之间的分流阀——规则写成问题、输出可校准概率，决定谁直接处置、谁进 Pi 上的 agent 查证据；各家主流中间层做法与差距见 [reports/2026-10-09-industry-middle-layer-vs-jev.md](reports/2026-10-09-industry-middle-layer-vs-jev.md)。
+
 ## 现在在哪一步
 
-项目文档 v2.3 已冻结（四轮外部审查通过）。开发文档 v1.4 已并入五至八轮审查（[docs/dev-doc-v1.md](docs/dev-doc-v1.md)，附录 V/X 逐项处理，全文自包含）。阶段 1（core 语义）已实现：packages/core（T1–T17、状态机、有效判官答案与 allowedActions、预算、控制循环、投递/消费端、对账、intake-cli）、packages/policy（规则 YAML → 策略包、三态引擎、影子分类、contract 运行器）、packages/judges（温度校准、ECE、logprob 提示与解析契约）；首批策略包 rules/ + config/scenes.yaml；test/unit 48 个用例（U-01–U-14，D-01–D-18）通过。阶段 2（Pi 最小验证）已实现：packages/worker（启动屏障、执行资格表、guard、宿主控制循环、8 个工具、hooks、准入、/sessions 数据）；test/harness 18 个用例通过，其中 6 个是子进程 SIGKILL 崩溃用例（A/B/C 点与两个 submit 缝隙，第二个进程恢复到恰好一条裁决）。阶段 3（真实模型）已跑通：Jev 经 pi-ai 内置适配器、qwen3.8-flash 经 OpenAI 兼容 provider；3b 实测 Jev 对同一输入确定性；3d 单条 24.7s；3e 20 条自写评论 98s 全部终态、0 重复裁决、每条 ¥0.006。3c 校准工具就绪，真实拟合待 W5 的冻结标注集。阶段 4（G 进程）已通过：G/W 真实进程 + 500 条回放，5 条/s，223s 排空，重复裁决 0，对账 0 违例，agent 33 条 ¥0.17；HTTP 仪表盘/人审页/受限视图/申诉；7 个 gateway 测试。待调：comment 截止 60s 对 agent 过紧（10 条超时转人审）。阶段 5（故障矩阵、合成数据、演示）未开始。
+项目文档 v2.4（v2.3 冻结后仅改 §2.3 定位措辞；四轮外部审查通过）。开发文档 v1.4 已并入五至八轮审查（[docs/dev-doc-v1.md](docs/dev-doc-v1.md)，附录 V/X 逐项处理，全文自包含）。阶段 1（core 语义）已实现：packages/core（T1–T17、状态机、有效判官答案与 allowedActions、预算、控制循环、投递/消费端、对账、intake-cli）、packages/policy（规则 YAML → 策略包、三态引擎、影子分类、contract 运行器）、packages/judges（温度校准、ECE、logprob 提示与解析契约）；首批策略包 rules/ + config/scenes.yaml；test/unit 48 个用例（U-01–U-14，D-01–D-18）通过。阶段 2（Pi 最小验证）已实现：packages/worker（启动屏障、执行资格表、guard、宿主控制循环、8 个工具、hooks、准入、/sessions 数据）；test/harness 18 个用例通过，其中 6 个是子进程 SIGKILL 崩溃用例（A/B/C 点与两个 submit 缝隙，第二个进程恢复到恰好一条裁决）。阶段 3（真实模型）已跑通：Jev 经 pi-ai 内置适配器、qwen3.8-flash 经 OpenAI 兼容 provider；3b 实测 Jev 对同一输入确定性；3d 单条 24.7s；3e 20 条自写评论 98s 全部终态、0 重复裁决、每条 ¥0.006。3c 校准工具就绪，真实拟合待 W5 的冻结标注集。阶段 4（G 进程）已通过：G/W 真实进程 + 500 条回放，5 条/s，223s 排空，重复裁决 0，对账 0 违例，agent 33 条 ¥0.17；HTTP 仪表盘/人审页/受限视图/申诉；7 个 gateway 测试。待调：comment 截止 60s 对 agent 过紧（10 条超时转人审）。阶段 5（故障矩阵、合成数据、演示）未开始。
 
 ## 文档
 
@@ -18,7 +20,7 @@
 | [docs/requirements-v1.md](docs/requirements-v1.md) | 需求文档 v1（历史，第 12–15 节记录了早期修订） |
 | [docs/dev-eval-plan-v1.md](docs/dev-eval-plan-v1.md) | 开发与评测方案 v1（历史；Pi 源码映射细节仍有参考价值） |
 | [docs/confirmed-items-2026-10-07.md](docs/confirmed-items-2026-10-07.md) | 早期 63 条确认事项清单（历史） |
-| [reports/](reports/) | 调研报告：审核业务、开源盘点、判官模型、Pi 生态与接口、jev-skill 精读、可行性 |
+| [reports/](reports/) | 调研报告：审核业务、开源盘点、判官模型、Pi 生态与接口、jev-skill 精读、可行性、行业中间层 vs Jev 差距 |
 
 阅读顺序：project-doc-v2.md → docs/reviews/round-3 → reports 按需。
 
