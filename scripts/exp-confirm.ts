@@ -56,12 +56,27 @@ function compare(arm: Arm, a: JudgeAnswers, b: JudgeAnswers, tag: string): void 
   }
 }
 
-for (const [i, text] of S.entries()) {
+const CONCURRENCY = Number(process.env["CONCURRENCY"] ?? 8);
+type Four = { i: number; a: Awaited<ReturnType<typeof inCall.classify>>; b1: typeof a; b2: typeof a; c2: typeof a };
+async function runOne(i: number, text: string): Promise<Four> {
   const req = { contentId: `exp:${i}`, text, scene: "comment", evidence: [], questions };
-  const a = await inCall.classify(req);
-  const b1 = await single.classify(req);
-  const b2 = await single.classify({ ...req, shuffleSeed: 17 });
-  const c2 = await single.classify(req);
+  const [a, b1, b2, c2] = await Promise.all([inCall.classify(req), single.classify(req), single.classify({ ...req, shuffleSeed: 17 }), single.classify(req)]);
+  return { i, a, b1, b2, c2 };
+}
+const results: Four[] = [];
+let next = 0;
+let done = 0;
+const t0 = Date.now();
+await Promise.all(Array.from({ length: CONCURRENCY }, async () => {
+  while (next < S.length) {
+    const i = next++;
+    results.push(await runOne(i, S[i]!));
+    done++;
+    if (done % 10 === 0) console.log(`progress ${done}/${S.length} ${Date.now() - t0}ms`);
+  }
+}));
+results.sort((x, y) => x.i - y.i);
+for (const { i, a, b1, b2, c2 } of results) {
   if (a.status !== "ok" || b1.status !== "ok" || b2.status !== "ok" || c2.status !== "ok") { console.log(i, "non-ok", a.status, b1.status, b2.status, c2.status); continue; }
   compare(arms.A_in_call, a.answers, a.variant?.answers ?? {}, `s${i}`);
   arms.A_in_call.tokensIn += a.usage.input; arms.A_in_call.tokensOut += a.usage.output; arms.A_in_call.ms += a.latencyMs;
@@ -72,6 +87,7 @@ for (const [i, text] of S.entries()) {
   const abuse = questions.find((q) => q.ruleId === "ABUSE-001" && q.kind === "rule")!;
   rows.push({ i, abuse_p: [a.answers[abuse.sha]?.probs["violate"], a.variant?.answers[abuse.sha]?.probs["violate"], b1.answers[abuse.sha]?.probs["violate"], b2.answers[abuse.sha]?.probs["violate"], c2.answers[abuse.sha]?.probs["violate"]].map((v) => Number((v ?? 0).toFixed(3))) });
 }
+console.log(`wall ${Date.now() - t0}ms for ${S.length * 4} calls at concurrency ${CONCURRENCY}`);
 const mean = (xs: number[]): number => (xs.length ? xs.reduce((p, c) => p + c, 0) / xs.length : 0);
 const summary = Object.fromEntries(Object.entries(arms).map(([k, v]) => [k, {
   pairs: v.n, choice_agreement: Number((v.agree / Math.max(1, v.n)).toFixed(3)), mean_abs_dp: Number(mean(v.dp).toFixed(4)), p90_abs_dp: Number(([...v.dp].sort((a, b) => a - b)[Math.floor(v.dp.length * 0.9)] ?? 0).toFixed(4)),
