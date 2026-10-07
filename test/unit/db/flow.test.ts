@@ -201,3 +201,18 @@ describe("D-12 node:sqlite contention", () => {
     c.exec("ROLLBACK");
   }, 20_000);
 });
+
+describe("D-14 release gate binding", () => {
+  it("rollout refused unless a passed gate_run exists for the exact config sha", () => {
+    const db = freshDb();
+    const cfg = { rulesVer: "rules@a", calibVer: "calib@a", judgeModel: "jev", agentModel: "m", pricesVer: "p" };
+    expect(core.gateAllows(db, cfg)).toBe(false);
+    core.recordGateRun(db, "g1", cfg, false, { reason: "contract failed" }, T0);
+    expect(core.gateAllows(db, cfg)).toBe(false);
+    core.recordGateRun(db, "g2", cfg, true, {}, T0 + 1);
+    expect(core.gateAllows(db, cfg)).toBe(true);
+    expect(core.gateAllows(db, { ...cfg, calibVer: "calib@b" })).toBe(false);   // A passed, B is not released on A's gate
+    core.setRollout(db, "rules", "rules@a", "sha", 10, T0 + 2);
+    expect((db.prepare("SELECT rollout_pct FROM version_pin WHERE version='rules@a'").get() as { rollout_pct: number }).rollout_pct).toBe(10);
+  });
+});

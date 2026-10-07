@@ -15,3 +15,4 @@ export * as consumer from "./consumer.ts";
 export * as outbox from "./outbox.ts";
 export * as control from "./control.ts";
 export * as reconcile from "./reconcile.ts";
+export * from "./gate.ts";
