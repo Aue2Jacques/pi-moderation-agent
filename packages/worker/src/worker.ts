@@ -1,0 +1,266 @@
+// Worker process W: startup barrier (§7.3), admission (§8.2), host loop (§8.4), /sessions data (§6.2).
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { Models } from "@earendil-works/pi-ai";
+import { Harness, createRegistry, type Conversation, type ConversationId, type SubmissionId } from "@earendil-works/pi-durable";
+import type { Storage } from "@earendil-works/pi-durable";
+import * as core from "@mod/core";
+import type { Db, ReviewRow } from "@mod/core";
+import { buildModerationExtension, type ExtensionDeps } from "./extension.ts";
+import { crashAt } from "./crash.ts";
+import { Grants, type Grant } from "./grants.ts";
+import { HostLoop } from "./host-loop.ts";
+
+const ctx = BACKGROUND_CONTEXT;
+// durable ids are numbers; app.db stores them as text
+const convId = (s: string): ConversationId => Number(s) as unknown as ConversationId;
+const subId = (s: string): SubmissionId => Number(s) as unknown as SubmissionId;
+
+export type WorkerOptions = Omit<ExtensionDeps, "grants" | "hostLoop" | "db"> & {
+  db: Db;
+  storage: Storage;
+  models: Models;
+  admitMax: number;
+  /** model to run each review with (tests use per-review faux providers) */
+  modelFor: (review: ReviewRow) => { provider: string; modelId: string };
+  instructions: string;
+  /** test hook: wait function so tests can advance virtual time */
+  sleep?: (ms: number) => Promise<void>;
+};
+
+export type SessionInfo = { conversationId: string; reviewId: string; mode: Grant["mode"]; liveTasks: number; submission: string | null };
+
+export class Worker {
+  readonly grants = new Grants();
+  readonly hostLoop = new HostLoop();
+  readonly harness: Harness;
+  readonly #o: WorkerOptions;
+  readonly #deps: ExtensionDeps;
+  #started = false;
+  /** wall clock of harness.resume(); null until started (H-27) */
+  resumedAt: number | null = null;
+
+  private constructor(o: WorkerOptions, harness: Harness, deps: ExtensionDeps) {
+    this.#o = o;
+    this.harness = harness;
+    this.#deps = deps;
+  }
+
+  /** Step 1: open without starting the scheduler. */
+  static async open(o: WorkerOptions): Promise<Worker> {
+    const grants = new Grants();
+    const hostLoop = new HostLoop();
+    const deps: ExtensionDeps = { ...o, grants, hostLoop };
+    const registry = createRegistry();
+    registry.install(buildModerationExtension(deps));
+    const harness = await Harness.open(o.storage, {
+      models: o.models, registry,
+      settings: { stream: { timeoutMs: 15_000, maxRetries: 0 }, retry: { maxRetries: 1, baseDelayMs: 2000 }, toolExecution: "sequential", compaction: { enabled: false } },
+      onReport: (e) => console.error("extension failure", core.redact(e)),
+    }, ctx);
+    const w = new Worker(o, harness, deps);
+    (w as { grants: Grants }).grants = grants;
+    (w as { hostLoop: HostLoop }).hostLoop = hostLoop;
+    return w;
+  }
+
+  get workerId(): string {
+    return this.#o.workerId;
+  }
+
+  /** Steps 2–8 of §7.3. */
+  async start(): Promise<{ active: string[]; finalize: string[]; revoked: string[]; waitedMs: number }> {
+    if (this.#started) throw new Error("already started");
+    const db = this.#o.db;
+    const now = this.#o.now;
+    const ins = await this.harness.inspect(ctx);
+    if (ins.scheduling !== "paused") throw new Error(`expected paused scheduler, got ${ins.scheduling}`);
+    const liveByConv = new Map<string, number>();
+    for (const t of ins.tasks) liveByConv.set(String(t.record.conversationId), (liveByConv.get(String(t.record.conversationId)) ?? 0) + 1);
+    const rows = db.prepare("SELECT * FROM review WHERE conversation_id IS NOT NULL AND state IN ('queued','investigating','human_queue','disposed','human_disposed')").all() as ReviewRow[];
+    const candidates = rows.filter((r) => !core.isTerminal(r.state) || liveByConv.has(r.conversation_id!));
+    // step 4: wait for live leases held by a dead instance
+    const liveLeases = candidates.filter((r) => r.state === "investigating" && (r.lease_until ?? 0) >= now());
+    const waitUntil = Math.max(0, ...liveLeases.map((r) => r.lease_until ?? 0));
+    const waitedMs = waitUntil > now() ? waitUntil - now() + 1 : 0;
+    if (waitedMs > 0) await (this.#o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(waitedMs);
+    const out = { active: [] as string[], finalize: [] as string[], revoked: [] as string[], waitedMs };
+    for (const r0 of candidates) {
+      const r = core.requireReview(db, r0.review_id);
+      const conv = r.conversation_id!;
+      if (core.isTerminal(r.state)) { this.grants.set(conv, this.#grant("finalize", r)); out.finalize.push(r.review_id); continue; }
+      if (r.state === "human_queue") { this.grants.set(conv, this.#grant("revoked", r)); out.revoked.push(r.review_id); continue; }
+      try {
+        const leased = core.acquireLease(db, r.review_id, this.#o.workerId, this.#o.cfg, now());
+        this.grants.set(conv, this.#grant("active", leased));
+        out.active.push(r.review_id);
+      } catch (e) {
+        if (!core.isCoreError(e)) throw e;
+        const again = core.requireReview(db, r.review_id);
+        if (core.isTerminal(again.state)) { this.grants.set(conv, this.#grant("finalize", again)); out.finalize.push(r.review_id); }
+        else { this.grants.set(conv, this.#grant("revoked", again)); out.revoked.push(r.review_id); }
+      }
+    }
+    // step 7
+    this.resumedAt = now();
+    this.harness.resume();
+    this.#started = true;
+    // step 8: submission gaps, idempotent by requestId
+    for (const id of out.active) {
+      const r = core.requireReview(db, id);
+      if (r.submission_id) continue;
+      const conv = await this.harness.conversation(convId(r.conversation_id!), ctx);
+      if (!conv) continue;
+      const sub = await conv.submit({ type: "input", content: this.#o.instructions, requestId: r.review_id }, ctx);
+      core.bindSubmission(db, r.review_id, String(sub.id));
+    }
+    // revoked: abort now
+    for (const id of out.revoked) {
+      const conv = this.grants.conversationOf(id);
+      if (conv) this.hostLoop.request({ conversationId: conv, kind: "abort", reason: "revoked" });
+    }
+    await this.pumpHost();
+    return out;
+  }
+
+  #grant(mode: Grant["mode"], r: ReviewRow): Grant {
+    return { mode, reviewId: r.review_id, contentId: r.content_id, attempt: r.attempt, pins: { rulesVer: r.rules_ver, calibVer: r.calib_ver, evidenceVer: r.evidence_ver, pricesVer: r.prices_ver },
+      modelId: r.agent_model ?? this.#o.modelFor(r).modelId, budgetTools: r.budget_tools, budgetMicro: r.budget_micro, roundStartedAt: this.#o.now() };
+  }
+
+  /** Admit queued (or lease-expired) reviews up to admitMax. */
+  async admitOnce(): Promise<string[]> {
+    if (!this.#started) throw new Error("start() first");
+    const db = this.#o.db;
+    const free = this.#o.admitMax - this.grants.count("active");
+    if (free <= 0) return [];
+    const now = this.#o.now();
+    const rows = db.prepare("SELECT * FROM review WHERE (state='queued' OR (state='investigating' AND lease_until < ?)) AND deadline_at > ? ORDER BY created_at LIMIT ?").all(now, now, free) as ReviewRow[];
+    const admitted: string[] = [];
+    for (const r of rows) {
+      if (this.grants.conversationOf(r.review_id)) continue;   // still held in this process (lease lost mid-run): host loop must abort first
+      let leased: ReviewRow;
+      try {
+        leased = core.acquireLease(db, r.review_id, this.#o.workerId, this.#o.cfg, this.#o.now());
+      } catch (e) {
+        if (core.isCoreError(e)) continue;
+        throw e;
+      }
+      const model = this.#o.modelFor(leased);
+      let conv: Conversation;
+      if (leased.conversation_id) {
+        conv = (await this.harness.conversation(convId(leased.conversation_id), ctx))!;
+      } else {
+        conv = await this.harness.createConversation({ ownership: { kind: "ownerless" }, agent: { model, instructions: this.#o.instructions } }, ctx);
+        if (!core.bindConversation(db, leased.review_id, String(conv.id))) {
+          const again = core.requireReview(db, leased.review_id);
+          conv = (await this.harness.conversation(convId(again.conversation_id!), ctx))!;
+        }
+      }
+      const g = this.#grant("active", leased);
+      g.modelId = model.modelId;
+      this.grants.set(String(conv.id), g);
+      crashAt("S1");
+      const requestId = leased.attempt === 1 ? leased.review_id : `${leased.review_id}#a${leased.attempt}`;
+      const content = leased.attempt === 1 ? this.#o.instructions : "上一代次已中止；已有证据仍可引用。继续审核。";
+      const sub = await conv.submit({ type: "input", content, requestId, whenBusy: "reject" }, ctx);
+      crashAt("S2");
+      core.bindSubmission(db, leased.review_id, String(sub.id));
+      admitted.push(leased.review_id);
+    }
+    return admitted;
+  }
+
+  /** Process host-loop requests: release (T5 by agent) then abort; abort; finished → abort + waitForIdle. */
+  async pumpHost(): Promise<number> {
+    const db = this.#o.db;
+    let n = 0;
+    for (const r of this.hostLoop.take()) {
+      n++;
+      const g = this.grants.get(r.conversationId);
+      const conv = await this.harness.conversation(convId(r.conversationId), ctx);
+      if (r.kind === "release" && g && g.mode === "active" && !core.hasTerminal(db, g.reviewId)) {
+        const scene = core.readContent(db, g.contentId)!.scene;
+        try {
+          core.releaseToHuman(db, g.reviewId, { kind: "agent", workerId: this.#o.workerId, attempt: g.attempt, usedMicro: 0, costStatus: "estimated" },
+            r.reason as core.ReleaseReason, this.#o.bundle.scenes[scene].defaultSeverity, this.#o.bundle.scenes[scene].humanSlaMs, this.#o.now());
+        } catch (e) {
+          if (!core.isCoreError(e)) throw e;
+        }
+      }
+      if (conv) {
+        await conv.abort(ctx);
+        await conv.waitForIdle(ctx);
+      }
+      if (g) {
+        const review = core.readReview(db, g.reviewId);
+        if (review && (core.isTerminal(review.state) || review.state === "human_queue")) this.#settleCost(g);
+      }
+      this.grants.delete(r.conversationId);
+    }
+    return n;
+  }
+
+  #settleCost(g: Grant): void {
+    const db = this.#o.db;
+    const t = core.toolSpentMicro(db, g.reviewId);
+    const r = core.readReview(db, g.reviewId);
+    if (!r) return;
+    core.updateReviewCost(db, g.reviewId, (r.used_micro ?? 0) + 0 * t.settled, t.hasUnknown ? "estimated" : (r.cost_status ?? "settled"), r.over_budget_micro, this.#o.now());
+  }
+
+  /** Poll worker_command (abort) for reviews this process holds. */
+  async pollCommands(): Promise<number> {
+    const db = this.#o.db;
+    const rows = db.prepare("SELECT command_id, review_id, attempt FROM worker_command WHERE status='pending'").all() as { command_id: string; review_id: string; attempt: number }[];
+    let n = 0;
+    for (const c of rows) {
+      const conv = this.grants.conversationOf(c.review_id);
+      const g = conv ? this.grants.get(conv) : undefined;
+      const match = !!g && g.attempt === c.attempt;
+      if (match) this.hostLoop.request({ conversationId: conv!, kind: "abort", reason: "revoked" });
+      core.tx(db, () => db.prepare("UPDATE worker_command SET status=?, done_at=? WHERE command_id=?").run(match ? "done" : "ignored", this.#o.now(), c.command_id));
+      n++;
+    }
+    await this.pumpHost();
+    return n;
+  }
+
+  async heartbeat(): Promise<void> {
+    for (const [conv, g] of this.grants.entries()) {
+      if (g.mode !== "active") continue;
+      try {
+        core.renewLease(this.#o.db, g.reviewId, this.#o.workerId, g.attempt, this.#o.cfg, this.#o.now());
+      } catch (e) {
+        if (core.isCoreError(e)) this.hostLoop.request({ conversationId: conv, kind: "abort", reason: "revoked" });
+        else throw e;
+      }
+    }
+    await this.pumpHost();
+  }
+
+  async waitIdle(): Promise<void> {
+    await this.harness.waitForIdle(ctx);
+    await this.pumpHost();
+  }
+
+  async sessions(): Promise<SessionInfo[]> {
+    const ins = await this.harness.inspect(ctx);
+    const live = new Map<string, number>();
+    for (const t of ins.tasks) live.set(String(t.record.conversationId), (live.get(String(t.record.conversationId)) ?? 0) + 1);
+    const out: SessionInfo[] = [];
+    for (const [conv, g] of this.grants.entries()) {
+      const r = core.readReview(this.#o.db, g.reviewId);
+      let submission: string | null = null;
+      if (r?.submission_id) {
+        const s = await this.harness.submission(subId(r.submission_id), ctx);
+        submission = s ? (await s.status(ctx)).status : null;
+      }
+      out.push({ conversationId: conv, reviewId: g.reviewId, mode: g.mode, liveTasks: live.get(conv) ?? 0, submission });
+    }
+    return out;
+  }
+
+  async close(): Promise<void> {
+    await this.harness.close(ctx);
+  }
+}

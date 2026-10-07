@@ -166,6 +166,15 @@ importers:
 
   .:
     devDependencies:
+      '@earendil-works/chord':
+        specifier: 1.0.4
+        version: 1.0.4
+      '@earendil-works/pi-ai':
+        specifier: 1.0.4
+        version: 1.0.4(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(ws@8.22.0)
+      '@earendil-works/pi-durable':
+        specifier: 1.0.4
+        version: 1.0.4(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(ws@8.22.0)
       '@types/node':
         specifier: 22.19.0
         version: 22.19.0

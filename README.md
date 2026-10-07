@@ -6,7 +6,7 @@
 
 ## 现在在哪一步
 
-项目文档 v2.3 已冻结（四轮外部审查通过）。开发文档 v1.4 已并入五至八轮审查（[docs/dev-doc-v1.md](docs/dev-doc-v1.md)，附录 V/X 逐项处理，全文自包含）。阶段 1（core 语义）已实现：packages/core（T1–T17、状态机、有效判官答案与 allowedActions、预算、控制循环、投递/消费端、对账、intake-cli）、packages/policy（规则 YAML → 策略包、三态引擎、影子分类、contract 运行器）、packages/judges（温度校准、ECE、logprob 提示与解析契约）；首批策略包 rules/ + config/scenes.yaml；test/unit 48 个用例（U-01–U-14，D-01–D-18）通过。阶段 2（Pi 最小验证）未开始。
+项目文档 v2.3 已冻结（四轮外部审查通过）。开发文档 v1.4 已并入五至八轮审查（[docs/dev-doc-v1.md](docs/dev-doc-v1.md)，附录 V/X 逐项处理，全文自包含）。阶段 1（core 语义）已实现：packages/core（T1–T17、状态机、有效判官答案与 allowedActions、预算、控制循环、投递/消费端、对账、intake-cli）、packages/policy（规则 YAML → 策略包、三态引擎、影子分类、contract 运行器）、packages/judges（温度校准、ECE、logprob 提示与解析契约）；首批策略包 rules/ + config/scenes.yaml；test/unit 48 个用例（U-01–U-14，D-01–D-18）通过。阶段 2（Pi 最小验证）已实现：packages/worker（启动屏障、执行资格表、guard、宿主控制循环、8 个工具、hooks、准入、/sessions 数据）；test/harness 18 个用例通过，其中 6 个是子进程 SIGKILL 崩溃用例（A/B/C 点与两个 submit 缝隙，第二个进程恢复到恰好一条裁决）。阶段 3（真实模型）需要中转站 key。
 
 ## 文档
 

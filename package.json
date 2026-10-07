@@ -4,19 +4,24 @@
   "type": "module",
   "version": "0.0.0",
   "description": "Content-moderation agent harness on Pi (pi-durable + pi-ai). Docs only so far; see docs/dev-doc-v1.md.",
-  "engines": { "node": ">=22.19.0" },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "packageManager": "pnpm@12.9.1",
   "scripts": {
     "check": "tsc -b tsconfig.json",
     "test": "pnpm run test:unit && pnpm run test:harness",
     "test:unit": "vitest run test/unit",
-    "test:harness": "vitest run --passWithNoTests test/harness",
+    "test:harness": "vitest run test/harness",
     "contract": "node scripts/contract.mjs",
     "redact-scan": "node scripts/redact-scan.mjs",
     "g": "node --experimental-strip-types packages/gateway/src/main.ts",
     "w": "node --experimental-strip-types packages/worker/src/main.ts"
   },
   "devDependencies": {
+    "@earendil-works/chord": "1.0.4",
+    "@earendil-works/pi-ai": "1.0.4",
+    "@earendil-works/pi-durable": "1.0.4",
     "@types/node": "22.19.0",
     "typescript": "5.9.3",
     "vitest": "3.2.4"

@@ -1,0 +1,32 @@
+// Child-process worker for crash tests. Env: APP_DB, SESSION_DB, WORKER_ID, LEASE_TTL_MS, CRASH_AT (optional), SCENARIO.
+// Prints one JSON line per milestone on stdout.
+import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import * as core from "../../packages/core/src/index.ts";
+import { CFG } from "../helpers.ts";
+import { PASS_SCRIPT, makeWorker, resolving, setScript } from "./setup.ts";
+
+const env = (k: string, d?: string): string => {
+  const v = process.env[k] ?? d;
+  if (v === undefined) throw new Error(`missing ${k}`);
+  return v;
+};
+const log = (o: unknown): void => { process.stdout.write(`${JSON.stringify(o)}\n`); };
+
+const db = core.openAppDb(env("APP_DB"), "worker");
+const cfg: core.Config = { ...CFG, leaseTtlMs: Number(env("LEASE_TTL_MS", "2000")) };
+const storage = await openNodeSqliteStorage(env("SESSION_DB"));
+const reviewId = env("REVIEW_ID");
+const fx = await makeWorker({ db, storage, steps: [], workerId: env("WORKER_ID"), cfg, admitMax: 1 });
+setScript(fx, resolving(db, () => reviewId, PASS_SCRIPT));
+const t0 = Date.now();
+const started = await fx.worker.start();
+log({ milestone: "started", ...started, resumedAt: fx.worker.resumedAt, callsBeforeResume: fx.calls.filter((c) => c.at < (fx.worker.resumedAt ?? 0)).length, elapsedMs: Date.now() - t0 });
+const admitted = await fx.worker.admitOnce();
+log({ milestone: "admitted", admitted });
+await fx.worker.waitIdle();
+await fx.worker.pumpHost();
+await fx.worker.waitIdle();
+const r = core.readReview(db, reviewId);
+log({ milestone: "done", state: r?.state, ruling: core.readRuling(db, reviewId)?.action ?? null, calls: fx.calls.map((c) => c.kind), sessions: await fx.worker.sessions(), grants: fx.worker.grants.count() });
+await fx.close();
+process.exit(0);
