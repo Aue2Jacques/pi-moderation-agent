@@ -1,0 +1,48 @@
+# Scene policy (part of the policy bundle version together with rules/). docs/dev-doc-v1.md §10.
+comment:
+  required_categories: [ABUSE, MARKETING]
+  allowed_actions: [pass, limit, takedown]
+  pending_visibility: hidden
+  deadline_ms: 60000
+  human_sla_ms: 3600000
+  default_severity: 1
+  image_check:
+    thresholds: { block: 0.9, pass: 0.1 }
+    question: &imgq
+      id: image_check
+      instructions: 判断图片是否包含违规内容。
+      options: { violate: 武器、血腥、惊悚或二维码/联系方式, none: 以上都不是, unknown: 无法判断 }
+      violation_option: violate
+      pass_choices: [none]
+danmaku:
+  required_categories: [ABUSE]
+  allowed_actions: [pass, limit, takedown]
+  pending_visibility: hidden
+  deadline_ms: 60000
+  human_sla_ms: 3600000
+  default_severity: 1
+  image_check: { thresholds: { block: 0.9, pass: 0.1 }, question: *imgq }
+nickname:
+  required_categories: [ABUSE]
+  allowed_actions: [pass, takedown]
+  pending_visibility: hidden
+  deadline_ms: 60000
+  human_sla_ms: 3600000
+  default_severity: 1
+  image_check: { thresholds: { block: 0.9, pass: 0.1 }, question: *imgq }
+post:
+  required_categories: [ABUSE, MARKETING]
+  allowed_actions: [pass, limit, takedown]
+  pending_visibility: hidden
+  deadline_ms: 120000
+  human_sla_ms: 3600000
+  default_severity: 1
+  image_check: { thresholds: { block: 0.9, pass: 0.1 }, question: *imgq }
+image:
+  required_categories: []
+  allowed_actions: [pass, limit, takedown]
+  pending_visibility: hidden
+  deadline_ms: 60000
+  human_sla_ms: 3600000
+  default_severity: 1
+  image_check: { thresholds: { block: 0.9, pass: 0.1 }, question: *imgq }

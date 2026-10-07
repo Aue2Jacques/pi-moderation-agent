@@ -1,0 +1,18 @@
+rule_id: MARKETING-003
+version: 3
+category: MARKETING
+scenes: [comment, post]
+severity: 1
+default_action: limit
+text: 未经允许的广告、引流、联系方式、黑产推广。不包括平台认可的商家内容、合规付款码、自然推荐。
+exceptions: []
+question:
+  id: lead
+  instructions: 按平台规则判断这条内容是否属于未经允许的广告、引流或联系方式。
+  options: { violate: 是引流、广告或联系方式, none: 不是, unknown: 无法判断 }
+  violation_option: violate
+  pass_choices: [none]
+thresholds: { block: 0.92, pass: 0.10, keyed_by_option_count: true }
+contract_tests:
+  - { id: c1, kind: obvious_positive, ref: fx/m3-1, expect: violate, required: true }
+  - { id: c3, kind: obvious_negative, ref: fx/m3-3, expect: pass, required: true }
