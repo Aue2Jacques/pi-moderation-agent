@@ -5,7 +5,7 @@
 //   C repeat   : original request sent twice unchanged (noise floor)
 // Reports choice agreement, mean |Δp| on the violation option, tokens and latency per arm.
 // usage: node --experimental-strip-types scripts/exp-confirm.ts   (JEV_BASE_URL / JEV_API_KEY from env or .env)
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createModels } from "@earendil-works/pi-ai/models";
 import * as core from "../packages/core/src/index.ts";
 import { jevModel, jevProvider } from "../packages/judges/src/index.ts";
@@ -94,5 +94,6 @@ const summary = Object.fromEntries(Object.entries(arms).map(([k, v]) => [k, {
   tokens_in_per_sentence: Math.round(v.tokensIn / S.length), tokens_out_per_sentence: Math.round(v.tokensOut / S.length), ms_per_sentence: Math.round(v.ms / S.length), flips: v.flips,
 }]));
 console.log(JSON.stringify(summary, null, 1));
+mkdirSync("data", { recursive: true });
 writeFileSync("data/exp-confirm.json", JSON.stringify({ summary, rows, n: S.length, date: new Date().toISOString() }, null, 1));
 console.log("wrote data/exp-confirm.json");
