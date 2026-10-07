@@ -12,7 +12,7 @@
     "base_url_env": "RELAY_BASE_URL",
     "api_key_env": "RELAY_API_KEY",
     "base_url_hint": "https://api.a6api.com/v1",
-    "verified": "2026-10-09 key 有效；/models 116 个；另有 glm-5.3-flashx、qwen3.8-omni-flash、qwen3.8-max、deepseek-v4-pro、gpt-6-sol 可选"
+    "verified": "2026-10-09 第三轮：五个模型全部 200；用户调整后 glm-5.3-flash 从 72s 降到 2.5s"
   },
   "models": {
     "glm-5.3": {
@@ -41,7 +41,7 @@
         "cached_input": 0.26,
         "output": 4.4
       },
-      "verified": "official + relay-tested 2026-10-09（200，3.3s，思考 55 token，logprobs 有）",
+      "verified": "official + relay-tested 2026-10-09 第三轮（200，12s，思考 47 token，logprobs 有；延迟波动 3–12s）",
       "source": [
         "https://docs.z.ai/guides/llm/glm-5.3",
         "https://docs.z.ai/guides/overview/pricing"
@@ -71,7 +71,7 @@
         "cached_input": 0.03,
         "output": 0.5
       },
-      "verified": "official + relay-tested 2026-10-09（第一次 90s 超时 0 字节；重试 200 但 72s，中转站路由 z-ai/glm-5.3-flash；判官/快判不要用它）",
+      "verified": "official + relay-tested 2026-10-09 第三轮（200，2.5s，用户调整后不再走 z-ai/ 路由；一句话请求 prompt_tokens=1413，约 1.4k 固定开销；logprobs 无）",
       "source": [
         "https://docs.z.ai/guides/llm/glm-5.3-flash",
         "https://docs.z.ai/guides/overview/pricing"
@@ -109,7 +109,7 @@
         "cached_input": 0.016,
         "output": 0.47
       },
-      "verified": "aggregator 规格 + relay-tested 2026-10-09（默认带思考 6.1s；enable_thinking:false 后 2.1s、1 token；logprobs 有）",
+      "verified": "aggregator 规格 + relay-tested 2026-10-09 第三轮（默认思考 1.9s，此时 logprobs 不返回；enable_thinking:false 0.8s、1 token、logprobs 有 → 判官用途必须关思考）",
       "source": [
         "https://openrouter.ai/qwen/qwen3.8-flash",
         "https://www.qwencloud.com/models/qwen3.8-flash",
@@ -153,7 +153,7 @@
         "output": 1.2,
         "note": "峰时价；非峰时减半（UTC 01–04、06–10 周一至周五为峰时）"
       },
-      "verified": "official + relay-tested 2026-10-09（默认思考把 max_tokens=64 吃光 finish=length；thinking.type=disabled 后 3.9s 正常；中转站路由 cbcn/deepseek-v4.1-flash；logprobs 无）",
+      "verified": "official + relay-tested 2026-10-09 第三轮（默认思考 5.1s 76 reasoning token；thinking.type=disabled 2.6s；logprobs 无）",
       "source": [
         "https://api-docs.deepseek.com/quick_start/pricing"
       ]
@@ -190,7 +190,7 @@
         "note": "单次输入超过 272k token 时整单输入与缓存 2 倍、输出 1.5 倍"
       },
       "knowledge_cutoff": "2026-04-30",
-      "verified": "official + relay-tested 2026-10-09（200，4–7s，无 logprobs；**一句话请求 prompt_tokens=4128 且两次一致：中转站有约 4k 固定提示开销，按 token 计费时每次多 $0.008**）",
+      "verified": "official + relay-tested 2026-10-09 第三轮（200，5.3s，无 logprobs；prompt_tokens=4228，约 4.2k 固定开销稳定存在）",
       "source": [
         "https://developers.openai.com/api/docs/models/gpt-6.1-sol"
       ]
