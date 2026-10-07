@@ -104,20 +104,28 @@ async function runJudge(deps: ExtensionDeps, api: ToolExecutionApi, ctx: Context
   const res = await deps.judge.classify({ contentId: g.contentId, text: content.text, scene: content.scene, evidence: cited.map((e) => ({ evidenceId: e.evidenceId, kind: e.kind, modelView: e.modelView })), questions, ...(confirms ? { shuffleSeed: confirms.seed } : {}) });
   const judgeCallId = core.uuid();
   const pins: Pins = { ...g.pins };
-  const answers = res.status === "ok"
-    ? questions.flatMap((q) => {
-        const a = res.answers[q.sha];
-        return a ? [{ questionSha: q.sha, ruleId: q.ruleId ?? null, kind: q.kind, choice: a.choice, rawProbs: a.probs, calibratedProbs: a.probs }] : [];
-      })
-    : [];
+  const toAnswers = (src: Record<string, { choice: string; probs: Record<string, number> }>) => questions.flatMap((q) => {
+    const a = src[q.sha];
+    return a ? [{ questionSha: q.sha, ruleId: q.ruleId ?? null, kind: q.kind, choice: a.choice, rawProbs: a.probs, calibratedProbs: a.probs }] : [];
+  });
+  const answers = res.status === "ok" ? toAnswers(res.answers) : [];
   const cost = res.status === "ok" ? core.microOfUsage(deps.prices, res.model, res.usage) : null;
+  const inputSha = core.inputFingerprint(content.text_sha, content.scene, evidenceSet, review.evidence_ver);
   core.recordJudgeCall(deps.db, {
     judgeCallId, reviewId: g.reviewId, contentId: g.contentId, attempt: g.attempt, provider: deps.judge.provider, model: res.model, api: deps.judge.api,
-    inputSha: core.inputFingerprint(content.text_sha, content.scene, evidenceSet, review.evidence_ver), evidenceSet, pins, status: res.status,
+    inputSha, evidenceSet, pins, status: res.status,
     ...(confirms ? { confirmsCallId: confirms.callId, shuffleSeed: confirms.seed } : {}), latencyMs: res.latencyMs,
     ...(res.status === "ok" ? { inputTokens: res.usage.input, outputTokens: res.usage.output, costMicro: cost ?? 0 } : {}),
     costStatus: cost === null ? "unknown" : "settled", answers,
   }, deps.now());
+  // in-call confirmation copy: a second judge_call confirming the primary, same input, zero extra cost (billed on the primary)
+  if (res.status === "ok" && res.variant && !confirms) {
+    core.recordJudgeCall(deps.db, {
+      judgeCallId: core.uuid(), reviewId: g.reviewId, contentId: g.contentId, attempt: g.attempt, provider: deps.judge.provider, model: res.model, api: deps.judge.api,
+      inputSha, evidenceSet, pins, status: "ok", confirmsCallId: judgeCallId, shuffleSeed: res.variant.shuffleSeed, latencyMs: res.latencyMs,
+      inputTokens: 0, outputTokens: 0, costMicro: 0, costStatus: "settled", answers: toAnswers(res.variant.answers),
+    }, deps.now() + 1);
+  }
   core.settleToolRequest(deps.db, g.reviewId, api.callId, reqNo, cost, judgeCallId, deps.now());
   const summary = res.status === "ok" ? Object.fromEntries(questions.map((q) => [q.ruleId ? `${q.ruleId}/${q.kind}` : q.kind, res.answers[q.sha] ? { choice: res.answers[q.sha]!.choice, p: res.answers[q.sha]!.probs[q.violationOption] } : null])) : { status: res.status };
   writeEvidence(deps, g, "judge", judgeCallId, { questions: questions.map((q) => q.sha), summary }, summary, review.snapshot_seq);

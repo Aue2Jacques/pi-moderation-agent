@@ -71,6 +71,9 @@ export type EvidenceRow = {
 export type Question = {
   sha: string;                       // question_sha
   kind: "rule" | "exception" | "image_check";
+  /** question text sent to judges (the sha covers these) */
+  instructions: string;
+  criteria: Record<string, string>;
   ruleId?: string;
   exceptionId?: string;
   violationOption: string;           // option whose calibrated probability is "p" for thresholds

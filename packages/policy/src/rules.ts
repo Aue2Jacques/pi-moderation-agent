@@ -28,6 +28,8 @@ function toQuestion(kind: Question["kind"], q: QuestionYaml, ruleId?: string, ex
   return {
     sha: questionSha({ kind, ...(ruleId ? { rule_id: ruleId } : {}), ...(exceptionId ? { exception_id: exceptionId } : {}), instructions: q.instructions, criteria: q.options }),
     kind,
+    instructions: q.instructions,
+    criteria: q.options,
     ...(ruleId ? { ruleId } : {}),
     ...(exceptionId ? { exceptionId } : {}),
     violationOption: q.violation_option,

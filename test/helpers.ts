@@ -21,6 +21,8 @@ export function dbPath(): string {
 const q = (kind: Question["kind"], ruleId: string | undefined, exceptionId: string | undefined, instructions: string, criteria: Record<string, string>, extra: Partial<Question> = {}): Question => ({
   sha: core.questionSha({ kind, ...(ruleId ? { rule_id: ruleId } : {}), ...(exceptionId ? { exception_id: exceptionId } : {}), instructions, criteria }),
   kind,
+  instructions,
+  criteria,
   ...(ruleId ? { ruleId } : {}),
   ...(exceptionId ? { exceptionId } : {}),
   violationOption: "violate",
