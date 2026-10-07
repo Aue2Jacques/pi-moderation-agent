@@ -1,0 +1,9 @@
+{
+  "name": "@mod/judges",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "judge adapters: Jev (built-in typesafe-system-one), openai-logprob, laya-batch, clef-mm; calibration",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@earendil-works/pi-ai": "1.0.4", "@mod/core": "workspace:*" }
+}

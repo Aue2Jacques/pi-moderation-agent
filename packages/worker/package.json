@@ -1,0 +1,9 @@
+{
+  "name": "@mod/worker",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "process W: pi-durable harness, moderation extension (tools + hooks), startup reconcile, admission, scripted mode",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@earendil-works/chord": "1.0.4", "@earendil-works/pi-ai": "1.0.4", "@earendil-works/pi-durable": "1.0.4", "typebox": "1.3.27", "@mod/core": "workspace:*", "@mod/judges": "workspace:*", "@mod/policy": "workspace:*" }
+}

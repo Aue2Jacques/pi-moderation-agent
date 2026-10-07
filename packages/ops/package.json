@@ -1,0 +1,9 @@
+{
+  "name": "@mod/ops",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "pi CLI extension: /shadow /rollout /status /calib (calls G HTTP)",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {}
+}

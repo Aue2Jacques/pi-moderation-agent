@@ -1,0 +1,9 @@
+{
+  "name": "@mod/policy",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "rule YAML loading, policy engine, version pins, contract tests, shadow replay",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@mod/core": "workspace:*", "yaml": "2.8.1" }
+}

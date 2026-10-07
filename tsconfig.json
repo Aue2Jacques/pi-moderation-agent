@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/judges" },
+    { "path": "packages/policy" },
+    { "path": "packages/gateway" },
+    { "path": "packages/worker" },
+    { "path": "packages/ops" },
+    { "path": "packages/inspect" }
+  ]
+}

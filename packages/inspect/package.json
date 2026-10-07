@@ -1,0 +1,9 @@
+{
+  "name": "@mod/inspect",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "redacted debug CLI for reviews, traces, ledgers",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@mod/core": "workspace:*" }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "@mod/core",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "app.db schema, state machine, allowedActions, submit checks, budget, errors, redact (no Pi dependency)",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {}
+}
