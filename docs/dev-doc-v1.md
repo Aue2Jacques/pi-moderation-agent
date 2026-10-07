@@ -642,9 +642,11 @@ hook(GenerationTask, {
 
 ## 9. 判官适配器与策略引擎
 
-### 9.1 三个 classifier API
+### 9.1 classifier API
 
-同 v1.0。补充 **openai-logprob 适配器契约**：
+**Jev 已可用（2026-10-08 实测）**：负责人提供的渠道是原生 System One 协议（`POST <base>/systemone`），返回 `jev-1.13.0`，choice 概率 + noul，单次 0.24–0.32s，约 480 输入 token/次；按官方渠道使用。接入方式：pi-ai 内置 `typesafe-system-one` API，`createProvider` 注册一个 `type:"classifier"` 模型条目指向 `JEV_BASE_URL` 即可，**不需要自写适配器**。自写的三个 API 保留：`openai-logprob`（判官基准对照与 agent 内复判）、`laya-batch`、`clef-mm`。MVP 的入口判官改为 Jev（最少代码、延迟达标）；阶段 3 的停止条件对 Jev 同样适用。实测 4 条自写中文评论方向正确但概率全在 0.99–1.00，校准步骤不能省。
+
+其余同 v1.0。补充 **openai-logprob 适配器契约**：
 - 提示构造同 pi-ai `llama-cpp-classify`：选项标签为单个 ASCII 大写字母，`max_tokens:1`，`logprobs:true, top_logprobs:20`。
 - 解析：对每个选项标签，匹配 top_logprobs 中 token 去除前导空格后等于该字母的条目；多个匹配取 logprob 最大者；未出现的选项**不视为 0**。
 - `mass_covered = Σ exp(logprob of matched options)`。若 `mass_covered < 0.5`【估计阈值，开发集校准】或匹配到的选项数 < 2 → `status: "abstain"`，不输出概率；否则在匹配到的选项上归一化，并把 `mass_covered` 写入 judge_call。
@@ -822,7 +824,7 @@ jobs:
 | 0 接口与夹具 | workspace、tsconfig、core 类型与 errors、schema.sql、fixtures/refs.yaml + fetch 脚本、CI 骨架 | `pnpm run check` 过；CI 绿（空测试） | – |
 | 1 core 语义 | T1–T15、states、allowed.ts、submit-check、budget、consumer | U-01–U-11、D-01–D-12 全过 | D-08/D-10/D-12 任一不过 |
 | 2 Pi 最小验证 | harness.ts、startup.ts（§7.3）、tools（dispose/release/load_rule/线程/历史）、hooks、faux 驱动 | H-01、H-02、H-03、H-06、H-17、H-18、H-19、H-20、H-22、H-23、H-24 过；`inspect()` 证明 resume 前无任务启动 | Pi 1.0.4 下任一 H 用例无法实现 → 记录原因，评估 Plan B（AgentSession + sink 幂等）或改设计，不绕过 |
-| 3 真实模型 | openai-logprob 判官 + 契约 + 录制；策略引擎；规则 ABUSE 3 条；主模型接入 | E-03 冒烟；contract 100%；E-01 20 条终态一致 | 判官 abstain 率 > 30%【估计阈值】→ 换判官模型再继续 |
+| 3 真实模型 | Jev 入口判官（内置适配器）+ 录制；openai-logprob 判官 + 契约（对照用）；策略引擎；规则 ABUSE 3 条；主模型接入 | E-03 冒烟；contract 100%；E-01 20 条终态一致 | 判官 abstain 率 > 30%【估计阈值】→ 换判官模型再继续 |
 | 4 回放与界面 | G intake/预处理/快判/S1/S2/S2'/outbox；控制层；/api/metrics 与静态页；人审页最简 | 回放 500 条；H-14 过；H-24 在回放后通过 | – |
 | 5 故障、效果、演示 | crash-matrix ≥ 20 次；注入 H-16；synth C0–C3；版本切换 H-12；演示 3、5、1 降速、2 简版 | 四个演示各走一遍；reconcile 全绿 | – |
 
