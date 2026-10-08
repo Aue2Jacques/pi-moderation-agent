@@ -66,7 +66,7 @@ if (phase === "sample") {
   process.exit(0);
 }
 const std = STANDARDS[stdId ?? ""];
-if (!std || !idsPath) throw new Error("usage: label-pilot.ts run|score|sample <abuse-v4|abuse-v4.1|marketing-v1|guard-v1> <ids.txt> [concurrency]");
+if (!std || !idsPath) throw new Error("usage: label-pilot.ts run|score|sample <abuse-v4|abuse-v4.1|abuse-v4.2|marketing-v1|guard-v1> <ids.txt> [concurrency]");
 const MODELS = ["deepseek-v4.1-flash", "qwen3.8-flash"];
 const OUT = `data/eval/label-pilot-${std.id}.jsonl`;
 type Item = { id: string; text: string; group: string; slice: string; label_bin: number };

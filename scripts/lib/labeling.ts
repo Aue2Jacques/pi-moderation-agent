@@ -32,6 +32,11 @@ export const ABUSE_V4: Standard = {
  *  two readings or unreadable slang, after the v4 pilot's disagreements (docs/policy/labeling-standard-v4.md §5). */
 export const ABUSE_V41: Standard = { ...ABUSE_V4, id: "abuse-v4.1", ...load("label-abuse-v4.1.txt") };
 
+/** ABUSE-001 v4.2: v4 plus "decode homophones / abbreviations first" and a short glossary of slurs (examples from the
+ *  ToxiCN lexicon), after reading the v4 disagreements: qwen missed homophone profanity, deepseek missed group slurs
+ *  (docs/policy/labeling-standard-v4.md §6). v4.1's rewording is not carried over. */
+export const ABUSE_V42: Standard = { ...ABUSE_V4, id: "abuse-v4.2", ...load("label-abuse-v4.2.txt") };
+
 /** MARKETING-003 (label-marketing-v1): contact / off-platform lead (m1) or black-market / fraud (m3) -> violate;
  *  selling or soliciting (m2) -> violate unless it is also called a natural recommendation (m4), which contradicts it
  *  -> uncertain; otherwise any "不确定" on m1–m3 -> uncertain; else allow. */
@@ -51,7 +56,7 @@ export const GUARD_V1: Standard = {
   label: (a) => (yes(a, "g1") ? "violate" : unsure(a, "g1") ? "uncertain" : "allow"),
 };
 
-export const STANDARDS: Record<string, Standard> = { [ABUSE_V4.id]: ABUSE_V4, [ABUSE_V41.id]: ABUSE_V41, [MARKETING_V1.id]: MARKETING_V1, [GUARD_V1.id]: GUARD_V1 };
+export const STANDARDS: Record<string, Standard> = { [ABUSE_V4.id]: ABUSE_V4, [ABUSE_V41.id]: ABUSE_V41, [ABUSE_V42.id]: ABUSE_V42, [MARKETING_V1.id]: MARKETING_V1, [GUARD_V1.id]: GUARD_V1 };
 
 /** Read a model's JSON answer for a standard: the questions it answered and the ones it left out; undefined when there
  *  is no JSON object or any answer is not one of 是 / 否 / 不确定. */
