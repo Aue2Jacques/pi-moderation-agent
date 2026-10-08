@@ -1,0 +1,132 @@
+// Stage ④ judge evaluation on the frozen test split (dev plan 2026-10-08 §6: judges are scored on the test set only).
+//   collect <outDir> [view=text|text_strip] [concurrency=16]
+//       the fast path's question set asked to the judge for every test item, in the main model view (`text`, E5) or the
+//       full-strip control (`text_strip`); one row per item with the full probabilities (primary + in-call copy) and
+//       one row per PHYSICAL request (E3: every try, its latency, status and usage). Resumable by identity (E2): a row
+//       counts only for the same item text, view, rules version and judge model. Writes a run manifest (E1).
+//   score <outDir> [view=text]
+//       calibrated with CALIB_DIR exactly as the runtime and routed through policy.decide; per group, against the
+//       platform labels (frozen procedure; "uncertain" kept out of the binary counts and reported) and, separately,
+//       against the datasets' own labels (never mixed). Prints counts only.
+// usage: node --experimental-strip-types scripts/eval-test.ts collect|score <outDir> ...
+import { execSync } from "node:child_process";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { join } from "node:path";
+import { createModels } from "@earendil-works/pi-ai/models";
+import * as core from "../packages/core/src/index.ts";
+import { jevModel, jevProvider, loadCalibrator } from "../packages/judges/src/index.ts";
+import { decide, loadBundle } from "../packages/policy/src/index.ts";
+import { piJudge } from "../packages/worker/src/pi-judge.ts";
+
+for (const line of (() => { try { return readFileSync(".env", "utf8").split("\n"); } catch { return []; } })()) {
+  const m = /^([A-Z_]+)=(.*)$/.exec(line.trim());
+  if (m && !process.env[m[1]!]) process.env[m[1]!] = m[2]!.replace(/\s+#.*$/, "").trim();
+}
+const env = (k: string, d?: string): string => { const v = process.env[k] ?? d; if (v === undefined) throw new Error(`missing ${k}`); return v; };
+const [phase, outDir, viewArg, concArg] = process.argv.slice(2);
+if (!phase || !outDir) throw new Error("usage: eval-test.ts collect|score <outDir> [view] [concurrency]");
+const VIEW = (viewArg ?? "text") as "text" | "text_strip";
+if (VIEW !== "text" && VIEW !== "text_strip") throw new Error("view: text | text_strip");
+const JEV = env("JEV_MODEL", "jev-latest");
+const { bundle } = loadBundle("rules", "config/scenes.yaml");
+const scene: core.Scene = "comment";
+const questions = [...core.rulesFor(bundle, scene).flatMap((r) => [r.question, ...r.exceptions.map((x) => x.question)]), ...(bundle.scenes[scene].injectionGuard ? [bundle.scenes[scene].injectionGuard!.question] : [])];
+const keyOf = new Map(questions.map((q) => [q.sha, core.questionKey(q)] as const));
+const byKey = new Map(questions.map((q) => [core.questionKey(q), q] as const));
+const sha = (t: string | Buffer) => createHash("sha256").update(t).digest("hex").slice(0, 16);
+type Item = { id: string; text: string; text_strip: string; group: string; slice: string; source: string; label_bin: number };
+const testIds = new Set(readFileSync("data/eval/split-v1.jsonl", "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { id: string; split: string }).filter((r) => r.split === "test").map((r) => r.id));
+const items = readFileSync("data/eval/eval20k.jsonl", "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Item).filter((x) => testIds.has(x.id));
+mkdirSync(outDir, { recursive: true });
+const OUT = join(outDir, `answers-${VIEW}.jsonl`), REQ = join(outDir, `requests-${VIEW}.jsonl`);
+type Probs = Record<string, number>;
+type Row = { id: string; view: string; textSha: string; rulesVer: string; model: string; ok: boolean; primary?: Record<string, Probs>; copy?: Record<string, Probs>; tries: number };
+const readJsonl = <T>(p: string): T[] => existsSync(p) ? readFileSync(p, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as T) : [];
+const identity = (it: Item) => `${it.id}|${VIEW}|${sha(it[VIEW])}|${bundle.rulesVer}|${JEV}`;
+
+if (phase === "collect") {
+  const models = createModels();
+  models.setProvider(jevProvider({ baseUrl: env("JEV_BASE_URL"), apiKey: env("JEV_API_KEY"), modelId: JEV }));
+  const judge = piJudge(models, jevModel(models, JEV), { inCallConfirm: true, timeoutMs: 30_000 });
+  const done = new Set(readJsonl<Row>(OUT).filter((r) => r.ok).map((r) => `${r.id}|${r.view}|${r.textSha}|${r.rulesVer}|${r.model}`));
+  const todo = items.filter((it) => !done.has(identity(it)));
+  const t0 = Date.now();
+  let next = 0, ok = 0, failed = 0, requests = 0;
+  await Promise.all(Array.from({ length: Number(concArg ?? 16) }, async () => {
+    while (next < todo.length) {
+      const it = todo[next++]!;
+      let res: Awaited<ReturnType<typeof judge.classify>> | undefined, tries = 0;
+      for (; tries < 3 && (!res || res.status !== "ok"); tries++) {
+        const s = Date.now();
+        res = await judge.classify({ contentId: it.id, text: it[VIEW], scene, evidence: [], questions });
+        requests++;
+        appendFileSync(REQ, JSON.stringify({ id: it.id, view: VIEW, try: tries + 1, status: res.status, latency_ms: Date.now() - s, reported_latency_ms: res.latencyMs, ...(res.status === "ok" ? { input: res.usage.input, output: res.usage.output, model: res.model } : {}) }) + "\n");
+      }
+      const byK = (a: Record<string, { probs: Probs }>) => Object.fromEntries(Object.entries(a).map(([q, x]) => [keyOf.get(q) ?? q, x.probs]));
+      const row: Row = { id: it.id, view: VIEW, textSha: sha(it[VIEW]), rulesVer: bundle.rulesVer, model: JEV, ok: res!.status === "ok", tries,
+        ...(res!.status === "ok" ? { primary: byK(res!.answers), ...(res!.variant ? { copy: byK(res!.variant.answers) } : {}) } : {}) };
+      if (row.ok) ok++; else failed++;
+      appendFileSync(OUT, JSON.stringify(row) + "\n");
+    }
+  }));
+  const manifest = { phase, view: VIEW, gitHead: (() => { try { return execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim(); } catch { return "unknown"; } })(),
+    scriptSha: sha(readFileSync("scripts/eval-test.ts")), rulesVer: bundle.rulesVer, judge: JEV, split: "split-v1", splitManifestSha: sha(readFileSync("eval/split-v1.manifest.jsonl")),
+    evalSha: sha(readFileSync("data/eval/eval20k.jsonl")), items: items.length, todo: todo.length, ok, failed, requests, concurrency: Number(concArg ?? 16), retries: "up to 3 tries per item",
+    started: new Date(t0).toISOString(), ended: new Date().toISOString(), outputSha: sha(readFileSync(OUT)) };
+  writeFileSync(join(outDir, `manifest-collect-${VIEW}-${Date.now()}.json`), JSON.stringify(manifest, null, 1));
+  console.log(JSON.stringify(manifest));
+} else if (phase === "score") {
+  const cal = loadCalibrator(env("CALIB_DIR", "calib"), JEV);
+  const rows = new Map(readJsonl<Row>(OUT).filter((r) => r.ok && r.rulesVer === bundle.rulesVer && r.model === JEV).map((r) => [`${r.id}|${r.textSha}`, r] as const));
+  const lab = (std: string) => new Map(readJsonl<{ id: string; label: string; source: string }>(`data/eval/labels-${std}.jsonl`).map((r) => [r.id, r] as const));
+  const L = { abuse: lab("abuse-v4.3"), marketing: lab("marketing-v2"), guard: lab("guard-v1") };
+  const route = (r: Row) => {
+    const rec = (ans: Record<string, Probs>, id: string, confirms: string | null, at: number): core.AnswerRecord[] => Object.entries(ans).flatMap(([key, probs]) => {
+      const q = byKey.get(key);
+      if (!q) return [];
+      const c = cal.apply({ judge: JEV, rulesVer: bundle.rulesVer, scene, nOptions: Object.keys(q.criteria).length, question: key }, probs);
+      const top = Object.entries(c?.probs ?? probs).sort((a, b) => b[1] - a[1])[0]![0];
+      return [{ judgeCallId: id, questionSha: q.sha, choice: top, p: c ? (c.probs[q.violationOption] ?? 0) : null, evidenceSet: [], inputSha: "eval", model: JEV, calibVer: cal.calibVer, confirmsCallId: confirms, createdAt: at }];
+    });
+    const d = decide({ bundle, scene, hasImages: false, answers: [...rec(r.primary!, `p-${r.id}`, null, 1), ...(r.copy ? rec(r.copy, `c-${r.id}`, `p-${r.id}`, 2) : [])], judgeOk: true });
+    return d.state === "pass" ? "auto_pass" : d.state === "block" ? `auto_${d.action}` : d.route === "human" ? "human" : "agent";
+  };
+  // platform truth per item: violate if abuse or marketing violate; allow if both allow (and guard not violate); else uncertain/unlabelled
+  const platform = (id: string): "violate" | "allow" | "uncertain" | "unlabelled" => {
+    const a = L.abuse.get(id)?.label, m = L.marketing.get(id)?.label;
+    if (!a || !m) return "unlabelled";
+    if (a === "violate" || m === "violate") return "violate";
+    if (a === "allow" && m === "allow") return "allow";
+    return "uncertain";
+  };
+  const out: Record<string, Record<string, Record<string, number>>> = { platform: {}, dataset: {} };
+  const bump = (set: string, g: string, k: string) => { const t = ((out[set]![g] ??= {})); t[k] = (t[k] ?? 0) + 1; };
+  let missing = 0;
+  for (const it of items) {
+    const r = rows.get(`${it.id}|${sha(it[VIEW])}`);
+    if (!r) { missing++; continue; }
+    const got = route(r);
+    for (const g of [it.group, "ALL"]) {
+      const p = platform(it.id);
+      bump("platform", g, `${p}:${got}`); bump("platform", g, `${p}:n`);
+      const d = it.label_bin === 1 ? "violate" : "allow";
+      bump("dataset", g, `${d}:${got}`); bump("dataset", g, `${d}:n`);
+    }
+  }
+  const rate = (t: Record<string, number>, truth: string, k: string) => +(((t[`${truth}:${k}`] ?? 0) / Math.max(1, t[`${truth}:n`] ?? 0)) * 100).toFixed(1);
+  const table = (set: "platform" | "dataset") => Object.fromEntries(Object.entries(out[set]!).map(([g, t]) => [g, {
+    violate_n: t["violate:n"] ?? 0, allow_n: t["allow:n"] ?? 0, ...(set === "platform" ? { uncertain_n: t["uncertain:n"] ?? 0, unlabelled_n: t["unlabelled:n"] ?? 0 } : {}),
+    violate_auto_pass_pct: rate(t, "violate", "auto_pass"), violate_auto_action_pct: +(rate(t, "violate", "auto_takedown") + rate(t, "violate", "auto_limit")).toFixed(1), violate_agent_pct: rate(t, "violate", "agent"),
+    allow_auto_pass_pct: rate(t, "allow", "auto_pass"), allow_auto_action_pct: +(rate(t, "allow", "auto_takedown") + rate(t, "allow", "auto_limit")).toFixed(1), allow_agent_pct: rate(t, "allow", "agent"),
+  }]));
+  const req = readJsonl<{ status: string; latency_ms: number; try: number }>(REQ);
+  const lat = req.filter((x) => x.status === "ok").map((x) => x.latency_ms).sort((a, b) => a - b);
+  const summary = { view: VIEW, rulesVer: bundle.rulesVer, calibVer: cal.calibVer, items: items.length, scored: items.length - missing, missing,
+    requests: { total: req.length, failed: req.filter((x) => x.status !== "ok").length, retries: req.filter((x) => x.try > 1).length, ok_latency_p50_ms: lat[Math.floor(lat.length / 2)] ?? null, ok_latency_p95_ms: lat[Math.floor(lat.length * 0.95)] ?? null },
+    platform: table("platform"), dataset: table("dataset") };
+  writeFileSync(join(outDir, `score-${VIEW}.json`), JSON.stringify(summary, null, 1));
+  console.log(JSON.stringify(summary, null, 1));
+} else {
+  throw new Error("phase must be collect | score");
+}
