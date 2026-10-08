@@ -1,5 +1,5 @@
-# Test-only: ABUSE-001 v1 as it was before EX-QUOTE was removed (dev plan 2026-10-08 §2.2). Kept so the generic
-# exception machinery (exception questions, wire keys, shadow classification) stays tested; not loaded at runtime.
+# Test-only (test/unit/policy-judges.test.ts): ABUSE-001 v1 as it was before EX-QUOTE was removed (dev plan 2026-10-08 §2.2). Kept so the generic
+# exception machinery stays tested. Never loaded at runtime: loadBundle reads only rules/<ID>.yaml at the top level.
 rule_id: ABUSE-001
 version: 1
 category: ABUSE

@@ -14,7 +14,7 @@ const abuse = B.rules.find((r) => r.ruleId === "ABUSE-001")!;
 const mkt = B.rules.find((r) => r.ruleId === "MARKETING-003")!;
 // the exception machinery stays in the code for future rules; ABUSE-001 lost its exception (§2.2), so those tests use
 // a test-only copy of the old rule loaded through the same YAML loader
-const abuseX = policy.ruleFromYaml(parse(readFileSync(join(ROOT, "test", "fixtures", "rule-with-exception.yaml"), "utf8")) as policy.RuleYaml);
+const abuseX = policy.ruleFromYaml(parse(readFileSync(join(ROOT, "rules", "test-fixtures", "abuse-001-v1-with-exception.yaml"), "utf8")) as policy.RuleYaml);
 const BX = { ...B, rules: [abuseX, mkt] };
 
 const ans = (sha: string, id: string, p: number, choice: string, confirms?: string, at = 0): AnswerRecord => ({
