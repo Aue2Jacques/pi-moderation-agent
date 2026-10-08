@@ -276,3 +276,16 @@ CREATE TABLE IF NOT EXISTS policy_bundle (
 );
 CREATE TABLE IF NOT EXISTS metrics_minute (minute INTEGER PRIMARY KEY, payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS control_health (id INTEGER PRIMARY KEY CHECK(id=1), last_tick INTEGER NOT NULL);
+
+-- stage ③ feedback loop: a threshold proposal computed from human rulings; it never changes the live config — an
+-- approved proposal still goes through shadow -> gate -> rollout (scripts/rules-release.ts)
+CREATE TABLE IF NOT EXISTS feedback_proposal (
+  proposal_id   TEXT PRIMARY KEY,
+  base_rules_ver TEXT NOT NULL,
+  changes       TEXT NOT NULL,   -- JSON [{rule_id, from: {block, pass}, to: {block, pass}}]
+  evidence      TEXT NOT NULL,   -- JSON per rule: counts behind the proposal
+  candidate_dir TEXT,
+  status        TEXT NOT NULL CHECK(status IN ('proposed','approved','rejected')),
+  decided_by    TEXT, decided_at INTEGER, decision_reason TEXT,
+  created_at    INTEGER NOT NULL
+);

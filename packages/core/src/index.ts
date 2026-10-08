@@ -17,3 +17,4 @@ export * as control from "./control.ts";
 export * as reconcile from "./reconcile.ts";
 export * from "./gate.ts";
 export * from "./model-view.ts";
+export * from "./feedback.ts";
