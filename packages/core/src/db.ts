@@ -26,6 +26,17 @@ export function ensureSchema(db: Db): void {
   const here = dirname(fileURLToPath(import.meta.url));
   const sql = readFileSync(join(here, "schema.sql"), "utf8");
   db.exec(sql);
+  migrate(db);
+}
+
+/** Additive, idempotent upgrades for app.db files created before a column existed (CREATE TABLE IF NOT EXISTS
+ *  does not add columns to an existing table). */
+function migrate(db: Db): void {
+  const cols = new Set((db.prepare("PRAGMA table_info(review)").all() as { name: string }[]).map((c) => c.name));
+  if (!cols.has("submission_attempt")) {
+    // R2: before this column, only generation 1 could ever bind a submission (the bind required submission_id IS NULL)
+    db.exec("ALTER TABLE review ADD COLUMN submission_attempt INTEGER; UPDATE review SET submission_attempt=1 WHERE submission_id IS NOT NULL;");
+  }
 }
 
 /** Run `fn` inside BEGIN IMMEDIATE … COMMIT. Any throw rolls back and rethrows. Nested use is a bug (SQLite rejects it). */

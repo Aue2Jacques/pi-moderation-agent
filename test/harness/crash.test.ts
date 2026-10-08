@@ -129,6 +129,23 @@ describe("crash matrix (child process, SIGKILL)", () => {
     h24(db);
   }, 120_000);
 
+  it("R2 generation 1 aborted, generation 2 dies at S1 (leased, not submitted): recovery submits for the current generation and completes once", () => {
+    const { env, db, reviewId } = fresh();
+    const crashed = run({ ...env, WORKER_ID: "w1", SCENARIO: "abort-then-readmit", CRASH_AT: "S1", CRASH_ATTEMPT: "2" });
+    expect(crashed.signal).toBe("SIGKILL");
+    expect(crashed.milestones.find((m) => m.milestone === "aborted")).toMatchObject({ state: "investigating", ruling: null });
+    const before = core.requireReview(db, reviewId);
+    expect(before.attempt).toBe(2);
+    expect(before.submission_id).not.toBeNull();             // generation 1's submission: must not count for generation 2+
+    const rec = run({ ...env, WORKER_ID: "w2" });
+    expect(rec.status).toBe(0);
+    expect(rec.milestones.find((m) => m.milestone === "started")!["active"]).toEqual([reviewId]);
+    expect(last(rec.milestones)).toMatchObject({ milestone: "done", state: "disposed", ruling: "pass", grants: 0 });
+    expect(core.readRuling(db, reviewId)?.attempt).toBe(3);
+    expect((db.prepare("SELECT COUNT(*) AS n FROM ruling").get() as { n: number }).n).toBe(1);
+    h24(db);
+  }, 120_000);
+
   it("H-22 CRASH_AT=J (inside the judge tool, request opened, before the external call): recovery replays the tool — tool_slot unchanged, tool_request +1, cost stays honest", () => {
     const { env, db, reviewId } = fresh();
     const crashed = run({ ...env, WORKER_ID: "w1", CRASH_AT: "J" });

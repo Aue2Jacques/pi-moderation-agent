@@ -25,7 +25,7 @@ export type ReviewRow = {
   yield_continues: number;
   rules_ver: string; calib_ver: string; evidence_ver: string; prices_ver: string;
   judge_model: string; agent_model: string | null;
-  conversation_id: string | null; submission_id: string | null;
+  conversation_id: string | null; submission_id: string | null; submission_attempt: number | null;
   release_reason: string | null;
   created_at: number; updated_at: number;
 };

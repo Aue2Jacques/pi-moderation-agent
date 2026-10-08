@@ -111,14 +111,18 @@ export class Worker {
     this.resumedAt = now();
     this.harness.resume();
     this.#started = true;
-    // step 8: submission gaps, idempotent by requestId
+    // step 8: submission gaps of the current generation, idempotent by requestId (R2: a submission bound by an
+    // earlier generation does not count — that generation's task may have ended, leaving this lease without work).
+    // A conversation whose earlier task was just resumed already has its work; submitting again would only add a turn.
+    const live = new Set((await this.harness.inspect(ctx)).tasks.map((t) => String(t.record.conversationId)));
     for (const id of out.active) {
       const r = core.requireReview(db, id);
-      if (r.submission_id) continue;
+      if (r.submission_id && r.submission_attempt === r.attempt) continue;
+      if (live.has(r.conversation_id!)) continue;
       const conv = await this.harness.conversation(convId(r.conversation_id!), ctx);
       if (!conv) continue;
-      const sub = await conv.submit({ type: "input", content: this.#o.instructions, requestId: r.review_id }, ctx);
-      core.bindSubmission(db, r.review_id, String(sub.id));
+      const sub = await conv.submit({ type: "input", ...this.#generationInput(r) }, ctx);
+      core.bindSubmission(db, r.review_id, r.attempt, String(sub.id));
     }
     // revoked: abort now
     for (const id of out.revoked) {
@@ -127,6 +131,13 @@ export class Worker {
     }
     await this.pumpHost();
     return out;
+  }
+
+  /** The input that starts a generation: one requestId per generation, so re-submitting after a crash is idempotent. */
+  #generationInput(r: ReviewRow): { content: string; requestId: string } {
+    return r.attempt === 1
+      ? { content: this.#o.instructions, requestId: r.review_id }
+      : { content: "上一代次已中止；已有证据仍可引用。继续审核。", requestId: `${r.review_id}#a${r.attempt}` };
   }
 
   readonly #bundles = new Map<string, core.StoredBundle>();
@@ -190,12 +201,10 @@ export class Worker {
       const g = this.#grant("active", leased);
       g.modelId = model.modelId;
       this.grants.set(String(conv.id), g);
-      crashAt("S1");
-      const requestId = leased.attempt === 1 ? leased.review_id : `${leased.review_id}#a${leased.attempt}`;
-      const content = leased.attempt === 1 ? this.#o.instructions : "上一代次已中止；已有证据仍可引用。继续审核。";
-      const sub = await conv.submit({ type: "input", content, requestId, whenBusy: "reject" }, ctx);
-      crashAt("S2");
-      core.bindSubmission(db, leased.review_id, String(sub.id));
+      crashAt("S1", leased.attempt);
+      const sub = await conv.submit({ type: "input", ...this.#generationInput(leased), whenBusy: "reject" }, ctx);
+      crashAt("S2", leased.attempt);
+      core.bindSubmission(db, leased.review_id, leased.attempt, String(sub.id));
       admitted.push(leased.review_id);
     }
     return admitted;

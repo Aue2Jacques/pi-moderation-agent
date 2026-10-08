@@ -190,8 +190,13 @@ export function renewLease(db: Db, reviewId: string, workerId: string, attempt: 
 export function bindConversation(db: Db, reviewId: string, conversationId: string): boolean {
   return tx(db, () => db.prepare("UPDATE review SET conversation_id=? WHERE review_id=? AND conversation_id IS NULL").run(conversationId, reviewId).changes === 1);
 }
-export function bindSubmission(db: Db, reviewId: string, submissionId: string): boolean {
-  return tx(db, () => db.prepare("UPDATE review SET submission_id=? WHERE review_id=? AND submission_id IS NULL").run(submissionId, reviewId).changes === 1);
+/** Record the submission of generation `attempt`. Only the current generation can bind, and a generation's binding
+ *  is never overwritten by an older one (R2: generation 2+ used to be unable to bind, so recovery saw generation 1's
+ *  finished submission and skipped re-submitting). */
+export function bindSubmission(db: Db, reviewId: string, attempt: number, submissionId: string): boolean {
+  return tx(db, () => db.prepare(
+    "UPDATE review SET submission_id=?, submission_attempt=? WHERE review_id=? AND attempt=? AND (submission_attempt IS NULL OR submission_attempt < ?)",
+  ).run(submissionId, attempt, reviewId, attempt, attempt).changes === 1);
 }
 
 // ---------- T5 / T6 / T7 ----------

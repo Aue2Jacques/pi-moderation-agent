@@ -1,4 +1,5 @@
-// Child-process worker for crash tests. Env: APP_DB, SESSION_DB, WORKER_ID, LEASE_TTL_MS, CRASH_AT (optional), SCENARIO.
+// Child-process worker for crash tests. Env: APP_DB, SESSION_DB, WORKER_ID, LEASE_TTL_MS, CRASH_AT / CRASH_ATTEMPT (optional),
+// SCENARIO (optional: abort-then-readmit).
 // Prints one JSON line per milestone on stdout.
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import * as core from "../../packages/core/src/index.ts";
@@ -23,6 +24,14 @@ const started = await fx.worker.start();
 log({ milestone: "started", ...started, resumedAt: fx.worker.resumedAt, callsBeforeResume: fx.calls.filter((c) => c.at < (fx.worker.resumedAt ?? 0)).length, elapsedMs: Date.now() - t0 });
 const admitted = await fx.worker.admitOnce();
 log({ milestone: "admitted", admitted });
+if (env("SCENARIO", "") === "abort-then-readmit") {
+  // R2: generation 1 loses its lease and is aborted (its task ends, nothing left to replay); generation 2 is admitted
+  // on the same conversation — with CRASH_AT=S1 CRASH_ATTEMPT=2 the process dies after that lease, before submitting.
+  core.tx(db, () => db.prepare("UPDATE review SET lease_until=? WHERE review_id=?").run(Date.now() - 1, reviewId));
+  await fx.worker.heartbeat();
+  log({ milestone: "aborted", state: core.readReview(db, reviewId)?.state, ruling: core.readRuling(db, reviewId)?.action ?? null });
+  log({ milestone: "readmitted", admitted: await fx.worker.admitOnce() });
+}
 await fx.worker.waitIdle();
 await fx.worker.pumpHost();
 await fx.worker.waitIdle();

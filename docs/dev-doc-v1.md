@@ -177,6 +177,7 @@ CREATE TABLE review (
   agent_model      TEXT,
   conversation_id  TEXT,
   submission_id    TEXT,                  -- durable submission id，对账用（§11.5）；缺失时按 §7.3 步 8 幂等补齐
+  submission_attempt INTEGER,             -- submission_id 属于哪一代次（dev plan 2026-10-08 R2）；步 8 只认当前代次
   release_reason   TEXT,                  -- timeout | budget_tools | budget_cost | evidence_gap | judge_down | model_release | backpressure | revoked | preprocess_error
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
   UNIQUE(content_id, seq),
@@ -710,6 +711,7 @@ durable 事实：`Harness.open()` 不启动调度（scheduler `open()` "Dispatch
    - finalize：恢复的终结工具按 finalize 路径读回业务结果、memo、terminate；恢复的是 generation 任务时，模型随后发出的 dispose/release 在 beforeTool 放行（§8.4），同样走 finalize 路径。
    - revoked：宿主控制循环立即 conversation.abort()。abort 落地前 durable 可能已为其恢复的 generation 任务发出模型请求；次数是 H-27 的观测结果，不预设上界。
 8. **提交缝隙补齐**（在 resume 之后，因为 submit 会启动调度）：对每个 active grant，若 `review.submission_id` 为空 → 用固定首次 requestId（`review_id`）`submit()`；durable 对同 requestId 返回已有 submission【原文】，所以"submit 已持久化但未回写 id"与"从未 submit"两种崩溃状态都由这一步幂等收口，然后 `bindSubmission()`。不会产生第二份逻辑审核（H-31）。
+   - **2026-10-08 修订（R2）**：只认当前代次的提交（`submission_attempt = attempt`）；先前代次的提交不算数。若该会话有被 resume 的旧任务仍在运行，就不再补交（旧任务会接着完成这一代次的工作，再交一次只会多一轮模型调用）；否则用本代次的 requestId（第 1 代次 = review_id，之后 = `review_id#a<n>`）补交并绑定。
 ```
 
 **执行资格表（唯一行为表）**
