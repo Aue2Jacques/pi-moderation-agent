@@ -186,7 +186,8 @@ describe("crash matrix (child process, SIGKILL)", () => {
     expect(db.prepare("SELECT call_id FROM tool_slot WHERE review_id=? AND tool='judge'").all(reviewId)).toEqual(judgeSlot);
     expect(db.prepare("SELECT request_no, cost_status FROM tool_request WHERE review_id=? AND call_id=? ORDER BY request_no").all(reviewId, judgeSlot[0]!.call_id))
       .toEqual([{ request_no: 1, cost_status: "inflight" }, { request_no: 2, cost_status: "settled" }]);
-    // model_call is keyed by generation task: the generation that issued the judge call is not double-counted
+    // one model_call row per physical response (R5a); replaying the tool phase re-requests nothing, so the generation
+    // that issued the judge call still has exactly one row
     const mc = db.prepare("SELECT generation_task_id, COUNT(*) AS n FROM model_call WHERE review_id=? GROUP BY generation_task_id HAVING n > 1").all(reviewId);
     expect(mc).toEqual([]);
     expect((db.prepare("SELECT COUNT(*) AS n FROM model_call WHERE review_id=?").get(reviewId) as { n: number }).n).toBeGreaterThanOrEqual(modelCallsBefore);

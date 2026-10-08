@@ -184,12 +184,18 @@ CREATE TABLE IF NOT EXISTS judge_answer (
 );
 CREATE INDEX IF NOT EXISTS judge_answer_q ON judge_answer(question_sha);
 
+-- One row per physical provider response (dev plan 2026-10-08 R5a): a generation task that retries a failed request
+-- has several. response_key = the provider responseId, else "t<timestamp>"; a hook replayed for the same response is
+-- idempotent, a real retry is a new row.
 CREATE TABLE IF NOT EXISTS model_call (
-  generation_task_id TEXT PRIMARY KEY,
+  generation_task_id TEXT NOT NULL,
+  response_key TEXT NOT NULL,
   review_id TEXT NOT NULL REFERENCES review(review_id), attempt INTEGER NOT NULL, conversation_id TEXT NOT NULL,
   model TEXT NOT NULL,
-  first_usage TEXT,
-  created_at INTEGER NOT NULL
+  usage TEXT,
+  stop_reason TEXT,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (generation_task_id, response_key)
 );
 CREATE INDEX IF NOT EXISTS model_call_review ON model_call(review_id);
 

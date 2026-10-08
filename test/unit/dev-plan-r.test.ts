@@ -34,3 +34,20 @@ describe("R2 submission belongs to a generation", () => {
     expect(core.requireReview(db, id).submission_attempt).toBe(1);
   });
 });
+
+describe("R5a model_call holds one row per physical response", () => {
+  it("an app.db with the old one-row-per-task table is rebuilt on ensureSchema, keeping its rows", () => {
+    const db = freshDb();
+    const id = queued(db, "c1").review_id;
+    db.exec(`DROP TABLE model_call;
+      CREATE TABLE model_call (generation_task_id TEXT PRIMARY KEY, review_id TEXT NOT NULL REFERENCES review(review_id), attempt INTEGER NOT NULL,
+        conversation_id TEXT NOT NULL, model TEXT NOT NULL, first_usage TEXT, created_at INTEGER NOT NULL);`);
+    db.prepare("INSERT INTO model_call VALUES ('g1', ?, 1, 'conv', 'm1', ?, ?)").run(id, JSON.stringify({ input: 100, output: 10 }), T0);
+    core.ensureSchema(db);
+    expect(db.prepare("SELECT generation_task_id, response_key, usage FROM model_call").all()).toEqual([{ generation_task_id: "g1", response_key: "legacy", usage: JSON.stringify({ input: 100, output: 10 }) }]);
+    expect(core.recordModelCall(db, "g1", "resp-2", id, 1, "conv", "m1", { input: 1, output: 1 }, "stop", T0)).toBe(true);   // a further response of the same task
+    core.ensureSchema(db);                                                                                                  // idempotent
+    expect((db.prepare("SELECT COUNT(*) AS n FROM model_call").get() as { n: number }).n).toBe(2);
+  });
+});
+

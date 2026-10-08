@@ -37,6 +37,22 @@ function migrate(db: Db): void {
     // R2: before this column, only generation 1 could ever bind a submission (the bind required submission_id IS NULL)
     db.exec("ALTER TABLE review ADD COLUMN submission_attempt INTEGER; UPDATE review SET submission_attempt=1 WHERE submission_id IS NOT NULL;");
   }
+  const mc = new Set((db.prepare("PRAGMA table_info(model_call)").all() as { name: string }[]).map((c) => c.name));
+  if (!mc.has("response_key")) {
+    // R5a: model_call was one row per generation task (first response only); rebuild with the per-response key.
+    // Old rows keep their single response as response_key 'legacy'.
+    db.exec(`BEGIN;
+      CREATE TABLE model_call_r5a (
+        generation_task_id TEXT NOT NULL, response_key TEXT NOT NULL,
+        review_id TEXT NOT NULL REFERENCES review(review_id), attempt INTEGER NOT NULL, conversation_id TEXT NOT NULL,
+        model TEXT NOT NULL, usage TEXT, stop_reason TEXT, created_at INTEGER NOT NULL,
+        PRIMARY KEY (generation_task_id, response_key));
+      INSERT INTO model_call_r5a SELECT generation_task_id, 'legacy', review_id, attempt, conversation_id, model, first_usage, NULL, created_at FROM model_call;
+      DROP TABLE model_call;
+      ALTER TABLE model_call_r5a RENAME TO model_call;
+      CREATE INDEX IF NOT EXISTS model_call_review ON model_call(review_id);
+      COMMIT;`);
+  }
 }
 
 /** Run `fn` inside BEGIN IMMEDIATE … COMMIT. Any throw rolls back and rethrows. Nested use is a bug (SQLite rejects it). */

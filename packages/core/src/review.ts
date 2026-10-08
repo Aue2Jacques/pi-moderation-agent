@@ -289,7 +289,7 @@ export function updateReviewCost(db: Db, reviewId: string, usedMicro: number, co
   });
 }
 
-/** Fallback cost (§7.5): model_call first_usage is not priced here (G has no price table in core); tool_request settled + reserved for inflight/unknown. */
+/** Fallback cost (§7.5): model_call usage is not priced here (G has no price table in core); tool_request settled + reserved for inflight/unknown. */
 export function fallbackCost(db: Db, reviewId: string): number {
   const row = db.prepare(
     `SELECT COALESCE(SUM(CASE WHEN r.cost_status='settled' THEN r.cost_micro ELSE s.reserved_micro END),0) AS total

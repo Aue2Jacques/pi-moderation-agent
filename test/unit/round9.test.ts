@@ -101,8 +101,8 @@ describe("R9-07 cost from the ledger", () => {
     seedContent(db, "c1");
     const r = core.createSuspiciousReview(db, { contentId: "c1", pins: PINS, judgeModel: "jev", judgeCallIds: [], pendingVisibility: "hidden", deadlineMs: CFG.deadlineMs, budgetTools: 12, budgetMicro: 50_000 }, T0).review;
     const prices: core.PriceTable = { pricesVer: "p", perMillion: { "relay/m1": { input: 1_000_000, output: 2_000_000 } } };
-    core.recordModelCall(db, "g1", r.review_id, 1, "7", "m1", { input: 100, output: 10 }, T0);
-    core.recordModelCall(db, "g1", r.review_id, 1, "7", "m1", { input: 999, output: 999 }, T0);   // replay of the same generation: ignored
+    core.recordModelCall(db, "g1", "resp-1", r.review_id, 1, "7", "m1", { input: 100, output: 10 }, "stop", T0);
+    core.recordModelCall(db, "g1", "resp-1", r.review_id, 1, "7", "m1", { input: 999, output: 999 }, "stop", T0);   // replay of the same response: ignored
     core.reserveToolSlot(db, r.review_id, 1, "call-1", "judge", 200, 12, T0);
     const n1 = core.openToolRequest(db, r.review_id, "call-1", T0);
     core.settleToolRequest(db, r.review_id, "call-1", n1, 480, null, T0);

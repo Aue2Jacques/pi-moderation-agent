@@ -145,7 +145,7 @@ describe("R9-07 cost is settled from the ledger on every exit path", () => {
     const db = freshDb();
     const r = queuedReview(db, "c1", { at: 1000 });
     core.acquireLease(db, r.review_id, "w1", { ...core.DEFAULT_CONFIG, leaseTtlMs: 10 }, 1000);
-    core.recordModelCall(db, "g1", r.review_id, 1, "7", "faux-1", { input: 1000, output: 100 }, 1001);
+    core.recordModelCall(db, "g1", "r1", r.review_id, 1, "7", "faux-1", { input: 1000, output: 100 }, "stop", 1001);
     core.control.tick(db, { ...core.DEFAULT_CONFIG, maxAttempts: 1 }, () => 1, 1000, 5000, prices);
     expect(review(db, r.review_id)).toMatchObject({ state: "human_queue", used_micro: 1100, cost_status: "estimated" });
   });

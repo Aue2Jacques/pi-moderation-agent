@@ -119,8 +119,9 @@ describe("D-11 budget (T11/T11'/T12)", () => {
     const t = core.toolSpentMicro(db, r.review_id);
     expect(t).toEqual({ settled: 70, estimated: 100, hasUnknown: true });
     expect(core.spentMicro(db, r.review_id, 500)).toEqual({ spent: 670, settled: false });
-    expect(core.recordModelCall(db, "gen1", r.review_id, 1, "conv", "m", { input: 1, output: 2 }, T0)).toBe(true);
-    expect(core.recordModelCall(db, "gen1", r.review_id, 1, "conv", "m", { input: 9, output: 9 }, T0)).toBe(false);
+    expect(core.recordModelCall(db, "gen1", "resp-1", r.review_id, 1, "conv", "m", { input: 1, output: 2 }, "stop", T0)).toBe(true);
+    expect(core.recordModelCall(db, "gen1", "resp-1", r.review_id, 1, "conv", "m", { input: 9, output: 9 }, "stop", T0)).toBe(false);   // same response replayed
+    expect(core.recordModelCall(db, "gen1", "resp-2", r.review_id, 1, "conv", "m", { input: 3, output: 4 }, "stop", T0)).toBe(true);    // R5a: a retry in the same task is billed
   });
 });
 

@@ -97,7 +97,7 @@ app.db 是唯一业务事实源（v2.3 §5.3）。SQLite WAL，`synchronous=NORM
 | evidence | 证据（白名单元数据 + 受限全文与模型片段） | W 工具 | W、受限视图；普通 API 只读白名单列 |
 | judge_call | 每次判官调用（调用级：输入指纹、证据集合、状态、延迟、费用） | G、W | 评测、费用 |
 | judge_answer | 判官调用里的每个问题的答案（问题指纹、choice、概率） | 与 judge_call 同事务 | effective、allowedActions |
-| model_call | 主模型每个 generation task 的逻辑记录 | W hooks | 评测对账 |
+| model_call | 主模型每次物理响应一行（2026-10-08 R5a 起；此前每个 generation task 只记第一次） | W hooks | 费用结算、评测对账 |
 | tool_slot | 每次逻辑工具调用的额度占用（硬限制） | W（经 core） | 预算 |
 | tool_request | 每次物理外发请求的账单（结算按请求幂等） | W（经 core） | 预算、费用对账 |
 | worker_command | G → W 控制命令 | G | W 轮询 |
@@ -299,12 +299,15 @@ CREATE TABLE judge_answer (                     -- 问题级：一次调用多�
 );
 CREATE INDEX judge_answer_q ON judge_answer(question_sha);
 
-CREATE TABLE model_call (
-  generation_task_id TEXT PRIMARY KEY,
+CREATE TABLE model_call (                -- R5a（2026-10-08）：一行 = 一次物理响应
+  generation_task_id TEXT NOT NULL,
+  response_key TEXT NOT NULL,             -- responseId，没有则 t<timestamp>；同一响应的 hook 重放幂等
   review_id TEXT NOT NULL REFERENCES review(review_id), attempt INTEGER NOT NULL, conversation_id TEXT NOT NULL,
   model TEXT NOT NULL,
-  first_usage TEXT,                       -- 首个终态响应（可能是失败尝试）的 usage JSON
-  created_at INTEGER NOT NULL
+  usage TEXT,                             -- 该次响应的 usage JSON（失败尝试也有）
+  stop_reason TEXT,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (generation_task_id, response_key)
 );
 CREATE INDEX model_call_review ON model_call(review_id);
 
@@ -397,7 +400,7 @@ CREATE TABLE metrics_minute (minute INTEGER PRIMARY KEY, payload TEXT NOT NULL);
 | outbox event_id | `<review_id>#<kind>` |
 | durable requestId | 首次代次 `= review_id`；主动重启新代次 `= review_id#a<attempt>`（§7.4） |
 | tool_slot call_id | `= Pi ToolCall.id` |
-| model_call 主键 | `= generation task id`（hook 的 `api.taskId`） |
+| model_call 主键 | `(generation task id, response_key)`；response_key = 响应的 responseId，没有则 `t<timestamp>`（R5a） |
 | judge_call_id | UUIDv7 |
 | question_sha | `sha256(canonical({kind, rule_id?, exception_id?, instructions, criteria}))`；内置 image_check 问题固定为 `q:image_check@<ver>` 的 sha |
 | W 实例 id | `w-<hostname>-<pid>-<start_ms>` |
@@ -474,7 +477,7 @@ visibility：裁决 pass → visible；limit → self_only；takedown → hidden
 | T11 | `reserveToolSlot(reviewId, attempt, callId, tool, estMicro)` | tool_slot | `INSERT OR IGNORE`；新插入且 `usedToolSlots(reviewId) > budget_tools` → status=blocked, block_reason=budget_tools，返回 `E_BUDGET_EXCEEDED`；已存在 → 返回原状态 |
 | T11' | `openToolRequest(reviewId, callId)` → request_no | tool_request(inflight) | 工具每次真正向外部发请求前调用；重放产生新的 request_no |
 | T12 | `settleToolRequest(reviewId, callId, requestNo, micro \| null, judgeCallId?)` | tool_request | `WHERE cost_status='inflight'`：有费用 → settled；null → unknown。同一 request_no 重复结算是空操作（幂等）；缓存命中不开新请求 |
-| T13 | `recordModelCall(taskId, review, usage)` | model_call | `INSERT OR IGNORE` |
+| T13 | `recordModelCall(taskId, responseKey, review, usage, stopReason)` | model_call | `INSERT OR IGNORE`（同一响应重放不重复记，任务内重试另起一行） |
 | T14 | `bumpYield(reviewId, max)` | review.yield_continues | `WHERE yield_continues < max` |
 | T15 | `appendRejectAudit(...)` | audit | 业务事务 ROLLBACK 之后独立 BEGIN IMMEDIATE 提交 |
 | T16 | `recordJudgeCall(call, answers)` | judge_call + judge_answer | 主键去重 |
@@ -747,7 +750,7 @@ durable 事实：`Harness.open()` 不启动调度（scheduler `open()` "Dispatch
 - **费用公式（唯一口径，所有路径共用）**：
   `spent = micro(pi.usage.models) + Σ tool_request.cost_micro(settled) + Σ_{tool_request inflight|unknown} tool_slot.reserved_micro`
   同一逻辑调用内已结算的请求与仍未知的请求各算各的，不会互相覆盖；不依赖 `pi.usage.tools`。
-- `model_call` 只做逻辑记录（T13）；`first_usage` 可能来自失败尝试，仅供对账参考。
+- `model_call` 每次物理响应一行（T13，2026-10-08 R5a 修订）：任务内失败后重试的每一次响应都记账，结算按全部行求和。与 Pi 的 `pi.usage` 逐条对账尚未实现（见 dev plan R5）。
 - 软限制执行：`beforeTool`/`guard()` 发现 `spent ≥ budget_micro` → block 非终结工具（E_BUDGET_COST）；`afterTools`/`onYield` 发现超限 → 宿主控制循环 release(budget_cost)。超出量写 `review.over_budget_micro`，评测卡报告分布；不宣称绝对费用上限，也不预设"多一次请求"的上界。
 - `onYield` 续跑：T14 写 review 行。
 - **费用可以后续更新，裁决不能**：S5/S6/S7/S11 时用上面公式写 `used_micro`；只要存在 inflight/unknown 的请求或 pi.usage 可能未定（撤权后在飞请求仍会结束），`cost_status=estimated`；宿主控制循环在会话 idle 后、对账时再用同一公式 T17 更新一次，全部 settled 才标 `settled`。G 的 T6（S7/S11）没有 pi.usage，用 `Σ model_call.first_usage 换算 + Σ tool_request.settled + Σ reserved(inflight|unknown)` 作 estimated 初值，W 的宿主循环随后 T17 修正。

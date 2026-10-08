@@ -65,12 +65,13 @@ export function toolSpentMicro(db: Db, reviewId: string): { settled: number; est
   return { settled: row.settled, estimated: row.estimated, hasUnknown: row.unknown_n > 0 };
 }
 
-/** Model cost from our own ledger (model_call.first_usage priced now). Used by the host loop and settlement, where no UsageDoc is at hand. */
+/** Model cost from our own ledger: every physical response in model_call, priced now (R5a). Used by the host loop and
+ *  settlement, where no UsageDoc is at hand. */
 export function modelSpentMicro(db: Db, prices: PriceTable, reviewId: string): number {
-  const rows = db.prepare("SELECT model, first_usage FROM model_call WHERE review_id=?").all(reviewId) as { model: string; first_usage: string }[];
+  const rows = db.prepare("SELECT model, usage FROM model_call WHERE review_id=?").all(reviewId) as { model: string; usage: string }[];
   let total = 0;
   for (const r of rows) {
-    const u = JSON.parse(r.first_usage) as Partial<Usage> | null;
+    const u = JSON.parse(r.usage) as Partial<Usage> | null;
     if (!u) continue;
     total += microOfUsage(prices, r.model, { input: u.input ?? 0, output: u.output ?? 0, ...(u.cacheRead !== undefined ? { cacheRead: u.cacheRead } : {}) });
   }
@@ -90,9 +91,10 @@ export function spentMicro(db: Db, reviewId: string, modelsMicro: number): { spe
   return { spent: modelsMicro + t.settled + t.estimated, settled: !t.hasUnknown };
 }
 
-/** T13. */
-export function recordModelCall(db: Db, generationTaskId: string, reviewId: string, attempt: number, conversationId: string, model: string, usage: unknown, at: number): boolean {
+/** T13: one row per physical provider response (R5a). `responseKey` identifies the response (responseId, else its
+ *  timestamp), so a hook replayed for the same response does not bill it twice. */
+export function recordModelCall(db: Db, generationTaskId: string, responseKey: string, reviewId: string, attempt: number, conversationId: string, model: string, usage: unknown, stopReason: string, at: number): boolean {
   return tx(db, () => db.prepare(
-    "INSERT OR IGNORE INTO model_call(generation_task_id, review_id, attempt, conversation_id, model, first_usage, created_at) VALUES (?,?,?,?,?,?,?)",
-  ).run(generationTaskId, reviewId, attempt, conversationId, model, JSON.stringify(usage), at).changes === 1);
+    "INSERT OR IGNORE INTO model_call(generation_task_id, response_key, review_id, attempt, conversation_id, model, usage, stop_reason, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+  ).run(generationTaskId, responseKey, reviewId, attempt, conversationId, model, JSON.stringify(usage), stopReason, at).changes === 1);
 }

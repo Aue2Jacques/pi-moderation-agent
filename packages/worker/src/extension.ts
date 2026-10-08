@@ -375,7 +375,7 @@ export function buildModerationExtension(deps: ExtensionDeps) {
       afterResponse: async (message, api) => {
         const g = grants.get(String(api.conversationId));
         if (!g) return;
-        core.recordModelCall(db, String(api.taskId), g.reviewId, g.attempt, String(api.conversationId), message.model, message.usage, deps.now());
+        core.recordModelCall(db, String(api.taskId), message.responseId ?? `t${message.timestamp}`, g.reviewId, g.attempt, String(api.conversationId), message.model, message.usage, message.stopReason, deps.now());
         g.modelCalls++;
         if (g.modelCalls > deps.maxModelCalls && !core.hasTerminal(db, g.reviewId)) hostLoop.request({ conversationId: String(api.conversationId), kind: "release", reason: "model_release" });
       },
