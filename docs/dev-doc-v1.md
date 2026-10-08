@@ -706,6 +706,7 @@ durable 事实：`Harness.open()` 不启动调度（scheduler `open()` "Dispatch
    T3 失败 E_STATE_INVALID（G 已转人工或已终态）→ 按 app.db 状态归入 b 或 a。
    对 a：grants[conv] = {mode:"finalize", reviewId}。对 b：grants[conv] = {mode:"revoked", reviewId}。
 6. 准入信号量按 active 数量预占。
+   - **2026-10-08 修订（R3）**：恢复也受准入上限约束。按 created_at 从旧到新取 d，active 达到 admitMax 后其余归入 e deferred：不取租约；若 durable 有为其恢复的任务，给 revoked grant（工具一律拒绝），resume 后 abort。会话和证据保留，空出槽位后由 admitOnce 作为下一代次接管。
 7. resume()。此后：
    - active：纯重放。
    - finalize：恢复的终结工具按 finalize 路径读回业务结果、memo、terminate；恢复的是 generation 任务时，模型随后发出的 dispose/release 在 beforeTool 放行（§8.4），同样走 finalize 路径。

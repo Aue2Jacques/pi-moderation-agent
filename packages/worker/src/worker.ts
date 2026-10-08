@@ -69,7 +69,7 @@ export class Worker {
   }
 
   /** Steps 2–8 of §7.3. */
-  async start(): Promise<{ active: string[]; finalize: string[]; revoked: string[]; waitedMs: number }> {
+  async start(): Promise<{ active: string[]; finalize: string[]; revoked: string[]; deferred: string[]; waitedMs: number }> {
     if (this.#started) throw new Error("already started");
     const db = this.#o.db;
     const now = this.#o.now;
@@ -78,18 +78,27 @@ export class Worker {
     const liveByConv = new Map<string, number>();
     for (const t of ins.tasks) liveByConv.set(String(t.record.conversationId), (liveByConv.get(String(t.record.conversationId)) ?? 0) + 1);
     const rows = db.prepare("SELECT * FROM review WHERE conversation_id IS NOT NULL AND state IN ('queued','investigating','human_queue','disposed','human_disposed')").all() as ReviewRow[];
-    const candidates = rows.filter((r) => !core.isTerminal(r.state) || liveByConv.has(r.conversation_id!));
+    const candidates = rows.filter((r) => !core.isTerminal(r.state) || liveByConv.has(r.conversation_id!))
+      .sort((a, b) => a.created_at - b.created_at);   // R3: oldest first, the same order as admitOnce
     // step 4: wait for live leases held by a dead instance
     const liveLeases = candidates.filter((r) => r.state === "investigating" && (r.lease_until ?? 0) >= now());
     const waitUntil = Math.max(0, ...liveLeases.map((r) => r.lease_until ?? 0));
     const waitedMs = waitUntil > now() ? waitUntil - now() + 1 : 0;
     if (waitedMs > 0) await (this.#o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(waitedMs);
-    const out = { active: [] as string[], finalize: [] as string[], revoked: [] as string[], waitedMs };
+    const out = { active: [] as string[], finalize: [] as string[], revoked: [] as string[], deferred: [] as string[], waitedMs };
     for (const r0 of candidates) {
       const r = core.requireReview(db, r0.review_id);
       const conv = r.conversation_id!;
       if (core.isTerminal(r.state)) { this.grants.set(conv, this.#grant("finalize", r)); out.finalize.push(r.review_id); continue; }
       if (r.state === "human_queue") { this.grants.set(conv, this.#grant("revoked", r)); out.revoked.push(r.review_id); continue; }
+      if (out.active.length >= this.#o.admitMax) {
+        // R3: recovery obeys the same limit as admission. Over the limit, take no lease; a session whose task Pi is
+        // about to resume gets a revoked grant (its tools refuse) and is aborted after resume — the conversation and
+        // its evidence stay, and admitOnce picks the review up as the next generation when a slot frees.
+        if (liveByConv.has(conv)) this.grants.set(conv, this.#grant("revoked", r));
+        out.deferred.push(r.review_id);
+        continue;
+      }
       try {
         const leased = core.acquireLease(db, r.review_id, this.#o.workerId, this.#o.cfg, now());
         if (!this.#bundleFor(leased)) {   // pinned version unavailable here: hand to human, never run under another bundle
@@ -124,10 +133,14 @@ export class Worker {
       const sub = await conv.submit({ type: "input", ...this.#generationInput(r) }, ctx);
       core.bindSubmission(db, r.review_id, r.attempt, String(sub.id));
     }
-    // revoked: abort now
+    // revoked: abort now; deferred (over the admission limit): stop the resumed task, keep the session for later
     for (const id of out.revoked) {
       const conv = this.grants.conversationOf(id);
       if (conv) this.hostLoop.request({ conversationId: conv, kind: "abort", reason: "revoked" });
+    }
+    for (const id of out.deferred) {
+      const conv = this.grants.conversationOf(id);
+      if (conv) this.hostLoop.request({ conversationId: conv, kind: "abort", reason: "deferred" });
     }
     await this.pumpHost();
     return out;

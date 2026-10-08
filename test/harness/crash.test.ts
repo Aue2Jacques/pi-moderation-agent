@@ -12,6 +12,7 @@ import { PRICES, queuedReview } from "./setup.ts";
 
 const RUNNER = join(import.meta.dirname, "runner.ts");
 const RUNNER_G = join(import.meta.dirname, "runner-g.ts");
+const RUNNER_MANY = join(import.meta.dirname, "runner-many.ts");
 const LEASE_TTL = 1500;
 
 type Milestone = Record<string, unknown> & { milestone: string };
@@ -143,6 +144,29 @@ describe("crash matrix (child process, SIGKILL)", () => {
     expect(last(rec.milestones)).toMatchObject({ milestone: "done", state: "disposed", ruling: "pass", grants: 0 });
     expect(core.readRuling(db, reviewId)?.attempt).toBe(3);
     expect((db.prepare("SELECT COUNT(*) AS n FROM ruling").get() as { n: number }).n).toBe(1);
+    h24(db);
+  }, 120_000);
+
+  it("R3 recovery obeys the admission limit: 6 live sessions, limit 2 → at most 2 run at once, the rest wait and all 6 finish", () => {
+    const dir = mkdtempSync(join(tmpdir(), "crash-many-"));
+    const appDb = join(dir, "app.db");
+    const db = core.openAppDb(appDb, "test");
+    core.ensureSchema(db);
+    const ids = Array.from({ length: 6 }, (_, k) => queuedReview(db, `m${k}`, { thread: `t${k}`, at: Date.now() - 1000 }).review_id);
+    const env = { APP_DB: appDb, SESSION_DB: join(dir, "session.sqlite"), LEASE_TTL_MS: String(LEASE_TTL) };
+    const crashed = run({ ...env, WORKER_ID: "w1", ADMIT_MAX: "6", KILL_AFTER_ADMIT: "1" }, RUNNER_MANY);   // all 6 admitted, model hangs, then SIGKILL
+    expect(crashed.signal).toBe("SIGKILL");
+    expect((db.prepare("SELECT COUNT(*) AS n FROM review WHERE state='investigating' AND submission_id IS NOT NULL").get() as { n: number }).n).toBe(6);
+    const rec = run({ ...env, WORKER_ID: "w2", ADMIT_MAX: "2" }, RUNNER_MANY);
+    expect(rec.status).toBe(0);
+    const started = rec.milestones.find((m) => m.milestone === "started")!;
+    expect((started["active"] as string[]).length).toBeLessThanOrEqual(2);
+    expect((started["deferred"] as string[]).length).toBe(6 - (started["active"] as string[]).length);
+    expect(started["liveAfterStart"] as number).toBeLessThanOrEqual(2);                        // deferred sessions' resumed tasks were stopped
+    const done = last(rec.milestones)!;
+    expect(done["maxActive"] as number).toBeLessThanOrEqual(2);
+    expect(done).toMatchObject({ milestone: "done", open: 0, grants: 0 });
+    expect(ids.every((id) => core.requireReview(db, id).state === "human_queue")).toBe(true);
     h24(db);
   }, 120_000);
 
