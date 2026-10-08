@@ -1,0 +1,47 @@
+# Jev question variants for the 2026-10-11 comparison on the COLD dev split (scripts/jev-variants.ts).
+# Wording follows docs/policy/abuse-prompt-v2-draft.md (open discussion; criticism of conduct and institutions is allowed).
+variants:
+  A_choice:
+    abuse:
+      type: choice
+      instructions: 按平台规则判断这条内容是否包含针对个人或群体的辱骂、仇恨、歧视或人身攻击。批评言行、观点、作品、机构，陈述事实，夸奖，反对偏见，自嘲，都不算。
+      criteria: { violate: 包含辱骂、仇恨、歧视或人身攻击, none: 不包含, unknown: 无法判断 }
+  B_score:
+    severity:
+      type: score
+      instructions: 按平台规则给这条评论的严重程度打分。平台鼓励开放讨论，批评言行、观点、作品、机构，陈述事实，夸奖，反对偏见，自嘲，都属于最低一档。
+      criteria:
+        - 正常：批评言行或观点、陈述事实、夸奖、反对偏见、自嘲、没有指向的粗口
+        - 有争议：对某个人群不带贬低的概括，或看不出在说谁
+        - 轻度：没有脏话，但在羞辱一个具体的人本身，或嘲讽某个人群
+        - 严重：用脏话骂人，或贬低某个按地域、民族、性别等划分的人群
+        - 极严重：把人比作动物或垃圾，或威胁、号召伤害、驱赶
+  C_bool:
+    insult_person:
+      type: bool
+      instructions: 这条评论是否用脏话或侮辱性称呼骂一个具体的人？
+      criteria: { "true": 是，在骂一个具体的人, "false": 否 }
+    demean_group:
+      type: bool
+      instructions: 这条评论是否贬低某个按地域、民族、种族、性别、宗教、残障、性取向划分的人群，说他们低人一等、天生坏、是罪犯，或比作动物？
+      criteria: { "true": 是，在贬低这个人群, "false": 否 }
+    threat:
+      type: bool
+      instructions: 这条评论是否威胁、号召伤害或驱赶某些人？
+      criteria: { "true": 是, "false": 否 }
+    humiliate_person:
+      type: bool
+      instructions: 这条评论是否在没有脏话的情况下，羞辱或挖苦一个具体的人本身，而不是批评他说的话或做的事？
+      criteria: { "true": 是，针对人本身, "false": 否 }
+    criticize_conduct:
+      type: bool
+      instructions: 这条评论是否只是在批评言行、观点、作品、机构或事件，对事不对人？
+      criteria: { "true": 是，对事不对人, "false": 否 }
+    counter_bias:
+      type: bool
+      instructions: 这条评论是否在反对或纠正针对某个人群的偏见、歧视？
+      criteria: { "true": 是，在反对偏见, "false": 否 }
+    stereotype:
+      type: bool
+      instructions: 这条评论是否带着贬义，对某个按地域、民族、性别等划分的人群以偏概全？
+      criteria: { "true": 是，带贬义的以偏概全, "false": 否 }
