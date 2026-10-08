@@ -1,0 +1,21 @@
+# DRAFT (stage ③, dev plan 2026-10-08 §5 "long text and violence rules: define the rule and a few cases first").
+# Not loaded: the loader reads only rules/<ID>.yaml. Activation needs, in this order: owner review of the wording and of
+# the boundary with ABUSE-001 (threats are currently question q3 of the abuse standard), a frozen labeling standard,
+# platform labels, a calibration fit for this question, contract fixtures, then the release path (shadow -> gate ->
+# rollout). Adding it to a scene without a calibration would send every content of that scene to human (calib_missing).
+rule_id: VIOLENCE-004
+version: 0
+category: VIOLENCE
+scenes: [comment, post]
+severity: 3
+default_action: takedown
+text: 宣扬、美化或教唆暴力；对现实中的人作出具体的伤害威胁；展示血腥残忍的细节。不包括：新闻报道和历史叙述、对暴力的谴责、明显的虚构作品或游戏语境、对正当防卫的讨论。
+exceptions: []
+question:
+  id: violence
+  instructions: 按平台规则判断这条内容是否宣扬、美化或教唆暴力，对现实中的人作出具体伤害威胁，或展示血腥残忍的细节。
+  options: { violate: 包含暴力宣扬、教唆、具体威胁或血腥细节, none: 不包含, unknown: 无法判断 }
+  violation_option: violate
+  pass_choices: [none]
+thresholds: { block: 0.90, pass: 0.10, keyed_by_option_count: true }
+contract_tests: []
