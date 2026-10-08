@@ -27,3 +27,5 @@ run/
 logs/
 # the eval manifest holds ids and labels only (no text), so it is committed
 !eval/*.jsonl
+# case pool manifests hold ids, structure, expectations and text hashes only (no text), so they are committed
+!cases/*.manifest.jsonl

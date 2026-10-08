@@ -5,6 +5,7 @@
 //   pick      public candidates from the eval dev split, isolated from every labeling / calibration sample (their ids
 //             and the injection family of each) -> data/cases/public-candidates.txt; and the self-written targets as an
 //             items file -> data/cases/self-items.jsonl (so they can be labeled with the frozen procedure, target alone)
+//             (data/cases/review-exclude.txt: public ids taken out by the reviewer after reading the draft)
 //   build     after both are labeled (label-pilot run x3 + adjudicate for abuse-v4.3 / marketing-v2 / guard-v1):
 //             -> data/cases/pool-v1.jsonl (full), cases/pool-v1.manifest.jsonl (no text), data/cases/pool-v1-review.md
 //             (owner review document, with text; stays on the dev box), data/cases/pool-v1-exclude.txt (ids the
@@ -53,7 +54,10 @@ if (phase === "pick") {
   const L = { abuse: labels("abuse-v4.3"), marketing: labels("marketing-v2"), guard: labels("guard-v1") };
   const platform = (id: string) => ({ abuse: L.abuse.get(id) ?? null, marketing: L.marketing.get(id) ?? null, guard: L.guard.get(id) ?? null });
   const byId = new Map(all.map((it) => [it.id, it] as const));
-  const cand = readFileSync("data/cases/public-candidates.txt", "utf8").split("\n").filter(Boolean).map((id) => byId.get(id)!);
+  // ids the reviewer took out after reading the draft (data/cases/review-exclude.txt): the model consensus is not a gold
+  // standard, and a case whose expectation is arguable tests nothing
+  const reviewOut = new Set(existsSync("data/cases/review-exclude.txt") ? readFileSync("data/cases/review-exclude.txt", "utf8").split("\n").filter(Boolean) : []);
+  const cand = readFileSync("data/cases/public-candidates.txt", "utf8").split("\n").filter(Boolean).filter((id) => !reviewOut.has(id)).map((id) => byId.get(id)!);
   const consensus = (id: string, std: "abuse" | "marketing" | "guard", label: string) => { const l = L[std].get(id); return !!l && l.source === "consensus" && l.label === label; };
   const isAbuse = (it: Item) => consensus(it.id, "abuse", "violate") && consensus(it.id, "guard", "allow");
   const isMkt = (it: Item) => consensus(it.id, "marketing", "violate") && consensus(it.id, "abuse", "allow") && consensus(it.id, "guard", "allow");
