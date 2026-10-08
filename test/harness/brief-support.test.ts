@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
 import * as core from "../../packages/core/src/index.ts";
 import { taskBrief } from "../../packages/worker/src/index.ts";
-import { BUNDLE, CFG, PINS, freshDb, seedContent } from "../helpers.ts";
+import { BUNDLE, CFG, PINS, freshDb, lowRiskConfirmed, seedContent } from "../helpers.ts";
 import { lowRisk, makeWorker, resolving, runToIdle, setScript, type Step } from "./setup.ts";
 
 /** wraps a step factory and keeps every message list the model was sent */
@@ -84,5 +84,20 @@ describe("§3 judge support and repeated requests", () => {
     expect(c.support.allowed_now).toEqual(["pass"]);
     expect(core.requireReview(db, r.review_id).state).toBe("disposed");
     await fx.close();
+  });
+});
+
+describe("stage ③ appeal brief", () => {
+  it("an appeal review's brief names the earlier ruling and the appellant's reason", () => {
+    const db = freshDb();
+    seedContent(db, "ap1", "comment", { eventTime: Date.now() - 5000, accountId: "acc" });
+    const calls = lowRiskConfirmed(db, "ap1", null, "jc-ap1", Date.now() - 4000);
+    core.fastDispose(db, BUNDLE, { contentId: "ap1", action: "pass", ruleIds: [], judgeCallIds: calls, pins: PINS, judgeModel: "jev", budgetTools: 12, budgetMicro: 50_000, reason: "fast" }, Date.now() - 3000);
+    const ap = core.createFollowupReview(db, { contentId: "ap1", trigger: "appeal", triggerRequestId: "r1", payloadSha: "x", pins: PINS, judgeModel: "jev", deadlineMs: CFG.deadlineMs, budgetTools: 12, budgetMicro: 50_000, pendingVisibility: "visible" }, Date.now() - 2000).review;
+    core.synthEventInsert(db, { eventId: `appeal:${ap.review_id}`, accountId: "acc", kind: "appeal", payload: { content_id: "ap1", review_id: ap.review_id, reason_code: "misjudged" }, eventTime: Date.now() - 2000 });
+    const b = taskBrief(db, core.requireReview(db, ap.review_id), BUNDLE);
+    expect(b).toContain("用户申诉：原裁决 pass");
+    expect(b).toContain("申诉理由代码 misjudged");
+    expect(b).toContain("申诉本身不是放行理由");
   });
 });

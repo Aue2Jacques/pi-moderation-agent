@@ -148,9 +148,13 @@ describe("HTTP", () => {
       expect(core.readRuling(db, "h1#suspicious#1")?.actor).toBe("human");
       const a1 = await fetch(`${base}/api/appeals`, { method: "POST", headers: H, body: JSON.stringify({ content_id: "h2", trigger_request_id: "req-1", reason_code: "disagree" }) });
       expect(a1.status).toBe(201);
+      // stage ③: the appeal is recorded as an account-history event with its reason code (once, even if re-sent)
+      const appealReview = ((await a1.clone().json()) as { review_id: string }).review_id;
+      expect(db.prepare("SELECT kind, payload FROM synth_event WHERE event_id=?").get(`appeal:${appealReview}`)).toMatchObject({ kind: "appeal" });
       const a2 = await fetch(`${base}/api/appeals`, { method: "POST", headers: H, body: JSON.stringify({ content_id: "h2", trigger_request_id: "req-1", reason_code: "disagree" }) });
       expect(a2.status).toBe(200);
       expect(((await a2.json()) as { duplicate: boolean }).duplicate).toBe(true);
+      expect((db.prepare("SELECT COUNT(*) AS n FROM synth_event WHERE kind='appeal'").get() as { n: number }).n).toBe(1);
       const a3 = await fetch(`${base}/api/appeals`, { method: "POST", headers: H, body: JSON.stringify({ content_id: "h2", trigger_request_id: "req-1", reason_code: "other" }) });
       expect(a3.status).toBe(409);
       expect((await (await fetch(`${base}/`)).text()).includes("仪表盘")).toBe(true);

@@ -22,10 +22,22 @@ const whyOf = (reason: string | null): { why: string; verify: string[] } => {
   return { why: `快判结论为疑似（${reason ?? "未记录原因"}）。`, verify: ["按规则逐条核验"] };
 };
 
+/** stage ③: an appeal review — what was decided before, and the appellant's reason */
+function appealWhy(db: Db, review: ReviewRow): { why: string; verify: string[] } {
+  const prior = db.prepare("SELECT action, rule_ids, actor FROM ruling WHERE content_id=? AND review_id<>? ORDER BY seq DESC LIMIT 1").get(review.content_id, review.review_id) as { action: string; rule_ids: string; actor: string } | undefined;
+  const ev = db.prepare("SELECT payload FROM synth_event WHERE event_id=?").get(`appeal:${review.review_id}`) as { payload: string } | undefined;
+  const reason = ev ? ((JSON.parse(ev.payload) as { reason_code?: unknown }).reason_code ?? "未填") : "未记录";
+  const was = prior ? `${prior.action}${JSON.parse(prior.rule_ids).length ? `（${(JSON.parse(prior.rule_ids) as string[]).join("、")}）` : ""}，由 ${prior.actor} 作出` : "没有找到原裁决";
+  return {
+    why: `用户申诉：原裁决 ${was}；申诉理由代码 ${String(reason)}。这是重审，不是复核原审的过程。`,
+    verify: ["按规则重新判断内容本身，取需要的上下文和账号历史", "申诉本身不是放行理由，原裁决也不是维持理由", "能支持的处置与原裁决不同就按新的处置；仍不能确定就交人工"],
+  };
+}
+
 export function taskBrief(db: Db, review: ReviewRow, bundle: PolicyBundle): string {
   const content = core.readContent(db, review.content_id)!;
   const fastCalls = (db.prepare("SELECT judge_call_id FROM judge_call WHERE review_id=? AND attempt IS NULL ORDER BY created_at").all(review.review_id) as { judge_call_id: string }[]).map((r) => r.judge_call_id);
-  const w = whyOf(review.suspect_reason);
+  const w = review.trigger === "appeal" ? appealWhy(db, review) : whyOf(review.suspect_reason);
   const lines: string[] = [`审核任务：审次 ${review.review_id}，场景 ${content.scene}，适用规则 ${core.rulesFor(bundle, content.scene as core.Scene).map((r) => r.ruleId).join("、")}。`, `为什么转给你：${w.why}`];
   if (fastCalls.length) {
     try {

@@ -135,6 +135,11 @@ export function createHttpServer(d: HttpDeps): Server {
         const sc = d.bundle.scenes[scene];
         try {
           const out = core.createFollowupReview(db, { contentId, trigger: "appeal", triggerRequestId: String(b["trigger_request_id"]), payloadSha: core.sha256(core.canonical({ reason_code: b["reason_code"] ?? null })), pins: gateway.pins, judgeModel: d.gateway.d.judgeModel, deadlineMs: sc.deadlineMs, budgetTools: d.gateway.d.cfg.budgetTools, budgetMicro: d.gateway.d.cfg.budgetMicro, pendingVisibility: sc.pendingVisibility }, d.now());
+          // stage ③: the appeal is also an account-history event (the agent's history tool counts appeals) and keeps the
+          // reason code, which the review row only holds as a hash; one event per appeal review (idempotent)
+          // content without an account still keeps its appeal reason ("(none)" never matches an account-history query)
+          const account = core.readContent(db, contentId)?.account_id ?? "(none)";
+          if (!out.duplicate) core.synthEventInsert(db, { eventId: `appeal:${out.review.review_id}`, accountId: account, kind: "appeal", payload: { content_id: contentId, review_id: out.review.review_id, reason_code: b["reason_code"] ?? null }, eventTime: d.now() });
           return json(res, out.duplicate ? 200 : 201, { review_id: out.review.review_id, duplicate: out.duplicate });
         } catch (e) {
           if (core.isCoreError(e)) return json(res, e.http, { code: e.code, message: e.message });
