@@ -11,14 +11,26 @@ import { BUNDLE, CFG, PINS, T0, seedContent } from "../helpers.ts";
 export type Step = { tool: string; args: Record<string, unknown>; id?: string } | { text: string } | { tools: { tool: string; args: Record<string, unknown>; id?: string }[] };
 
 /** Build a faux response factory that answers step[i] for the i-th assistant turn (replay-safe). */
+/** Token usage reported by every scripted model response (faux defaults to zero; cost tests set it). */
+export let scriptedUsage: { input: number; output: number } = { input: 0, output: 0 };
+export function setScriptedUsage(u: { input: number; output: number }): void {
+  scriptedUsage = u;
+}
+const withUsage = <M extends { usage: unknown }>(m: M): M => ({ ...m, usage: { input: scriptedUsage.input, output: scriptedUsage.output, cacheRead: 0, cacheWrite: 0, totalTokens: scriptedUsage.input + scriptedUsage.output, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+
 export function scripted(steps: Step[]): FauxResponseStep {
   return (context) => {
     const i = context.messages.filter((m) => m.role === "assistant").length;
     const s = steps[Math.min(i, steps.length - 1)]!;
-    if ("text" in s) return fauxAssistantMessage(s.text);
+    if ("text" in s) return withUsage(fauxAssistantMessage(s.text));
     const calls = "tools" in s ? s.tools : [s];
-    return fauxAssistantMessage(calls.map((c, k) => fauxToolCall(c.tool, c.args, { id: c.id ?? `${i}-${k}-${c.tool}` })), { stopReason: "toolUse" });
+    return withUsage(fauxAssistantMessage(calls.map((c, k) => fauxToolCall(c.tool, c.args as Parameters<typeof fauxToolCall>[1], { id: c.id ?? `${i}-${k}-${c.tool}` })), { stopReason: "toolUse" }));
   };
+}
+
+/** Test calibrator pinned as PINS.calibVer: copies raw probabilities (recorded judges already emit the intended p). */
+export function passThroughCalibrator(calibVer: string = PINS.calibVer): core.Calibrator {
+  return { calibVer, mode: "identity", apply: (_b, raw) => ({ probs: { ...raw }, temperature: 1 }) };
 }
 
 export const PRICES: core.PriceTable = { pricesVer: "prices@t1", perMillion: { "faux/faux-1": { input: 0, output: 0 }, "jev-recorded": { input: 1_000_000, output: 0 } } };
@@ -35,7 +47,7 @@ export const highRisk: JudgeScript = (req) => ({
 
 export type WorkerFixture = { db: core.Db; worker: Worker; calls: { conversationId: string; kind: string; at: number }[]; faux: ReturnType<typeof fauxProvider>; close: () => Promise<void> };
 
-export async function makeWorker(o: { db: core.Db; storage?: Storage; steps: Step[]; judge?: JudgeScript | JudgeClient; workerId?: string; admitMax?: number; cfg?: core.Config; now?: () => number; escalation?: boolean }): Promise<WorkerFixture> {
+export async function makeWorker(o: { db: core.Db; storage?: Storage; steps: Step[]; judge?: JudgeScript | JudgeClient; workerId?: string; admitMax?: number; cfg?: core.Config; now?: () => number; escalation?: boolean; calibrator?: core.Calibrator; bundle?: core.PolicyBundle; ruleTexts?: Record<string, string>; prices?: core.PriceTable }): Promise<WorkerFixture> {
   const faux = fauxProvider();
   const models = createModels();
   models.setProvider(faux.provider);
@@ -44,8 +56,8 @@ export async function makeWorker(o: { db: core.Db; storage?: Storage; steps: Ste
   const now = o.now ?? (() => Date.now());
   const judge = typeof o.judge === "function" ? recordedJudge(o.judge) : (o.judge ?? recordedJudge(lowRisk));
   const worker = await Worker.open({
-    db: o.db, storage: o.storage ?? new MemoryStorage(), models, bundle: BUNDLE, ruleTexts: { "ABUSE-001": "rule text", "MARKETING-003": "rule text" },
-    workerId: o.workerId ?? "w1", judge, prices: PRICES, cfg: o.cfg ?? CFG, flags: { escalation: o.escalation ?? false }, maxModelCalls: 40, now,
+    db: o.db, storage: o.storage ?? new MemoryStorage(), models, bundle: o.bundle ?? BUNDLE, ruleTexts: o.ruleTexts ?? { "ABUSE-001": "rule text", "MARKETING-003": "rule text" },
+    workerId: o.workerId ?? "w1", judge, prices: o.prices ?? PRICES, calibrator: o.calibrator ?? passThroughCalibrator(), cfg: o.cfg ?? CFG, flags: { escalation: o.escalation ?? false }, maxModelCalls: 40, now,
     admitMax: o.admitMax ?? 10, modelFor: () => ({ provider: "faux", modelId: "faux-1" }), instructions: "审核这条内容。",
     onExternalCall: (conversationId, kind) => calls.push({ conversationId, kind, at: now() }),
   });
@@ -53,10 +65,10 @@ export async function makeWorker(o: { db: core.Db; storage?: Storage; steps: Ste
 }
 
 /** Seed one content and a queued suspicious review; returns the review. */
-export function queuedReview(db: core.Db, id: string, o: { thread?: string; account?: string; at?: number; budgetTools?: number } = {}): core.ReviewRow {
+export function queuedReview(db: core.Db, id: string, o: { thread?: string; account?: string; at?: number; budgetTools?: number; imageRefs?: string[]; pins?: core.Pins } = {}): core.ReviewRow {
   const at = o.at ?? T0;
-  seedContent(db, id, "comment", { ...(o.thread ? { threadId: o.thread } : {}), ...(o.account ? { accountId: o.account } : {}), eventTime: at });
-  return core.createSuspiciousReview(db, { contentId: id, pins: PINS, judgeModel: "jev", judgeCallIds: [], pendingVisibility: "hidden", deadlineMs: CFG.deadlineMs, budgetTools: o.budgetTools ?? 12, budgetMicro: 50_000 }, at).review;
+  seedContent(db, id, "comment", { ...(o.thread ? { threadId: o.thread } : {}), ...(o.account ? { accountId: o.account } : {}), ...(o.imageRefs ? { imageRefs: o.imageRefs } : {}), eventTime: at });
+  return core.createSuspiciousReview(db, { contentId: id, pins: o.pins ?? PINS, judgeModel: "jev", judgeCallIds: [], pendingVisibility: "hidden", deadlineMs: CFG.deadlineMs, budgetTools: o.budgetTools ?? 12, budgetMicro: 50_000 }, at).review;
 }
 
 /** The faux queue consumes one factory per request; install enough copies for any scenario. */
@@ -88,7 +100,7 @@ export const PASS_SCRIPT: Step[] = [
  */
 export function resolving(db: core.Db, reviewIdOf: () => string | undefined, steps: Step[]): FauxResponseStep {
   const base = scripted(steps);
-  return (context, options, state, model) => {
+  return ((context, options, state, model) => {
     const rid = reviewIdOf();
     const sub = (v: unknown): unknown => {
       if (typeof v === "string" && rid) {
@@ -107,5 +119,5 @@ export function resolving(db: core.Db, reviewIdOf: () => string | undefined, ste
     const msg = typeof base === "function" ? base(context, options, state, model) : base;
     const resolved = msg instanceof Promise ? msg : Promise.resolve(msg);
     return resolved.then((m) => ({ ...m, content: m.content.map((c) => (c.type === "toolCall" ? { ...c, arguments: sub(c.arguments) as Record<string, unknown> } : c)) }));
-  };
+  }) as FauxResponseStep;
 }

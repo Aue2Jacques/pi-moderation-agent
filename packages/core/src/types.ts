@@ -8,7 +8,9 @@ export type Scene = "comment" | "danmaku" | "nickname" | "post" | "image";
 export type Visibility = "visible" | "self_only" | "hidden";
 export type ReleaseReason =
   | "timeout" | "budget_tools" | "budget_cost" | "evidence_gap" | "judge_down"
-  | "model_release" | "backpressure" | "revoked" | "preprocess_error";
+  | "model_release" | "backpressure" | "revoked" | "preprocess_error"
+  | "image_unsupported"   // content carries images and no image channel to the judge exists (text MVP): never auto-disposed
+  | "bundle_missing";     // the policy bundle version pinned on the review is not available to this worker
 
 export type Pins = { rulesVer: string; calibVer: string; evidenceVer: string; pricesVer: string };
 
@@ -126,3 +128,17 @@ export function questionsOf(bundle: PolicyBundle): Set<string> {
   for (const sc of Object.values(bundle.scenes)) s.add(sc.imageCheck.question.sha);
   return s;
 }
+
+/** Calibration bucket: the judge model × rules version × scene × option count (docs §9.2). */
+export type CalibBucket = { judge: string; rulesVer: string; scene: Scene; nOptions: number };
+
+/**
+ * Runtime calibration contract (docs §9.2 / round-9 item 5). `apply` returns null when no fitted file covers the bucket:
+ * the answer is then recorded with calibrated_probs = NULL and never becomes an effective answer (only "suspicious").
+ * mode "identity" is the explicit smoke/联调 mode: raw probabilities are copied through and the pin is `calib@identity`.
+ */
+export type Calibrator = {
+  calibVer: string;
+  mode: "strict" | "identity";
+  apply(bucket: CalibBucket, rawProbs: Readonly<Record<string, number>>): { probs: Record<string, number>; temperature: number } | null;
+};

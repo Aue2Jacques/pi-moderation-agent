@@ -1,5 +1,6 @@
 // Tool-count hard limit and cost soft limit. docs/dev-doc-v1.md §7.5, T11/T11'/T12/T13.
 import { tx, type Db } from "./db.ts";
+import { microOfUsage, type PriceTable, type Usage } from "./prices.ts";
 import { CoreError } from "./errors.ts";
 
 export const TERMINAL_TOOLS: ReadonlySet<string> = new Set(["dispose", "release"]);
@@ -62,6 +63,25 @@ export function toolSpentMicro(db: Db, reviewId: string): { settled: number; est
      FROM tool_request r JOIN tool_slot s ON s.review_id=r.review_id AND s.call_id=r.call_id WHERE r.review_id=?`,
   ).get(reviewId) as { settled: number; estimated: number; unknown_n: number };
   return { settled: row.settled, estimated: row.estimated, hasUnknown: row.unknown_n > 0 };
+}
+
+/** Model cost from our own ledger (model_call.first_usage priced now). Used by the host loop and settlement, where no UsageDoc is at hand. */
+export function modelSpentMicro(db: Db, prices: PriceTable, reviewId: string): number {
+  const rows = db.prepare("SELECT model, first_usage FROM model_call WHERE review_id=?").all(reviewId) as { model: string; first_usage: string }[];
+  let total = 0;
+  for (const r of rows) {
+    const u = JSON.parse(r.first_usage) as Partial<Usage> | null;
+    if (!u) continue;
+    total += microOfUsage(prices, r.model, { input: u.input ?? 0, output: u.output ?? 0, ...(u.cacheRead !== undefined ? { cacheRead: u.cacheRead } : {}) });
+  }
+  return total;
+}
+
+/** §7.5 formula from the ledger alone: model_call priced + tool settled + reserved for inflight/unknown (round-9 item 7). */
+export function spentFromLedger(db: Db, prices: PriceTable, reviewId: string): { spent: number; settled: boolean; models: number; tools: number } {
+  const models = modelSpentMicro(db, prices, reviewId);
+  const t = toolSpentMicro(db, reviewId);
+  return { spent: models + t.settled + t.estimated, settled: !t.hasUnknown, models, tools: t.settled + t.estimated };
 }
 
 /** §7.5 formula: pi.usage.models (priced by caller) + tool settled + reserved for inflight/unknown. */

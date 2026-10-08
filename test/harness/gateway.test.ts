@@ -6,7 +6,7 @@ import * as core from "../../packages/core/src/index.ts";
 import { Gateway, DEFAULT_GATEWAY_CONFIG, createHttpServer, normalizeText, simhash, hamming, Blacklist } from "../../packages/gateway/src/index.ts";
 import { recordedJudge, uniform, type JudgeRequest, type JudgeResponse } from "../../packages/worker/src/index.ts";
 import { BUNDLE, HUMAN, T0, freshDb, seedContent } from "../helpers.ts";
-import { PRICES } from "./setup.ts";
+import { PRICES, passThroughCalibrator } from "./setup.ts";
 
 /** in-call confirm: primary + variant with identical answers (Jev-like determinism) */
 const withVariant = (answers: ReturnType<typeof uniform>): JudgeResponse => ({ status: "ok", model: "jev-recorded", answers, variant: { shuffleSeed: 17, answers }, usage: { input: 950, output: 568 }, latencyMs: 300 });
@@ -18,8 +18,8 @@ const byText = (req: JudgeRequest): JudgeResponse => {
   return withVariant(uniform(req.questions, 0.01));
 };
 
-function makeGateway(db: core.Db, o: Partial<typeof DEFAULT_GATEWAY_CONFIG> = {}, now: () => number = () => Date.now(), bundle = BUNDLE) {
-  return new Gateway({ db, bundle, judge: recordedJudge(byText), prices: PRICES, calibVer: "calib@t1", evidenceVer: "evidence@t1", judgeModel: "jev-recorded", cfg: { ...DEFAULT_GATEWAY_CONFIG, ...o }, now, gatewayId: "g1" });
+function makeGateway(db: core.Db, o: Partial<typeof DEFAULT_GATEWAY_CONFIG> = {}, now: () => number = () => Date.now(), bundle = BUNDLE, calibrator: core.Calibrator = passThroughCalibrator("calib@t1")) {
+  return new Gateway({ db, bundle, judge: recordedJudge(byText), prices: PRICES, calibrator, evidenceVer: "evidence@t1", judgeModel: "jev-recorded", cfg: { ...DEFAULT_GATEWAY_CONFIG, ...o }, now, gatewayId: "g1" });
 }
 const state = (db: core.Db, cid: string) => db.prepare("SELECT state, release_reason, rules_ver FROM review WHERE content_id=? ORDER BY seq DESC LIMIT 1").get(cid) as { state: string; release_reason: string | null; rules_ver: string } | undefined;
 

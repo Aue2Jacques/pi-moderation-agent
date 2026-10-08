@@ -46,7 +46,8 @@ function compare(arm: Arm, a: JudgeAnswers, b: JudgeAnswers, tag: string): void 
 }
 
 const CONCURRENCY = Number(process.env["CONCURRENCY"] ?? 8);
-type Four = { i: number; a: Awaited<ReturnType<typeof inCall.classify>>; b1: typeof a; b2: typeof a; c2: typeof a };
+type Res = Awaited<ReturnType<typeof inCall.classify>>;
+type Four = { i: number; a: Res; b1: Res; b2: Res; c2: Res };
 async function runOne(i: number, text: string): Promise<Four> {
   const req = { contentId: `exp:${i}`, text, scene: "comment", evidence: [], questions };
   const [a, b1, b2, c2] = await Promise.all([inCall.classify(req), single.classify(req), single.classify({ ...req, shuffleSeed: 17 }), single.classify(req)]);

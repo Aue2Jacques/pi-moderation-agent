@@ -8,14 +8,14 @@ import { preprocess, type Blacklist, type RateLimit, type SimhashIndex } from ".
 
 export type FastpathDeps = {
   db: Db; bundle: PolicyBundle; judge: JudgeClient; prices: PriceTable;
-  pins: core.Pins; judgeModel: string;
+  pins: core.Pins; judgeModel: string; calibrator: core.Calibrator;
   blacklist: Blacklist; index: SimhashIndex; rate: RateLimit;
   backpressure: () => { agentFull: boolean };
   budgetTools: number; budgetMicro: number;
   now: () => number;
 };
 
-export type FastpathOutcome = { contentId: string; decision: Decision["state"] | "judge_down" | "backpressure" | "preprocess_error"; reviewId: string; latencyMs: number; judgeStatus: string; blacklistHits: number; nearDup: number };
+export type FastpathOutcome = { contentId: string; decision: Decision["state"] | "judge_down" | "backpressure" | "preprocess_error" | "image_unsupported"; reviewId: string; latencyMs: number; judgeStatus: string; blacklistHits: number; nearDup: number };
 
 export async function runFastpath(deps: FastpathDeps, contentId: string): Promise<FastpathOutcome> {
   const t0 = deps.now();
@@ -38,11 +38,16 @@ export async function runFastpath(deps: FastpathDeps, contentId: string): Promis
     return { contentId, decision: "preprocess_error", reviewId: r.review_id, latencyMs: deps.now() - t0, judgeStatus: "skipped", blacklistHits: 0, nearDup: 0 };
   }
 
-  // one judge call: every applicable rule question + its exceptions (+ image_check when images)
+  // round-9 item 6: the text MVP has no image channel to the judge. Content with images is never auto-disposed and never
+  // gets an image_check question it cannot answer: straight to human with its own reason, zero judge calls.
   const hasImages = !!content.image_refs && (JSON.parse(content.image_refs) as unknown[]).length > 0;
+  if (hasImages) {
+    const r = direct("image_unsupported");
+    return { contentId, decision: "image_unsupported", reviewId: r.review_id, latencyMs: deps.now() - t0, judgeStatus: "skipped", blacklistHits: pre.blacklistHits.length, nearDup: pre.nearDuplicates.length };
+  }
+  // one judge call: every applicable rule question + its exceptions
   const rules = core.rulesFor(deps.bundle, scene);
   const questions = rules.flatMap((r) => [r.question, ...r.exceptions.map((x) => x.question)]);
-  if (hasImages) questions.push(sceneCfg.imageCheck.question);
   const res = await deps.judge.classify({ contentId, text: content.text, scene, evidence: [], questions });
   const inputSha = core.inputFingerprint(content.text_sha, scene, [], deps.pins.evidenceVer);
   const judgeCallIds: string[] = [];
@@ -52,7 +57,13 @@ export async function runFastpath(deps: FastpathDeps, contentId: string): Promis
       status: res.status, ...(confirms ? { confirmsCallId: confirms.id, shuffleSeed: confirms.seed } : {}), latencyMs: res.latencyMs,
       ...(res.status === "ok" && !confirms ? { inputTokens: res.usage.input, outputTokens: res.usage.output, costMicro: core.microOfUsage(deps.prices, `${deps.judge.provider}/${res.model}`, res.usage) } : { inputTokens: 0, outputTokens: 0, costMicro: 0 }),
       costStatus: res.status === "ok" ? "settled" : "unknown",
-      answers: questions.flatMap((q) => (answers[q.sha] ? [{ questionSha: q.sha, ruleId: q.ruleId ?? null, kind: q.kind, choice: answers[q.sha]!.choice, rawProbs: answers[q.sha]!.probs, calibratedProbs: answers[q.sha]!.probs }] : [])),
+      answers: questions.flatMap((q) => {
+        const a = answers[q.sha];
+        if (!a) return [];
+        // calibration is a server-side step: no fitted bucket → calibrated_probs NULL → never an effective answer
+        const cal = deps.calibrator.apply({ judge: deps.judgeModel, rulesVer: deps.bundle.rulesVer, scene, nOptions: Object.keys(q.criteria).length }, a.probs);
+        return [{ questionSha: q.sha, ruleId: q.ruleId ?? null, kind: q.kind, choice: a.choice, rawProbs: a.probs, calibratedProbs: cal ? cal.probs : null, ...(cal ? { temperature: cal.temperature } : {}) }];
+      }),
     }, deps.now());
     judgeCallIds.push(id);
   };
@@ -67,7 +78,7 @@ export async function runFastpath(deps: FastpathDeps, contentId: string): Promis
 
   // policy: answers → three states (blacklist hits and rate limiting force suspicious; they are deterministic signals for the agent, not rulings)
   const answers = core.trustedAnswersFromCalls(deps.db, contentId, judgeCallIds, deps.bundle, inputSha);
-  let d = decide({ bundle: deps.bundle, scene, hasImages, answers, judgeOk: true });
+  let d = decide({ bundle: deps.bundle, scene, hasImages, answers, judgeOk: true });   // hasImages is false here (gated above)
   if ((pre.blacklistHits.length > 0 || pre.rateLimited) && d.state === "pass") d = { state: "suspicious", action: null, hits: [], reason: pre.blacklistHits.length ? "blacklist_hit" : "rate_limited" };
 
   if (d.state === "pass" || d.state === "block") {

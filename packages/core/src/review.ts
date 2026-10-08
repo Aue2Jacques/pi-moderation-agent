@@ -5,6 +5,8 @@ import { currentSeq, nextSeq, tx, type Db } from "./db.ts";
 import { CoreError } from "./errors.ts";
 import { abortCommandId, outboxEventId, reviewId as mkReviewId, sha256, type Trigger } from "./ids.ts";
 import { assertTransition, isTerminal } from "./states.ts";
+import { modelSpentMicro } from "./budget.ts";
+import type { PriceTable } from "./prices.ts";
 import type { Action, ContentRow, Pins, ReleaseReason, ReviewRow, RulingRow, Scene, Visibility } from "./types.ts";
 
 export type Config = {
@@ -220,13 +222,14 @@ export function releaseToHuman(db: Db, reviewId: string, actor: ReleaseActor, re
 }
 
 /** S7: revoke the current attempt and release. Cost uses the fallback formula (estimated). */
-export function revokeAndRelease(db: Db, reviewId: string, reason: ReleaseReason, severity: number, humanSlaMs: number, at: number): { duplicate: boolean } {
+export function revokeAndRelease(db: Db, reviewId: string, reason: ReleaseReason, severity: number, humanSlaMs: number, at: number, prices?: PriceTable): { duplicate: boolean } {
   return tx(db, () => {
     const r = requireReview(db, reviewId);
     if (r.state === "human_queue") return { duplicate: true };
     if (isTerminal(r.state)) throw new CoreError("E_STATE_INVALID", `review ${reviewId} is ${r.state}`);
     assertTransition(r.state, "human_queue");
-    const fallback = fallbackCost(db, reviewId);
+    // round-9 item 7: model requests already made count too (priced from model_call); still 'estimated' until W settles
+    const fallback = fallbackCost(db, reviewId) + (prices ? modelSpentMicro(db, prices, reviewId) : 0);
     db.prepare("UPDATE review SET state='human_queue', release_reason=?, lease_owner=NULL, lease_until=NULL, revoked_attempt=?, used_micro=?, cost_status='estimated', updated_at=? WHERE review_id=?")
       .run(reason, r.attempt, fallback, at, reviewId);
     insertHumanQueue(db, r, reason, severity, humanSlaMs, at);
@@ -311,4 +314,18 @@ export function recordJudgeCall(db: Db, c: JudgeCallInput, at: number): void {
     const ins = db.prepare("INSERT OR IGNORE INTO judge_answer(judge_call_id, question_sha, rule_id, question_kind, choice, raw_probs, calibrated_probs, temperature) VALUES (?,?,?,?,?,?,?,?)");
     for (const a of c.answers) ins.run(c.judgeCallId, a.questionSha, a.ruleId, a.kind, a.choice, JSON.stringify(a.rawProbs), a.calibratedProbs ? JSON.stringify(a.calibratedProbs) : null, a.temperature ?? null);
   });
+}
+
+// ---------- round-9 item 12: policy bundle versions a review can be continued under ----------
+export type StoredBundle = { bundle: PolicyBundleShape; texts: Record<string, string> };
+type PolicyBundleShape = import("./types.ts").PolicyBundle;
+
+/** G stores every bundle it runs with; a worker continues an old review under the bundle its review is pinned to. Idempotent per rules_ver. */
+export function storeBundle(db: Db, bundle: PolicyBundleShape, texts: Record<string, string>, at: number): boolean {
+  return tx(db, () => db.prepare("INSERT OR IGNORE INTO policy_bundle(rules_ver, bundle, texts, created_at) VALUES (?,?,?,?)").run(bundle.rulesVer, JSON.stringify(bundle), JSON.stringify(texts), at).changes === 1);
+}
+
+export function loadStoredBundle(db: Db, rulesVer: string): StoredBundle | undefined {
+  const row = db.prepare("SELECT bundle, texts FROM policy_bundle WHERE rules_ver=?").get(rulesVer) as { bundle: string; texts: string } | undefined;
+  return row ? { bundle: JSON.parse(row.bundle) as PolicyBundleShape, texts: JSON.parse(row.texts) as Record<string, string> } : undefined;
 }

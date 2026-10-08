@@ -120,7 +120,10 @@ describe("U-09 allowedActions", () => {
     const base = [...lowPair(ABUSE_Q, "a"), ...lowPair(MKT_Q, "m")];
     expect(run(base, true).allowed.has("pass")).toBe(false);
     const withImg = [...base, ...lowPair(IMG_Q, "i")];
-    expect(run(withImg, true).allowed.has("pass")).toBe(true);
+    // round-9 item 6: an image_check answer is coverage only when the image was actually delivered to the judge
+    expect(run(withImg, true).allowed.has("pass")).toBe(false);
+    expect(run(withImg, true).covered["image_check"]).toBe(false);
+    expect(core.allowedActions({ bundle: BUNDLE, scene: "comment", hasImages: true, imageDelivered: true, answers: withImg }).allowed.has("pass")).toBe(true);
     const block = run([mkAns(ABUSE_Q, "1", 0.99, "violate"), mkAns(ABUSE_EX_Q, "1", 0.01, "not_applies")], true);
     expect(block.allowed.has("takedown")).toBe(true);
   });

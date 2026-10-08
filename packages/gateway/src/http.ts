@@ -46,7 +46,7 @@ export function createHttpServer(d: HttpDeps): Server {
       const m = (re: RegExp): RegExpExecArray | null => re.exec(path);
       if (req.method === "GET" && path === "/") return html(res, DASHBOARD_HTML);
       if (req.method === "GET" && path === "/human") return html(res, HUMAN_HTML);
-      if (req.method === "GET" && path === "/api/health") return json(res, 200, { ok: true, version: "0.0.0", queues: core.control.backpressure(db), replay_paused: gateway.replayPaused });
+      if (req.method === "GET" && path === "/api/health") return json(res, 200, { ok: true, version: "0.0.0", queues: core.control.backpressure(db), replay_paused: gateway.replayPaused, rules_ver: gateway.d.bundle.rulesVer, calib_ver: gateway.d.calibrator.calibVer, calib_mode: gateway.d.calibrator.mode, completion: core.reconcile.completion(db) });
       if (req.method === "GET" && path === "/api/metrics") {
         if ((req.headers["accept"] ?? "").includes("text/event-stream")) {
           res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });

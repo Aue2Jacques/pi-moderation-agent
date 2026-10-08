@@ -49,3 +49,49 @@ export function ece(samples: readonly Sample[], bins = 15): number {
 
 export type CalibFile = { T: number; n: number; ece_before: number; ece_after: number; fitted_at: number; bucket: { judge: string; rules_ver: string; scene: string; n_options: number } };
 export const calibKey = (b: CalibFile["bucket"]): string => `${b.judge}|${b.rules_ver}|${b.scene}|${b.n_options}`;
+
+// ---------- runtime calibrators (round-9 item 5) ----------
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { createHash } from "node:crypto";
+import type { CalibBucket, Calibrator } from "@mod/core";
+
+const bucketKey = (b: CalibBucket): string => calibKey({ judge: b.judge, rules_ver: b.rulesVer, scene: b.scene, n_options: b.nOptions });
+
+/** Explicit smoke mode: raw probabilities copied through, pinned as calib@identity. Never the default. */
+export function identityCalibrator(): Calibrator {
+  return { calibVer: "calib@identity", mode: "identity", apply: (_b, raw) => ({ probs: { ...raw }, temperature: 1 }) };
+}
+
+/** Strict mode with no files at all: every answer stays uncalibrated → only "suspicious" decisions are possible. */
+export function noCalibrator(): Calibrator {
+  return { calibVer: "calib@none", mode: "strict", apply: () => null };
+}
+
+/**
+ * Strict mode from fitted files `<dir>/<judge>/*.json` (CalibFile). calibVer = sha of all file contents, so changing or
+ * deleting a file changes the pin and old reviews stop matching. Missing bucket → null.
+ */
+export function loadCalibrator(dir: string, judge: string): Calibrator {
+  const files = new Map<string, CalibFile>();
+  const h = createHash("sha256");
+  const sub = join(dir, judge);
+  let names: string[] = [];
+  try { if (statSync(sub).isDirectory()) names = readdirSync(sub).filter((f) => f.endsWith(".json")).sort(); } catch { names = []; }
+  for (const f of names) {
+    const raw = readFileSync(join(sub, f), "utf8");
+    h.update(`${f}\n${raw}\n`);
+    const c = JSON.parse(raw) as CalibFile;
+    if (typeof c.T !== "number" || !(c.T > 0) || !c.bucket) throw new Error(`bad calib file ${f}`);
+    files.set(calibKey(c.bucket), c);
+  }
+  if (files.size === 0) return noCalibrator();
+  return {
+    calibVer: `calib@${h.digest("hex").slice(0, 12)}`,
+    mode: "strict",
+    apply: (b, raw) => {
+      const c = files.get(bucketKey(b));
+      return c ? { probs: applyTemperature(raw as Probs, c.T), temperature: c.T } : null;
+    },
+  };
+}

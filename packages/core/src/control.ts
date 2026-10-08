@@ -2,15 +2,16 @@
 import { tx, type Db } from "./db.ts";
 import { releaseToHuman, revokeAndRelease, requeue, type Config } from "./review.ts";
 import type { ReviewRow } from "./types.ts";
+import type { PriceTable } from "./prices.ts";
 
 export type TickResult = { timedOut: string[]; requeued: string[]; revoked: string[] };
 
-export function tick(db: Db, cfg: Config, severityOf: (r: ReviewRow) => number, humanSlaMs: number, at: number): TickResult {
+export function tick(db: Db, cfg: Config, severityOf: (r: ReviewRow) => number, humanSlaMs: number, at: number, prices?: PriceTable): TickResult {
   const out: TickResult = { timedOut: [], requeued: [], revoked: [] };
   const due = db.prepare("SELECT * FROM review WHERE state IN ('queued','investigating') AND deadline_at < ?").all(at) as ReviewRow[];
   for (const r of due) {
     if (r.state === "queued") releaseToHuman(db, r.review_id, { kind: "control" }, "timeout", severityOf(r), humanSlaMs, at);
-    else revokeAndRelease(db, r.review_id, "timeout", severityOf(r), humanSlaMs, at);
+    else revokeAndRelease(db, r.review_id, "timeout", severityOf(r), humanSlaMs, at, prices);
     out.timedOut.push(r.review_id);
   }
   const expired = db.prepare("SELECT * FROM review WHERE state='investigating' AND lease_until < ? AND deadline_at >= ?").all(at, at) as ReviewRow[];
@@ -18,7 +19,7 @@ export function tick(db: Db, cfg: Config, severityOf: (r: ReviewRow) => number, 
     if (r.attempt < cfg.maxAttempts) {
       if (requeue(db, r.review_id, cfg, at)) out.requeued.push(r.review_id);
     } else {
-      revokeAndRelease(db, r.review_id, "revoked", severityOf(r), humanSlaMs, at);
+      revokeAndRelease(db, r.review_id, "revoked", severityOf(r), humanSlaMs, at, prices);
       out.revoked.push(r.review_id);
     }
   }

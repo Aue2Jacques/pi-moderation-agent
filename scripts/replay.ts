@@ -1,7 +1,9 @@
 // Replayer: N self-written comments (template × variation, no dataset text) arriving as a Poisson process at RATE/s,
 // written through core.intakeInsert (TS; the Python replayer goes through intake-cli). Honors G's replay_paused flag.
+// Round-9 item 10: content ids are opaque (rp-<hash>); the generating intent is written only to a side file
+// (data/replay-labels.jsonl by default), never to app.db, so neither the judge nor the agent can see it.
 // usage: node --experimental-strip-types scripts/replay.ts [n=500] [rate=5] [gatewayUrl=http://127.0.0.1:8080]
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import * as core from "../packages/core/src/index.ts";
 
 for (const line of (() => { try { return readFileSync(".env", "utf8").split("\n"); } catch { return []; } })()) {
@@ -11,6 +13,9 @@ for (const line of (() => { try { return readFileSync(".env", "utf8").split("\n"
 const N = Number(process.argv[2] ?? 500);
 const RATE = Number(process.argv[3] ?? 5);
 const G = process.argv[4] ?? "http://127.0.0.1:8080";
+const LABELS = process.env["REPLAY_LABELS"] ?? "data/replay-labels.jsonl";
+const RUN = core.sha256(`${Date.now()}:${process.pid}`).slice(0, 6);
+writeFileSync(LABELS, "");
 const db = core.openAppDb(process.env["APP_DB"] ?? "data/app.db", "tool");
 core.ensureSchema(db);
 
@@ -41,7 +46,9 @@ while (sent < N) {
   if (await paused()) { const p0 = Date.now(); await new Promise((r) => setTimeout(r, 500)); pausedMs += Date.now() - p0; continue; }
   const { text, intent } = sample();
   const i = sent;
-  core.intakeInsert(db, { contentId: `rp:${intent}:${i}`, scene: pick(scenes), text, threadId: `t${i % 40}`, accountId: `acct-${i % 60}`, eventTime: Date.now() }, Date.now());
+  const contentId = `rp-${core.sha256(`${RUN}:${i}`).slice(0, 12)}`;   // opaque: carries no label
+  core.intakeInsert(db, { contentId, scene: pick(scenes), text, threadId: `t${i % 40}`, accountId: `acct-${i % 60}`, eventTime: Date.now() }, Date.now());
+  appendFileSync(LABELS, `${JSON.stringify({ content_id: contentId, intent })}\n`);
   sent++;
   if (sent % 50 === 0) console.log(`sent ${sent}/${N} ${Date.now() - t0}ms paused=${pausedMs}ms`);
   const gap = -Math.log(1 - rnd()) / RATE * 1000;   // exponential inter-arrival

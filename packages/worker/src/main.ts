@@ -7,7 +7,7 @@ import { parse } from "yaml";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import * as core from "@mod/core";
-import { jevModel, jevProvider } from "@mod/judges";
+import { identityCalibrator, jevModel, jevProvider, loadCalibrator } from "@mod/judges";
 import { loadBundle } from "@mod/policy";
 import { piJudge } from "./pi-judge.ts";
 import { relayProvider } from "./relay.ts";
@@ -47,15 +47,18 @@ async function main(): Promise<void> {
   const judge = piJudge(models, jevModel(models, env("JEV_MODEL", "jev-latest")), { inCallConfirm: true, timeoutMs: envNum("JUDGE_TIMEOUT_MS", 8000) });
   const agentModel = env("AGENT_MODEL", "qwen3.8-flash");
   const strong = env("STRONG_MODEL", "glm-5.3");
+  const calibMode = env("CALIB_MODE", "strict");
+  if (calibMode !== "strict" && calibMode !== "identity") throw new Error(`CALIB_MODE must be strict|identity, got ${calibMode}`);
+  const calibrator = calibMode === "identity" ? identityCalibrator() : loadCalibrator(env("CALIB_DIR", "calib"), env("JEV_MODEL", "jev-latest"));
   const workerId = `w-${process.pid}-${Date.now()}`;
   const worker = await Worker.open({
-    db, storage: await openNodeSqliteStorage(env("SESSION_DB", "data/session.sqlite")), models, bundle, ruleTexts: texts, workerId, judge, prices,
+    db, storage: await openNodeSqliteStorage(env("SESSION_DB", "data/session.sqlite")), models, bundle, ruleTexts: texts, workerId, judge, prices, calibrator,
     cfg: { ...core.DEFAULT_CONFIG, leaseTtlMs: envNum("LEASE_TTL_MS", 30_000), deadlineMs: envNum("DEADLINE_MS_SHORT", 60_000), maxAttempts: envNum("MAX_ATTEMPTS", 3) },
     flags: { escalation: env("FLAG_ESCALATION", "false") === "true" }, maxModelCalls: envNum("MAX_MODEL_CALLS", 20), strongModel: { provider: "a6api", modelId: strong },
     now: () => Date.now(), admitMax: envNum("ADMIT_MAX", 10), modelFor: () => ({ provider: "a6api", modelId: agentModel }), instructions: INSTRUCTIONS,
   });
   const started = await worker.start();
-  console.log(JSON.stringify({ msg: "worker up", workerId, ...started, agentModel }));
+  console.log(JSON.stringify({ msg: "worker up", workerId, ...started, agentModel, calib_mode: calibrator.mode, calib_ver: calibrator.calibVer }));
   worker.startLoops();
   const admit = setInterval(() => { worker.admitOnce().catch((e) => console.error("admit error", core.redact(e))); }, envNum("ADMIT_MS", 1000));
   admit.unref();

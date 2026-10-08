@@ -1,0 +1,79 @@
+{
+ "ref": "fx/a1-4",
+ "scene": "comment",
+ "source": "run_batch",
+ "index": 13,
+ "text_sha": "1c59791745db212986672b2d24a16ad921c518fe7ab4c0e4a096d8909ee275fd",
+ "recorded_at": "2026-10-08T00:36:44.545Z",
+ "judge": {
+  "provider": "jev",
+  "api": "typesafe-system-one",
+  "model": "jev-latest"
+ },
+ "rules_ver": "rules@172fd34d27d6",
+ "questions": {
+  "ABUSE-001/rule": "a4cbd15c8d1860e16a157cad4ac3cba5b31897e887b6e0ff6824f9aae3c798ee",
+  "ABUSE-001/exception/EX-QUOTE": "a7de223efe4d6ef78d938c8d167a675ab01b2792b9653f3c99ef9fcc80a4df65",
+  "MARKETING-003/rule": "02d11da041ce8632d9f76e039fc7dfd1585399aa6f16dbe8d49227041ac867be"
+ },
+ "primary": {
+  "a4cbd15c8d1860e16a157cad4ac3cba5b31897e887b6e0ff6824f9aae3c798ee": {
+   "choice": "none",
+   "probs": {
+    "unknown": 0.02,
+    "violate": 0,
+    "none": 0.98
+   }
+  },
+  "a7de223efe4d6ef78d938c8d167a675ab01b2792b9653f3c99ef9fcc80a4df65": {
+   "choice": "applies",
+   "probs": {
+    "applies": 0.68,
+    "unknown": 0.13,
+    "not_applies": 0.19
+   }
+  },
+  "02d11da041ce8632d9f76e039fc7dfd1585399aa6f16dbe8d49227041ac867be": {
+   "choice": "none",
+   "probs": {
+    "unknown": 0,
+    "violate": 0,
+    "none": 1
+   }
+  }
+ },
+ "variant": {
+  "seed": 17,
+  "answers": {
+   "a4cbd15c8d1860e16a157cad4ac3cba5b31897e887b6e0ff6824f9aae3c798ee": {
+    "choice": "none",
+    "probs": {
+     "unknown": 0.02,
+     "violate": 0,
+     "none": 0.98
+    }
+   },
+   "a7de223efe4d6ef78d938c8d167a675ab01b2792b9653f3c99ef9fcc80a4df65": {
+    "choice": "applies",
+    "probs": {
+     "applies": 0.62,
+     "unknown": 0.13,
+     "not_applies": 0.25
+    }
+   },
+   "02d11da041ce8632d9f76e039fc7dfd1585399aa6f16dbe8d49227041ac867be": {
+    "choice": "none",
+    "probs": {
+     "unknown": 0,
+     "violate": 0,
+     "none": 1
+    }
+   }
+  }
+ },
+ "latency_ms": 1325,
+ "usage": {
+  "input": 957,
+  "output": 566
+ }
+}

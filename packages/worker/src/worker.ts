@@ -57,6 +57,7 @@ export class Worker {
       settings: { stream: { timeoutMs: 15_000, maxRetries: 0 }, retry: { maxRetries: 1, baseDelayMs: 2000 }, toolExecution: "sequential", compaction: { enabled: false } },
       onReport: (e) => console.error("extension failure", core.redact(e)),
     }, ctx);
+    core.storeBundle(o.db, o.bundle, o.ruleTexts, o.now());   // this worker's own version is always continuable
     const w = new Worker(o, harness, deps);
     (w as { grants: Grants }).grants = grants;
     (w as { hostLoop: HostLoop }).hostLoop = hostLoop;
@@ -91,6 +92,12 @@ export class Worker {
       if (r.state === "human_queue") { this.grants.set(conv, this.#grant("revoked", r)); out.revoked.push(r.review_id); continue; }
       try {
         const leased = core.acquireLease(db, r.review_id, this.#o.workerId, this.#o.cfg, now());
+        if (!this.#bundleFor(leased)) {   // pinned version unavailable here: hand to human, never run under another bundle
+          this.#releaseBundleMissing(leased);
+          this.grants.set(conv, this.#grant("revoked", core.requireReview(db, r.review_id)));
+          out.revoked.push(r.review_id);
+          continue;
+        }
         this.grants.set(conv, this.#grant("active", leased));
         out.active.push(r.review_id);
       } catch (e) {
@@ -122,8 +129,31 @@ export class Worker {
     return out;
   }
 
+  readonly #bundles = new Map<string, core.StoredBundle>();
+  /** The bundle a review is pinned to: this worker's own, or one stored by G (round-9 item 12). undefined → not continuable here. */
+  #bundleFor(r: ReviewRow): core.StoredBundle | undefined {
+    if (r.rules_ver === this.#o.bundle.rulesVer) return { bundle: this.#o.bundle, texts: this.#o.ruleTexts };
+    const cached = this.#bundles.get(r.rules_ver);
+    if (cached) return cached;
+    const stored = core.loadStoredBundle(this.#o.db, r.rules_ver);
+    if (stored) this.#bundles.set(r.rules_ver, stored);
+    return stored;
+  }
+
+  #releaseBundleMissing(leased: ReviewRow): void {
+    const scene = core.readContent(this.#o.db, leased.content_id)!.scene;
+    const sc = this.#o.bundle.scenes[scene];
+    try {
+      core.releaseToHuman(this.#o.db, leased.review_id, { kind: "agent", workerId: this.#o.workerId, attempt: leased.attempt, usedMicro: 0, costStatus: "settled" }, "bundle_missing", sc.defaultSeverity, sc.humanSlaMs, this.#o.now());
+    } catch (e) {
+      if (!core.isCoreError(e)) throw e;
+    }
+  }
+
   #grant(mode: Grant["mode"], r: ReviewRow): Grant {
+    const b = this.#bundleFor(r) ?? { bundle: this.#o.bundle, texts: this.#o.ruleTexts };   // non-active grants only finalize/abort; the bundle is not consulted
     return { mode, reviewId: r.review_id, contentId: r.content_id, attempt: r.attempt, pins: { rulesVer: r.rules_ver, calibVer: r.calib_ver, evidenceVer: r.evidence_ver, pricesVer: r.prices_ver },
+      bundle: b.bundle, ruleTexts: b.texts,
       modelId: r.agent_model ?? this.#o.modelFor(r).modelId, budgetTools: r.budget_tools, budgetMicro: r.budget_micro, roundStartedAt: this.#o.now(), modelCalls: 0 };
   }
 
@@ -145,6 +175,7 @@ export class Worker {
         if (core.isCoreError(e)) continue;
         throw e;
       }
+      if (!this.#bundleFor(leased)) { this.#releaseBundleMissing(leased); continue; }
       const model = this.#o.modelFor(leased);
       let conv: Conversation;
       if (leased.conversation_id) {
@@ -180,9 +211,10 @@ export class Worker {
       const conv = await this.harness.conversation(convId(r.conversationId), ctx);
       if (r.kind === "release" && g && g.mode === "active" && !core.hasTerminal(db, g.reviewId)) {
         const scene = core.readContent(db, g.contentId)!.scene;
+        const sp = core.spentFromLedger(db, this.#o.prices, g.reviewId);   // round-9 item 7: real cost at host-triggered release
         try {
-          core.releaseToHuman(db, g.reviewId, { kind: "agent", workerId: this.#o.workerId, attempt: g.attempt, usedMicro: 0, costStatus: "estimated" },
-            r.reason as core.ReleaseReason, this.#o.bundle.scenes[scene].defaultSeverity, this.#o.bundle.scenes[scene].humanSlaMs, this.#o.now());
+          core.releaseToHuman(db, g.reviewId, { kind: "agent", workerId: this.#o.workerId, attempt: g.attempt, usedMicro: sp.spent, costStatus: sp.settled ? "settled" : "estimated" },
+            r.reason as core.ReleaseReason, g.bundle.scenes[scene].defaultSeverity, g.bundle.scenes[scene].humanSlaMs, this.#o.now());
         } catch (e) {
           if (!core.isCoreError(e)) throw e;
         }
@@ -200,12 +232,13 @@ export class Worker {
     return n;
   }
 
+  /** Final cost from the ledger (model_call + tool_request), replacing whatever the release/dispose path wrote (round-9 item 7). */
   #settleCost(g: Grant): void {
     const db = this.#o.db;
-    const t = core.toolSpentMicro(db, g.reviewId);
     const r = core.readReview(db, g.reviewId);
     if (!r) return;
-    core.updateReviewCost(db, g.reviewId, (r.used_micro ?? 0) + 0 * t.settled, t.hasUnknown ? "estimated" : (r.cost_status ?? "settled"), r.over_budget_micro, this.#o.now());
+    const sp = core.spentFromLedger(db, this.#o.prices, g.reviewId);
+    core.updateReviewCost(db, g.reviewId, sp.spent, sp.settled ? "settled" : "estimated", r.over_budget_micro, this.#o.now());
   }
 
   /** Poll worker_command (abort) for reviews this process holds. */

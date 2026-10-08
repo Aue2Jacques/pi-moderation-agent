@@ -5,6 +5,8 @@ export type Decision = { state: "pass" | "block" | "suspicious"; action: "pass" 
 
 export type EngineInput = {
   bundle: PolicyBundle; scene: Scene; hasImages: boolean;
+  /** an image was actually delivered to the judge (round-9 item 6); false in the text MVP */
+  imageDelivered?: boolean;
   /** trusted answers from the fast-path call(s), already fingerprint-checked by core when recorded */
   answers: readonly AnswerRecord[];
   /** false when the judge timed out / errored / abstained → never pass */
@@ -13,7 +15,7 @@ export type EngineInput = {
 
 export function decide(i: EngineInput): Decision {
   if (!i.judgeOk) return { state: "suspicious", action: null, hits: [], reason: "judge_unavailable" };
-  const r = allowedActions({ bundle: i.bundle, scene: i.scene, hasImages: i.hasImages, answers: i.answers });
+  const r = allowedActions({ bundle: i.bundle, scene: i.scene, hasImages: i.hasImages, imageDelivered: i.imageDelivered ?? false, answers: i.answers });
   const blocking = r.rules.filter((v) => v.blockSupport);
   if (blocking.length > 0) {
     const action = r.allowed.has("takedown") ? "takedown" : "limit";

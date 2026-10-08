@@ -8,7 +8,7 @@ import { parse } from "yaml";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import * as core from "../packages/core/src/index.ts";
-import { jevModel, jevProvider } from "../packages/judges/src/index.ts";
+import { identityCalibrator, jevModel, jevProvider } from "../packages/judges/src/index.ts";
 import { loadBundle } from "../packages/policy/src/index.ts";
 import { Worker, piJudge, relayProvider } from "../packages/worker/src/index.ts";
 
@@ -35,7 +35,7 @@ const now = () => Date.now();
 
 // 20 self-written comments (no dataset text), with the label I expect, for eyeballing only
 const S: [string, string][] = (JSON.parse(readFileSync("fixtures/benign/sentences.json", "utf8")) as { run_batch: [string, string][] }).run_batch;
-const pins = { rulesVer: bundle.rulesVer, calibVer: "calib@identity", evidenceVer: "evidence@run-batch", pricesVer: prices.pricesVer };
+const pins = { rulesVer: bundle.rulesVer, calibVer: identityCalibrator().calibVer, evidenceVer: "evidence@run-batch", pricesVer: prices.pricesVer };
 core.intakeInsert(db, { contentId: "n1", scene: "comment", text: "大家觉得这场比赛裁判吹得怎么样？", threadId: "t1", accountId: "acct-n", eventTime: now() - 60_000 }, now() - 60_000);
 const ids: string[] = [];
 for (const [i, [text]] of S.entries()) {
@@ -50,7 +50,7 @@ const instructions = [
   "否则 release(reason=evidence_gap)。dispose 和 release 必须单独成轮调用，调用后不要再说话。",
 ].join("");
 const worker = await Worker.open({
-  db, storage: await openNodeSqliteStorage(join(dir, "session.sqlite")), models, bundle, ruleTexts: texts, workerId: "w-batch", judge, prices,
+  db, storage: await openNodeSqliteStorage(join(dir, "session.sqlite")), models, bundle, ruleTexts: texts, workerId: "w-batch", judge, prices, calibrator: identityCalibrator(),
   cfg: { ...core.DEFAULT_CONFIG, deadlineMs: 180_000 }, flags: { escalation: false }, maxModelCalls: 20, now, admitMax: ADMIT_MAX,
   modelFor: () => ({ provider: "a6api", modelId: AGENT }), instructions,
 });

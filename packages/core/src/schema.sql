@@ -257,5 +257,11 @@ CREATE TABLE IF NOT EXISTS gate_run (
   passed INTEGER NOT NULL CHECK(passed IN (0,1)), report TEXT NOT NULL, created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS policy_bundle (
+  rules_ver  TEXT PRIMARY KEY,
+  bundle     TEXT NOT NULL,   -- PolicyBundle JSON (rules + scenes), the version a review is pinned to
+  texts      TEXT NOT NULL,   -- rule_id → rule text (load_rule output)
+  created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS metrics_minute (minute INTEGER PRIMARY KEY, payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS control_health (id INTEGER PRIMARY KEY CHECK(id=1), last_tick INTEGER NOT NULL);

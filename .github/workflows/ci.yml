@@ -16,9 +16,9 @@ jobs:
       - run: pnpm run check
       - run: pnpm run test:unit
       - run: pnpm run test:harness
+      - run: pnpm run redact-scan
       - run: bash scripts/fetch-fixtures.sh
       - run: pnpm run contract
-      - run: pnpm run redact-scan
   python:
     runs-on: ubuntu-latest
     defaults:

@@ -10,7 +10,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { UsageDoc } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import * as core from "../packages/core/src/index.ts";
-import { jevModel, jevProvider } from "../packages/judges/src/index.ts";
+import { identityCalibrator, jevModel, jevProvider } from "../packages/judges/src/index.ts";
 import { loadBundle } from "../packages/policy/src/index.ts";
 import { Worker, piJudge, relayProvider } from "../packages/worker/src/index.ts";
 
@@ -39,7 +39,7 @@ const now = () => Date.now();
 const text = process.argv[2] ?? "楼上那位，请你闭嘴，没人想听你废话";
 core.intakeInsert(db, { contentId: "n1", scene: "comment", text: "大家觉得这场比赛裁判吹得怎么样？", threadId: "t1", accountId: "acct-n", eventTime: now() - 60_000 }, now() - 60_000);
 core.intakeInsert(db, { contentId: "c1", scene: "comment", text, threadId: "t1", accountId: "acct-1", eventTime: now() - 1000 }, now() - 1000);
-const pins = { rulesVer: bundle.rulesVer, calibVer: "calib@identity", evidenceVer: "evidence@run-one", pricesVer: prices.pricesVer };
+const pins = { rulesVer: bundle.rulesVer, calibVer: identityCalibrator().calibVer, evidenceVer: "evidence@run-one", pricesVer: prices.pricesVer };
 const review = core.createSuspiciousReview(db, { contentId: "c1", pins, judgeModel: "jev-latest", judgeCallIds: [], pendingVisibility: "hidden", deadlineMs: 120_000, budgetTools: 12, budgetMicro: 200_000 }, now()).review;
 
 const instructions = [
@@ -49,7 +49,7 @@ const instructions = [
 ].join("");
 const calls: { kind: string; at: number }[] = [];
 const worker = await Worker.open({
-  db, storage: await openNodeSqliteStorage(join(dir, "session.sqlite")), models, bundle, ruleTexts: texts, workerId: "w-run-one", judge, prices,
+  db, storage: await openNodeSqliteStorage(join(dir, "session.sqlite")), models, bundle, ruleTexts: texts, workerId: "w-run-one", judge, prices, calibrator: identityCalibrator(),
   cfg: { ...core.DEFAULT_CONFIG, deadlineMs: 120_000 }, flags: { escalation: false }, maxModelCalls: 20, now, admitMax: 1,
   modelFor: () => ({ provider: "a6api", modelId: AGENT }), instructions, onExternalCall: (_c, kind) => calls.push({ kind, at: now() }),
 });

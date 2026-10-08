@@ -1,5 +1,5 @@
 // allowedActions: docs/dev-doc-v1.md §5.4 step 2. Pure.
-import { effectiveAnswer, isConfirmed, type AnswerRecord, type Effective } from "./effective.ts";
+import { effectiveAnswer, isConfirmed, type AnswerRecord, type Effective, type EffectiveGroup } from "./effective.ts";
 import type { Action, PolicyBundle, Question, Rule, Scene } from "./types.ts";
 import { rulesFor } from "./types.ts";
 
@@ -7,6 +7,8 @@ export type AllowedInput = {
   bundle: PolicyBundle;
   scene: Scene;
   hasImages: boolean;
+  /** true only when an image was actually delivered to the judge for this review (round-9 item 6). No image channel exists in the text MVP, so callers pass false and image content can never be auto-passed. */
+  imageDelivered?: boolean;
   /** trusted answers (status ok, input_sha verified, question known); grouping by question happens here */
   answers: readonly AnswerRecord[];
 };
@@ -52,7 +54,11 @@ function verdictFor(ruleId: string, q: Question, thresholds: { block: number; pa
     const passOk = (a: AnswerRecord): boolean => a.p !== null && a.p < thresholds.pass && q.passChoices.includes(a.choice);
     if (!e.inconsistent) {
       blockSupport = e.p >= thresholds.block && Object.values(exc).every((v) => v === "not_applies");
-      passSupport = isConfirmed(e, passOk);
+      // round-9 item 15: a confirmed low-risk pair is revoked by any later answer on the same evidence that does not
+      // itself satisfy pass (e.g. same choice, p=0.40). Only the pairs after the last such doubt count.
+      const lastDoubt = Math.max(-Infinity, ...e.answers.filter((a) => !passOk(a)).map((a) => a.createdAt));
+      const afterDoubt: EffectiveGroup = { ...e, answers: e.answers.filter((a) => a.createdAt > lastDoubt) };
+      passSupport = passOk(e.answers[e.answers.length - 1]!) && isConfirmed(afterDoubt, passOk);
     }
   }
   const suspicious = e.kind === "group" && !passSupport && !blockSupport;
@@ -61,6 +67,7 @@ function verdictFor(ruleId: string, q: Question, thresholds: { block: number; pa
 
 export function allowedActions(input: AllowedInput): AllowedResult {
   const { bundle, scene, hasImages, answers } = input;
+  const imageDelivered = input.imageDelivered ?? false;
   const sceneCfg = bundle.scenes[scene];
   const effectiveAnswers: Record<string, string[]> = {};
   const rules = rulesFor(bundle, scene).map((r) => verdictFor(r.ruleId, r.question, r.thresholds, r.exceptions, answers, effectiveAnswers));
@@ -73,7 +80,7 @@ export function allowedActions(input: AllowedInput): AllowedResult {
   for (const c of required) {
     if (c === "image_check") {
       const v = verdictFor("image_check", sceneCfg.imageCheck.question, sceneCfg.imageCheck.thresholds, [], answers, effectiveAnswers);
-      covered[c] = v.passSupport;
+      covered[c] = imageDelivered && v.passSupport;   // an image_check answer without a delivered image is not coverage
     } else {
       const rs = rules.filter((v) => byRule.get(v.ruleId)?.category === c);
       covered[c] = rs.length > 0 && rs.every((v) => v.passSupport);

@@ -1,5 +1,5 @@
 // Execution-eligibility table (docs §7.3). In-process only; rebuilt at startup.
-import type { Pins } from "@mod/core";
+import type { Pins, PolicyBundle } from "@mod/core";
 
 export type GrantMode = "active" | "finalize" | "revoked";
 
@@ -9,6 +9,9 @@ export type Grant = {
   contentId: string;
   attempt: number;
   pins: Pins;
+  /** the policy bundle this review is pinned to (round-9 item 12): may be older than the worker's current bundle */
+  bundle: PolicyBundle;
+  ruleTexts: Record<string, string>;
   modelId: string;
   budgetTools: number;
   budgetMicro: number;

@@ -61,3 +61,39 @@ export function final(db: Db): Violation[] {
   for (const r of rows<{ event_id: string }>("SELECT event_id FROM outbox WHERE status<>'acked'")) v.push({ check: "outbox_not_drained", ref: r.event_id });
   return v;
 }
+
+// ---------- round-9 item 14: completion and durable-side checks ----------
+export type Completion = {
+  complete: boolean;
+  intake_not_judged: number;
+  reviews_open: number;        // queued / investigating
+  human_open: number;          // human_queue rows not closed (expected to stay open until a reviewer acts)
+  outbox_not_acked: number;
+};
+
+/** "Zero violations" is not "everything finished": this counts what is still pending. */
+export function completion(db: Db): Completion {
+  const q = (sql: string): number => (db.prepare(sql).get() as { n: number }).n;
+  const c = {
+    intake_not_judged: q("SELECT COUNT(*) AS n FROM intake WHERE status<>'judged'"),
+    reviews_open: q("SELECT COUNT(*) AS n FROM review WHERE state IN ('queued','investigating')"),
+    human_open: q("SELECT COUNT(*) AS n FROM human_queue WHERE closed_at IS NULL"),
+    outbox_not_acked: q("SELECT COUNT(*) AS n FROM outbox WHERE status<>'acked'"),
+  };
+  return { complete: c.intake_not_judged === 0 && c.reviews_open === 0 && c.outbox_not_acked === 0, ...c };
+}
+
+export type SessionLike = { conversationId: string; reviewId: string; mode: string; liveTasks: number; submission: string | null };
+
+/** Durable side (§11.5 checks 4 and 6) from W's /sessions: live tasks for a terminal review, or an active grant on a review that is not investigating. */
+export function durable(db: Db, sessions: readonly SessionLike[]): Violation[] {
+  const v: Violation[] = [];
+  for (const s of sessions) {
+    const r = db.prepare("SELECT state, conversation_id FROM review WHERE review_id=?").get(s.reviewId) as { state: string; conversation_id: string | null } | undefined;
+    if (!r) { v.push({ check: "session_without_review", ref: s.reviewId }); continue; }
+    if (r.conversation_id !== s.conversationId) v.push({ check: "session_conversation_mismatch", ref: s.reviewId, detail: { db: r.conversation_id, w: s.conversationId } });
+    if ((r.state === "disposed" || r.state === "human_disposed" || r.state === "human_queue") && s.liveTasks > 0) v.push({ check: "durable_live_after_terminal", ref: s.reviewId, detail: { state: r.state, liveTasks: s.liveTasks } });
+    if (s.mode === "active" && r.state !== "investigating") v.push({ check: "active_grant_not_investigating", ref: s.reviewId, detail: { state: r.state } });
+  }
+  return v;
+}

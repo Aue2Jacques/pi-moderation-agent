@@ -57,7 +57,10 @@ describe("U-01 engine", () => {
     expect(d).toMatchObject({ state: "block", action: "limit" });
     const img = policy.decide({ bundle: B, scene: "comment", hasImages: true, answers: [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m")], judgeOk: true });
     expect(img.reason).toBe("uncovered:image_check");
-    const ok = policy.decide({ bundle: B, scene: "comment", hasImages: true, answers: [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m"), ...pair(B.scenes.comment.imageCheck.question.sha, "i")], judgeOk: true });
+    const imgAnswers = [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m"), ...pair(B.scenes.comment.imageCheck.question.sha, "i")];
+    // round-9 item 6: an image_check answer without a delivered image never passes
+    expect(policy.decide({ bundle: B, scene: "comment", hasImages: true, answers: imgAnswers, judgeOk: true }).state).toBe("suspicious");
+    const ok = policy.decide({ bundle: B, scene: "comment", hasImages: true, imageDelivered: true, answers: imgAnswers, judgeOk: true });
     expect(ok.state).toBe("pass");
   });
   it("contract runner: required fixture missing = fail, optional = skip", () => {
