@@ -42,7 +42,12 @@ const ADMIT = Number(env("ADMIT_MAX", "8"));
 // queued reviews get their deadline re-based to the start of the arm's run (base.db was made earlier; the scene's 60 s
 // would have passed), the same window for both arms; latency is measured per case separately
 const DEADLINE_MS = Number(env("AGENT_DEADLINE_MS", "900000"));
-const { bundle, texts } = loadBundle("rules", "config/scenes.yaml");
+const loaded = loadBundle("rules", "config/scenes.yaml");
+// CONFIRM_PASS=off: the confirmation switch (§2.2, owner 2026-10-07: run the case pool with it on and off) turned off for
+// every scene, in memory; rulesVer stays the file's (so the calibration buckets still apply) and the manifest records it
+const CONFIRM_OFF = env("CONFIRM_PASS", "on") === "off";
+const bundle: core.PolicyBundle = CONFIRM_OFF ? { ...loaded.bundle, scenes: Object.fromEntries(Object.entries(loaded.bundle.scenes).map(([k, v]) => [k, { ...v, confirmPass: false }])) as core.PolicyBundle["scenes"] } : loaded.bundle;
+const texts = loaded.texts;
 const pricesRaw = readFileSync("config/prices.yaml", "utf8");
 const prices: core.PriceTable = { pricesVer: `prices@${core.sha256(pricesRaw).slice(0, 12)}`, perMillion: (parse(pricesRaw) as { models: core.PriceTable["perMillion"] }).models };
 const calibrator = CALIB ? loadCalibrator(CALIB, JEV) : identityCalibrator();
@@ -73,7 +78,7 @@ const manifest = (extra: Record<string, unknown>) => ({
   gitHead: (() => { try { return execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim(); } catch { return "unknown"; } })(),
   codeSha: codeSha(),
   rulesVer: bundle.rulesVer, calibVer: calibrator.calibVer, calibDir: CALIB || "identity", pricesVer: prices.pricesVer, judge: JEV, agent: AGENT,
-  casePool: CASES, casePoolSha: sha(readFileSync(CASES)), modelView: core.MODEL_VIEW_VERSION, admitMax: ADMIT, deadlineMs: DEADLINE_MS,
+  casePool: CASES, casePoolSha: sha(readFileSync(CASES)), modelView: core.MODEL_VIEW_VERSION, confirmPass: CONFIRM_OFF ? "off" : "on", admitMax: ADMIT, deadlineMs: DEADLINE_MS,
   budgetTools: DEFAULT_GATEWAY_CONFIG.budgetTools, budgetMicro: DEFAULT_GATEWAY_CONFIG.budgetMicro, ...extra,
 });
 mkdirSync(outDir, { recursive: true });
