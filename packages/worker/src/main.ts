@@ -50,8 +50,10 @@ async function main(): Promise<void> {
   if (calibMode !== "strict" && calibMode !== "identity") throw new Error(`CALIB_MODE must be strict|identity, got ${calibMode}`);
   const calibrator = calibMode === "identity" ? identityCalibrator() : loadCalibrator(env("CALIB_DIR", "calib"), env("JEV_MODEL", "jev-latest"));
   const workerId = `w-${process.pid}-${Date.now()}`;
+  const sessionDb = env("SESSION_DB", "data/session.sqlite");
+  core.ensurePrivateDbFile(sessionDb);   // conversation content lives here: owner-only like app.db (dev plan R9c)
   const worker = await Worker.open({
-    db, storage: await openNodeSqliteStorage(env("SESSION_DB", "data/session.sqlite")), models, bundle, ruleTexts: texts, workerId, judge, prices, calibrator,
+    db, storage: await openNodeSqliteStorage(sessionDb), models, bundle, ruleTexts: texts, workerId, judge, prices, calibrator,
     cfg: { ...core.DEFAULT_CONFIG, leaseTtlMs: envNum("LEASE_TTL_MS", 30_000), deadlineMs: envNum("DEADLINE_MS_SHORT", 60_000), maxAttempts: envNum("MAX_ATTEMPTS", 3) },
     flags: { escalation: env("FLAG_ESCALATION", "false") === "true" }, maxModelCalls: envNum("MAX_MODEL_CALLS", 20), strongModel: { provider: "a6api", modelId: strong },
     now: () => Date.now(), admitMax: envNum("ADMIT_MAX", 10), modelFor: () => ({ provider: "a6api", modelId: agentModel }), instructions: INSTRUCTIONS,

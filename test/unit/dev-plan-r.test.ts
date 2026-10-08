@@ -76,3 +76,16 @@ describe("R6 durable(): reviews that should have a session on W", () => {
   });
 });
 
+
+describe("R9c database files are private (0600)", () => {
+  it("a new app.db and its WAL and SHM files are created 0600", async () => {
+    const { mkdtempSync, statSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const path = join(mkdtempSync(join(tmpdir(), "perm-")), "app.db");
+    const db = core.openAppDb(path, "test");
+    core.ensureSchema(db);                                                     // writes, so the WAL file exists
+    for (const f of [path, `${path}-wal`, `${path}-shm`]) expect((statSync(f).mode & 0o777).toString(8)).toBe("600");
+    db.close();
+  });
+});

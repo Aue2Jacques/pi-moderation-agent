@@ -3,7 +3,7 @@
 // - no await inside a transaction (DatabaseSync is synchronous anyway)
 // - busy_timeout is per connection and short (W 1500ms, G 2000ms)
 import { DatabaseSync } from "node:sqlite";
-import { readFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, openSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,7 +13,16 @@ const BUSY_MS: Record<Role, number> = { worker: 1500, gateway: 2000, test: 1500,
 
 export type Db = DatabaseSync;
 
+/** Create (or tighten) a database file as owner-only 0600 before SQLite opens it (dev plan R9c). SQLite gives the
+ *  -wal and -shm files it creates the same permissions as the database file; existing ones are tightened too. */
+export function ensurePrivateDbFile(path: string): void {
+  if (path === ":memory:") return;
+  if (!existsSync(path)) closeSync(openSync(path, "a", 0o600));
+  for (const f of [path, `${path}-wal`, `${path}-shm`]) if (existsSync(f)) chmodSync(f, 0o600);
+}
+
 export function openAppDb(path: string, role: Role): Db {
+  ensurePrivateDbFile(path);
   const db = new DatabaseSync(path, { enableForeignKeyConstraints: true });
   db.exec("PRAGMA journal_mode=WAL");
   db.exec("PRAGMA synchronous=NORMAL");
