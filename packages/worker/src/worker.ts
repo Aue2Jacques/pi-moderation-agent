@@ -148,9 +148,12 @@ export class Worker {
 
   /** The input that starts a generation: one requestId per generation, so re-submitting after a crash is idempotent. */
   #generationInput(r: ReviewRow): { content: string; requestId: string } {
+    // closeout fix 5: the confirmation rule the agent is told follows this review's pinned scene config (deterministic
+    // for a given review, so a resubmission after a crash carries the same text under the same requestId)
+    const note = confirmNote(this.#bundleFor(r)?.bundle.scenes[core.readContent(this.#o.db, r.content_id)!.scene as core.Scene]);
     return r.attempt === 1
-      ? { content: this.#o.instructions, requestId: r.review_id }
-      : { content: "上一代次已中止；已有证据仍可引用。继续审核。", requestId: `${r.review_id}#a${r.attempt}` };
+      ? { content: `${this.#o.instructions}\n${note}`, requestId: r.review_id }
+      : { content: `上一代次已中止；已有证据仍可引用。继续审核。\n${note}`, requestId: `${r.review_id}#a${r.attempt}` };
   }
 
   readonly #bundles = new Map<string, core.StoredBundle>();
@@ -333,3 +336,12 @@ export class Worker {
     await this.harness.close(ctx);
   }
 }
+
+/** What the agent is told about confirmation for one review (closeout fix 5): required when the scene config of the
+ *  review's pinned rules version requires it (the default), otherwise an optional re-check. */
+export function confirmNote(scene: core.SceneConfig | undefined): string {
+  return scene?.confirmPass === false
+    ? "本审次放行不需要 confirm：confirm 是可选复核，不是放行的前提。"
+    : "本审次放行前必须先用 confirm 对同一证据复问一次。";
+}
+

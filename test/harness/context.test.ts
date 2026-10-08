@@ -90,3 +90,33 @@ describe("R9a judge calls record a digest of the request actually sent", () => {
   });
 });
 
+
+describe("closeout fix 5: what the agent is told about confirmation follows the review's pinned scene config", () => {
+  const firstUserText = async (confirmPass: boolean | undefined): Promise<string> => {
+    const { BUNDLE } = await import("../helpers.ts");
+    const bundle = { ...BUNDLE, rulesVer: `rules@confirm-${String(confirmPass)}`, scenes: { ...BUNDLE.scenes, comment: { ...BUNDLE.scenes.comment, ...(confirmPass === undefined ? {} : { confirmPass }) } } };
+    const db = freshDb();
+    queuedReview(db, "c1", { thread: "t1", at: Date.now(), pins: { ...(await import("../helpers.ts")).PINS, rulesVer: bundle.rulesVer } });
+    const fx = await makeWorker({ db, steps: [], bundle });
+    let seen = "";
+    const release = scripted([{ tool: "release", args: { reason: "evidence_gap" } }, { text: "done" }]) as (...a: unknown[]) => unknown;
+    setScript(fx, ((context: { messages: { role: string; content: unknown }[] }, ...rest: unknown[]) => {
+      const u = context.messages.find((m) => m.role === "user");
+      if (u && !seen) seen = typeof u.content === "string" ? u.content : JSON.stringify(u.content);
+      return release(context, ...rest);
+    }) as never);
+    await fx.worker.start();
+    await fx.worker.admitOnce();
+    await runToIdle(fx);
+    await fx.close();
+    return seen;
+  };
+  it("default (required) and off (optional re-check); the confirm tool no longer claims it is always required", async () => {
+    expect(await firstUserText(undefined)).toContain("放行前必须先用 confirm");
+    const off = await firstUserText(false);
+    expect(off).toContain("confirm 是可选复核");
+    expect(off).not.toContain("放行前必须");
+    const { readFileSync } = await import("node:fs");
+    expect(readFileSync(new URL("../../packages/worker/src/extension.ts", import.meta.url), "utf8")).not.toContain("放行前必需");
+  });
+});

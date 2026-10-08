@@ -323,7 +323,7 @@ export function buildModerationExtension(deps: ExtensionDeps) {
 
   const confirm = defineTool({
     name: "confirm",
-    description: "对最近一次 judge 的同证据集合打乱选项复问；放行前必需。",
+    description: "对最近一次 judge 的同证据集合打乱选项复问。本审次放行前是否必须复问，以任务说明为准（取决于该审次规则版本的场景配置）。",
     parameters: Type.Object({ judge_call_id: Type.String(), rule_ids: Type.Array(Type.String()), evidence_ids: Type.Array(Type.String()) }),
     replay: "safe",
     execute: (args, api, ctx) => withGuard(async (g) => {
