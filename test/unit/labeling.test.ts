@@ -1,7 +1,7 @@
 // Label tables of the platform labeling standards (scripts/lib/labeling.ts): the label is computed from the fact
 // answers, "不确定" is kept as uncertain, and the abuse exemption needs every hit to be a quotation or negation.
 import { describe, expect, it } from "vitest";
-import { ABUSE_V4, ABUSE_V41, GUARD_V1, MARKETING_V1, parseAnswers, type Answer } from "../../scripts/lib/labeling.ts";
+import { ABUSE_V4, ABUSE_V41, GUARD_V1, MARKETING_V1, followUpFor, parseAnswers, readAnswers, type Answer } from "../../scripts/lib/labeling.ts";
 
 const abuse = (over: Partial<Record<string, Answer>>) => ABUSE_V4.label({ q1: "否", q2: "否", q3: "否", q4: "否", q5: "否", q6: "否", q7: "否", ...over } as Record<string, Answer>);
 const mkt = (over: Partial<Record<string, Answer>>) => MARKETING_V1.label({ m1: "否", m2: "否", m3: "否", m4: "否", ...over } as Record<string, Answer>);
@@ -55,4 +55,14 @@ describe("abuse-v4.1", () => {
     expect(ABUSE_V41.promptSha).not.toBe(ABUSE_V4.promptSha);
     expect(ABUSE_V41.label({ q1: "是", q2: "否", q3: "否", q4: "否", q5: "否", q6: "否", q7: "不确定" })).toBe("uncertain");
   });
+});
+
+describe("readAnswers / followUpFor", () => {
+  it("lists the questions a model left out", () => {
+    const r = readAnswers(ABUSE_V41, '{"q1":"是","q2":"否","q3":"否","q4":"否","q5":"否","q6":"否","reason":"x"}');
+    expect(r?.missing).toEqual(["q7"]);
+    expect(r?.got.q1).toBe("是");
+  });
+  it("still rejects an invalid answer", () => expect(readAnswers(ABUSE_V41, '{"q1":"maybe"}')).toBeUndefined());
+  it("asks only for the missing keys", () => expect(followUpFor(["q7"])).toContain('{"q7":"是|否|不确定"}'));
 });

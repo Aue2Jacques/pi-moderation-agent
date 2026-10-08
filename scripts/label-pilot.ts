@@ -10,7 +10,7 @@
 // temperature, so none is sent.
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { STANDARDS, parseAnswers, type Answer, type Label } from "./lib/labeling.ts";
+import { STANDARDS, followUpFor, readAnswers, type Answer, type Label } from "./lib/labeling.ts";
 
 for (const line of (() => { try { return readFileSync(".env", "utf8").split("\n"); } catch { return []; } })()) {
   const m = /^([A-Z_]+)=(.*)$/.exec(line.trim());
@@ -33,7 +33,7 @@ if (!std || !idsPath) throw new Error("usage: label-pilot.ts run|score|sample <a
 const MODELS = ["deepseek-v4.1-flash", "qwen3.8-flash"];
 const OUT = `data/eval/label-pilot-${std.id}.jsonl`;
 type Item = { id: string; text: string; group: string; slice: string; label_bin: number };
-type Row = { id: string; model: string; promptSha: string; ok: boolean; answers?: Record<string, Answer>; label?: Label };
+type Row = { id: string; model: string; promptSha: string; ok: boolean; followUp?: boolean; answers?: Record<string, Answer>; label?: Label };
 const ids = new Set(readFileSync(idsPath, "utf8").split("\n").filter(Boolean));
 const items = readFileSync("data/eval/eval20k.jsonl", "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Item).filter((x) => ids.has(x.id));
 const rowsNow = (): Row[] => (existsSync(OUT) ? readFileSync(OUT, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Row) : []).filter((r) => r.ok && r.promptSha === std.promptSha);
@@ -52,19 +52,30 @@ if (phase === "run") {
   await Promise.all(Array.from({ length: Number(conc ?? 48) }, async () => {
     while (next < jobs.length) {
       const { it, model } = jobs[next++]!;
-      let answers: Record<string, Answer> | undefined;
+      let answers: Record<string, Answer> | undefined, followUp = false;
+      const ask = async (messages: { role: string; content: string }[]): Promise<string | undefined> => {
+        const res = await fetch(`${base}/chat/completions`, {
+          method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+          body: JSON.stringify({ model, stream: false, ...knobs(model), messages }), signal: AbortSignal.timeout(120_000),
+        });
+        return res.ok ? ((await res.json()) as { choices?: { message?: { content?: string } }[] }).choices?.[0]?.message?.content ?? "" : undefined;
+      };
       for (let a = 0; a < 3 && !answers; a++) {
         try {
-          const res = await fetch(`${base}/chat/completions`, {
-            method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-            body: JSON.stringify({ model, stream: false, ...knobs(model), messages: [{ role: "system", content: "你是中文内容审核标注员。只输出一个 JSON 对象，不要输出任何其他文字。" }, { role: "user", content: std.prompt.trimEnd().replace("{{TEXT}}", () => it.text) }] }),
-            signal: AbortSignal.timeout(120_000),
-          });
-          if (res.ok) answers = parseAnswers(std, ((await res.json()) as { choices?: { message?: { content?: string } }[] }).choices?.[0]?.message?.content ?? "");
+          const messages = [{ role: "system", content: "你是中文内容审核标注员。只输出一个 JSON 对象，不要输出任何其他文字。" }, { role: "user", content: std.prompt.trimEnd().replace("{{TEXT}}", () => it.text) }];
+          const first = await ask(messages);
+          const r = first === undefined ? undefined : readAnswers(std, first);
+          if (r && r.missing.length === 0) answers = r.got;
+          else if (r) {
+            // a model that skipped questions is asked once, in the same conversation, for only those questions
+            const more = await ask([...messages, { role: "assistant", content: first! }, { role: "user", content: followUpFor(r.missing) }]);
+            const r2 = more === undefined ? undefined : readAnswers({ ...std, questions: r.missing }, more);
+            if (r2 && r2.missing.length === 0) { answers = { ...r.got, ...r2.got }; followUp = true; }
+          }
         } catch { /* retry */ }
       }
       if (answers) ok++; else failed++;
-      appendFileSync(OUT, JSON.stringify({ id: it.id, model, promptSha: std.promptSha, ok: !!answers, ...(answers ? { answers, label: std.label(answers) } : {}) }) + "\n");
+      appendFileSync(OUT, JSON.stringify({ id: it.id, model, promptSha: std.promptSha, ok: !!answers, ...(followUp ? { followUp } : {}), ...(answers ? { answers, label: std.label(answers) } : {}) }) + "\n");
     }
   }));
   console.log(JSON.stringify({ standard: std.id, promptSha: std.promptSha, items: items.length, jobs: jobs.length, ok, failed }));

@@ -53,17 +53,29 @@ export const GUARD_V1: Standard = {
 
 export const STANDARDS: Record<string, Standard> = { [ABUSE_V4.id]: ABUSE_V4, [ABUSE_V41.id]: ABUSE_V41, [MARKETING_V1.id]: MARKETING_V1, [GUARD_V1.id]: GUARD_V1 };
 
-/** Parse a model's JSON answer for a standard; undefined when any question is missing or not one of 是 / 否 / 不确定. */
-export function parseAnswers(std: Standard, raw: string): Record<string, Answer> | undefined {
+/** Read a model's JSON answer for a standard: the questions it answered and the ones it left out; undefined when there
+ *  is no JSON object or any answer is not one of 是 / 否 / 不确定. */
+export function readAnswers(std: Standard, raw: string): { got: Record<string, Answer>; missing: string[] } | undefined {
   const m = /\{[\s\S]*\}/.exec(raw);
   if (!m) return undefined;
   let o: Record<string, unknown>;
   try { o = JSON.parse(m[0]) as Record<string, unknown>; } catch { return undefined; }
-  const out: Record<string, Answer> = {};
+  const got: Record<string, Answer> = {}, missing: string[] = [];
   for (const q of std.questions) {
     const v = o[q];
+    if (v === undefined) { missing.push(q); continue; }
     if (v !== "是" && v !== "否" && v !== "不确定") return undefined;
-    out[q] = v;
+    got[q] = v;
   }
-  return out;
+  return { got, missing };
 }
+
+/** Parse a complete answer; undefined when any question is missing or invalid. */
+export function parseAnswers(std: Standard, raw: string): Record<string, Answer> | undefined {
+  const r = readAnswers(std, raw);
+  return r && r.missing.length === 0 ? r.got : undefined;
+}
+
+/** The follow-up turn asking only for the questions a model left out (seen with qwen3.8-flash omitting q7). */
+export const followUpFor = (missing: string[]): string =>
+  `你漏答了 ${missing.join("、")}。请按上面的题目补答，只输出一个 JSON，只含这几个键：{${missing.map((q) => `"${q}":"是|否|不确定"`).join(",")}}`;
