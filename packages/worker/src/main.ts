@@ -1,8 +1,8 @@
 // Process W entry. Opens app.db + session.sqlite, runs the startup barrier, admission loop, heartbeat/pump loops, and a small HTTP on 127.0.0.1:8081.
 // usage: node --experimental-strip-types packages/worker/src/main.ts
 import { createServer } from "node:http";
-import { mkdirSync, openSync, readFileSync, closeSync } from "node:fs";
-import { flockSync } from "./flock.ts";
+import { mkdirSync, readFileSync } from "node:fs";
+import { acquireSingleInstanceLock } from "./flock.ts";
 import { parse } from "yaml";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
@@ -33,9 +33,8 @@ export const INSTRUCTIONS = [
 async function main(): Promise<void> {
   loadDotEnv();
   mkdirSync("data", { recursive: true });
-  // single-instance lock (§7.3 step 0)
-  const lockFd = openSync("data/w.lock", "w");
-  if (!flockSync(lockFd)) { console.error("another worker holds data/w.lock"); process.exit(2); }
+  // single-instance lock (§7.3 step 0; OS-level since dev plan 2026-10-08 R1)
+  if (!acquireSingleInstanceLock("data/w.lock.db")) { console.error("another worker holds data/w.lock.db"); process.exit(2); }
   const db = core.openAppDb(env("APP_DB", "data/app.db"), "worker");
   core.ensureSchema(db);
   const { bundle, texts } = loadBundle("rules", "config/scenes.yaml");
@@ -73,7 +72,7 @@ async function main(): Promise<void> {
     } catch (e) { json(500, { code: "INTERNAL", message: core.redact(String(e)) }); }
   });
   server.listen(envNum("W_PORT", 8081), "127.0.0.1");
-  const stop = async () => { clearInterval(admit); server.close(); await worker.close(); closeSync(lockFd); process.exit(0); };
+  const stop = async () => { clearInterval(admit); server.close(); await worker.close(); process.exit(0); };   // exiting releases the single-instance lock
   process.on("SIGINT", () => void stop());
   process.on("SIGTERM", () => void stop());
 }

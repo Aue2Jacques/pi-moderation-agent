@@ -692,7 +692,7 @@ durable 事实：`Harness.open()` 不启动调度（scheduler `open()` "Dispatch
 启动顺序（`worker/src/startup.ts`）：
 
 ```
-0. 单实例锁 data/w.lock（flock）；拿不到 → 退出。
+0. 单实例锁 data/w.lock.db（SQLite 独占锁，底层是 fcntl，进程死亡自动释放；dev plan 2026-10-08 R1 起替换原 pid 文件锁）；拿不到 → 退出。
 1. Harness.open（不调用任何会启动调度的方法）。
 2. inspect() 读出活任务与未结 submission，按 conversation_id 归并。
 3. 从 app.db 读 conversation_id 非空且（state 非终态 或 durable 仍有活任务）的审次，分类：
