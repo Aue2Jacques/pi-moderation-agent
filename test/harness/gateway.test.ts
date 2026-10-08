@@ -254,6 +254,7 @@ describe("§2.2 fast-path injection guard (dev plan 2026-10-08)", () => {
     const out = await makeGateway(db, {}, () => Date.now(), bundle).processIntakeOnce();
     const byId = Object.fromEntries(out.map((o) => [o.contentId, o]));
     expect(byId["inj1"]).toMatchObject({ decision: "suspicious" });
+    expect((db.prepare("SELECT state, suspect_reason FROM review WHERE content_id='inj1'").get())).toEqual({ state: "queued", suspect_reason: "injection_suspected" });   // §2.2: the agent sees why
     expect(byId["ok1"]).toMatchObject({ decision: "pass" });
     expect((db.prepare("SELECT COUNT(*) AS n FROM judge_answer a JOIN judge_call c ON c.judge_call_id=a.judge_call_id WHERE c.content_id='inj1' AND a.question_kind='guard'").get() as { n: number }).n).toBe(2);   // primary + confirm copy
   });

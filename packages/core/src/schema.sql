@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS review (
   submission_id    TEXT,
   submission_attempt INTEGER,   -- the generation (attempt) that submission_id belongs to (dev plan 2026-10-08 R2)
   release_reason   TEXT,
+  suspect_reason   TEXT,           -- why the fast path handed it to the agent (dev plan 2026-10-08 §2.2); NULL for other triggers
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
   UNIQUE(content_id, seq),
   UNIQUE(content_id, trigger_request_id),

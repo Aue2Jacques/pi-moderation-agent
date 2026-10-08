@@ -10,6 +10,8 @@ export type ReleaseReason =
   | "timeout" | "budget_tools" | "budget_cost" | "evidence_gap" | "judge_down"
   | "model_release" | "backpressure" | "revoked" | "preprocess_error"
   | "fastpath_error"   // the fast path kept failing for one item (dev plan R4): after GatewayConfig.intakeMaxAttempts tries it goes to a human
+  | "calib_missing"    // §2.2 system cause: a required question has answers but none calibrated (strict mode without a fitted bucket)
+  | "judge_incomplete" // §2.2 system cause: the judge returned no answer for a required question
   | "image_unsupported"   // content carries images and no image channel to the judge exists (text MVP): never auto-disposed
   | "bundle_missing";     // the policy bundle version pinned on the review is not available to this worker
 
@@ -27,6 +29,8 @@ export type ReviewRow = {
   rules_ver: string; calib_ver: string; evidence_ver: string; prices_ver: string;
   judge_model: string; agent_model: string | null;
   conversation_id: string | null; submission_id: string | null; submission_attempt: number | null;
+  /** why the fast path sent this review to the agent (§2.2), e.g. suspicious_band, injection_suspected, blacklist_hit */
+  suspect_reason: string | null;
   release_reason: string | null;
   created_at: number; updated_at: number;
 };

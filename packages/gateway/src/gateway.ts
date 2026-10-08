@@ -25,7 +25,7 @@ export type GatewayDeps = { db: Db; bundle: PolicyBundle; ruleTexts?: Record<str
  * Metric definitions (round-9 item 8). Window = last 300 s unless stated.
  * - pass_pct / block_pct / suspicious_pct: share of fast-path outcomes in the last 60 s (G side only; suspicious = handed to the agent).
  * - release_pct: share of ALL content judged in the window whose review ended in human hands, from either process:
- *   G direct releases (judge_down / backpressure / preprocess_error / image_unsupported / fastpath_error) and W releases (evidence_gap / timeout / budget_* / model_release / revoked).
+ *   G direct releases (judge_down / backpressure / preprocess_error / image_unsupported / fastpath_error / calib_missing / judge_incomplete) and W releases (evidence_gap / timeout / budget_* / model_release / revoked).
  *   release_by_reason breaks that down; release_fast_pct and release_agent_pct split by source.
  * - cost_micro_per_1k: total cost of the content stream in the window (fast-path judge calls, i.e. judge_call.attempt IS NULL, + every review's used_micro) ÷ content judged in the window × 1000.
  *   Reviews whose cost is still 'estimated' are included and counted in cost_estimated_reviews.
@@ -148,7 +148,7 @@ export class Gateway {
     // releases from both processes, by reason, over reviews that entered human hands in the window
     const byReason: Record<string, number> = {};
     for (const r of db.prepare("SELECT release_reason AS reason, COUNT(*) AS n FROM review WHERE release_reason IS NOT NULL AND state IN ('human_queue','human_disposed') AND updated_at > ? GROUP BY release_reason").all(now - W) as { reason: string; n: number }[]) byReason[r.reason] = r.n;
-    const fastReasons = new Set(["judge_down", "backpressure", "preprocess_error", "image_unsupported", "fastpath_error"]);
+    const fastReasons = new Set(["judge_down", "backpressure", "preprocess_error", "image_unsupported", "fastpath_error", "calib_missing", "judge_incomplete"]);
     const relFast = Object.entries(byReason).filter(([k]) => fastReasons.has(k)).reduce((a, [, n]) => a + n, 0);
     const relAgent = Object.entries(byReason).filter(([k]) => !fastReasons.has(k)).reduce((a, [, n]) => a + n, 0);
     const share = (n: number): number => (judged ? Math.round((100 * n) / judged) : 0);

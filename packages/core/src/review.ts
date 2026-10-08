@@ -107,7 +107,7 @@ export function intakeInsert(db: Db, c: NewContent, at: number): { inserted: boo
 export type ReviewCreate = {
   contentId: string; trigger: Trigger; triggerRequestId: string; payloadSha: string;
   pins: Pins; judgeModel: string; snapshotSeq?: number; deadlineAt: number | null;
-  budgetTools: number; budgetMicro: number; state: "queued" | "disposed" | "human_queue"; releaseReason?: ReleaseReason;
+  budgetTools: number; budgetMicro: number; state: "queued" | "disposed" | "human_queue"; releaseReason?: ReleaseReason; suspectReason?: string;
 };
 
 /** Insert a review row with the next seq. Inside a transaction. */
@@ -119,10 +119,10 @@ export function insertReview(db: Db, c: ReviewCreate, at: number): ReviewRow {
   const snapshot = c.snapshotSeq ?? currentSeq(db);
   db.prepare(
     `INSERT INTO review(review_id, content_id, seq, trigger, trigger_request_id, trigger_payload_sha, state, attempt, deadline_at, snapshot_seq,
-       budget_tools, budget_micro, rules_ver, calib_ver, evidence_ver, prices_ver, judge_model, release_reason, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       budget_tools, budget_micro, rules_ver, calib_ver, evidence_ver, prices_ver, judge_model, release_reason, suspect_reason, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   ).run(id, c.contentId, seq, c.trigger, c.triggerRequestId, c.payloadSha, c.state, c.deadlineAt, snapshot, c.budgetTools, c.budgetMicro,
-    c.pins.rulesVer, c.pins.calibVer, c.pins.evidenceVer, c.pins.pricesVer, c.judgeModel, c.releaseReason ?? null, at, at);
+    c.pins.rulesVer, c.pins.calibVer, c.pins.evidenceVer, c.pins.pricesVer, c.judgeModel, c.releaseReason ?? null, c.suspectReason ?? null, at, at);
   return requireReview(db, id);
 }
 
@@ -143,6 +143,8 @@ export type SuspiciousInput = {
   /** when set, S2' instead of S2 */
   direct?: { reason: ReleaseReason; severity: number; humanSlaMs: number };
   snapshotSeq?: number;
+  /** why it goes to the agent (§2.2); stored on the review for the agent's task description */
+  suspectReason?: string;
 };
 
 export function createSuspiciousReview(db: Db, i: SuspiciousInput, at: number): { review: ReviewRow; duplicate: boolean } {
@@ -158,7 +160,7 @@ export function createSuspiciousReview(db: Db, i: SuspiciousInput, at: number): 
       insertHumanQueue(db, review, i.direct.reason, i.direct.severity, i.direct.humanSlaMs, at);
       insertOutbox(db, review, "release", { reason: i.direct.reason }, at);
     } else {
-      review = insertReview(db, { ...base, deadlineAt: at + i.deadlineMs, state: "queued" }, at);
+      review = insertReview(db, { ...base, deadlineAt: at + i.deadlineMs, state: "queued", ...(i.suspectReason ? { suspectReason: i.suspectReason } : {}) }, at);
     }
     upsertContentState(db, i.contentId, null, 0, i.pendingVisibility, at);
     markIntakeJudged(db, i.contentId, review.review_id, at);

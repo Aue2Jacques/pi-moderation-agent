@@ -15,7 +15,7 @@ export type FastpathDeps = {
   now: () => number;
 };
 
-export type FastpathOutcome = { contentId: string; decision: Decision["state"] | "judge_down" | "backpressure" | "preprocess_error" | "image_unsupported" | "fastpath_error"; reviewId: string; latencyMs: number; judgeStatus: string; blacklistHits: number; nearDup: number };
+export type FastpathOutcome = { contentId: string; decision: Decision["state"] | "judge_down" | "backpressure" | "preprocess_error" | "image_unsupported" | "fastpath_error" | "calib_missing" | "judge_incomplete"; reviewId: string; latencyMs: number; judgeStatus: string; blacklistHits: number; nearDup: number };
 
 /** Route an item straight to the human queue with a reason (G direct release), recording the judge calls made so far. */
 export function toHuman(deps: FastpathDeps, contentId: string, reason: core.ReleaseReason, judgeCallIds: string[] = []): core.ReviewRow {
@@ -88,8 +88,15 @@ export async function runFastpath(deps: FastpathDeps, contentId: string): Promis
   // policy: answers → three states (blacklist hits and rate limiting force suspicious; they are deterministic signals for the agent, not rulings)
   const answers = core.trustedAnswersFromCalls(deps.db, contentId, judgeCallIds, deps.bundle, inputSha);
   let d = decide({ bundle: deps.bundle, scene, hasImages, answers, judgeOk: true });   // hasImages is false here (gated above)
-  if ((pre.blacklistHits.length > 0 || pre.rateLimited) && d.state === "pass") d = { state: "suspicious", action: null, hits: [], reason: pre.blacklistHits.length ? "blacklist_hit" : "rate_limited" };
+  if ((pre.blacklistHits.length > 0 || pre.rateLimited) && d.state === "pass") d = { state: "suspicious", action: null, hits: [], reason: pre.blacklistHits.length ? "blacklist_hit" : "rate_limited", route: "agent" };
 
+  // §2.2: a system cause (missing calibration, an unanswered required question) goes straight to a human — the agent
+  // cannot fix it by investigating and would only spend its budget
+  if (d.state === "suspicious" && d.route === "human") {
+    const reason: core.ReleaseReason = d.reason.startsWith("calib_missing") ? "calib_missing" : d.reason.startsWith("judge_incomplete") ? "judge_incomplete" : d.reason === "image_unsupported" ? "image_unsupported" : "judge_down";
+    const r = direct(reason, judgeCallIds);
+    return { contentId, decision: reason, reviewId: r.review_id, latencyMs: deps.now() - t0, judgeStatus: "ok", blacklistHits: pre.blacklistHits.length, nearDup: pre.nearDuplicates.length };
+  }
   if (d.state === "pass" || d.state === "block") {
     const out = core.fastDispose(deps.db, deps.bundle, { contentId, action: d.state === "pass" ? "pass" : d.action!, ruleIds: d.hits, judgeCallIds, pins: deps.pins, judgeModel: deps.judgeModel, budgetTools: deps.budgetTools, budgetMicro: deps.budgetMicro, reason: d.reason }, deps.now());
     return { contentId, decision: d.state, reviewId: out.ruling.review_id, latencyMs: deps.now() - t0, judgeStatus: "ok", blacklistHits: pre.blacklistHits.length, nearDup: pre.nearDuplicates.length };
@@ -98,6 +105,6 @@ export async function runFastpath(deps: FastpathDeps, contentId: string): Promis
     const r = direct("backpressure", judgeCallIds);
     return { contentId, decision: "backpressure", reviewId: r.review_id, latencyMs: deps.now() - t0, judgeStatus: "ok", blacklistHits: pre.blacklistHits.length, nearDup: pre.nearDuplicates.length };
   }
-  const r = core.createSuspiciousReview(deps.db, { contentId, pins: deps.pins, judgeModel: deps.judgeModel, judgeCallIds, pendingVisibility: sceneCfg.pendingVisibility, deadlineMs: sceneCfg.deadlineMs, budgetTools: deps.budgetTools, budgetMicro: deps.budgetMicro }, deps.now()).review;
+  const r = core.createSuspiciousReview(deps.db, { contentId, pins: deps.pins, judgeModel: deps.judgeModel, judgeCallIds, pendingVisibility: sceneCfg.pendingVisibility, deadlineMs: sceneCfg.deadlineMs, budgetTools: deps.budgetTools, budgetMicro: deps.budgetMicro, suspectReason: d.reason }, deps.now()).review;
   return { contentId, decision: "suspicious", reviewId: r.review_id, latencyMs: deps.now() - t0, judgeStatus: "ok", blacklistHits: pre.blacklistHits.length, nearDup: pre.nearDuplicates.length };
 }

@@ -42,6 +42,7 @@ export function ensureSchema(db: Db): void {
  *  does not add columns to an existing table). */
 function migrate(db: Db): void {
   const cols = new Set((db.prepare("PRAGMA table_info(review)").all() as { name: string }[]).map((c) => c.name));
+  if (!cols.has("suspect_reason")) db.exec("ALTER TABLE review ADD COLUMN suspect_reason TEXT");   // §2.2
   if (!cols.has("submission_attempt")) {
     // R2: before this column, only generation 1 could ever bind a submission (the bind required submission_id IS NULL)
     db.exec("ALTER TABLE review ADD COLUMN submission_attempt INTEGER; UPDATE review SET submission_attempt=1 WHERE submission_id IS NOT NULL;");

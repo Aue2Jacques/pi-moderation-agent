@@ -1,7 +1,9 @@
 // Policy engine: judge answers → three states. Shares thresholds and ruleAllowed with core.allowedActions (docs §9.3).
-import { allowedActions, effectiveAnswer, ruleAllowed, type AnswerRecord, type PolicyBundle, type Scene } from "@mod/core";
+import { allowedActions, effectiveAnswer, questionKey, ruleAllowed, rulesFor, type AnswerRecord, type PolicyBundle, type Scene } from "@mod/core";
 
-export type Decision = { state: "pass" | "block" | "suspicious"; action: "pass" | "limit" | "takedown" | null; hits: string[]; reason: string };
+/** route (§2.2): where a suspicious item goes. "human" = a system cause the agent cannot fix by investigating
+ *  (missing calibration, an unanswered required question, judge down); "agent" = the content needs a closer look. */
+export type Decision = { state: "pass" | "block" | "suspicious"; action: "pass" | "limit" | "takedown" | null; hits: string[]; reason: string; route?: "agent" | "human" };
 
 export type EngineInput = {
   bundle: PolicyBundle; scene: Scene; hasImages: boolean;
@@ -14,20 +16,40 @@ export type EngineInput = {
 };
 
 export function decide(i: EngineInput): Decision {
+  if (!i.judgeOk) return { state: "suspicious", action: null, hits: [], reason: "judge_unavailable", route: "human" };
+  if (i.hasImages && !(i.imageDelivered ?? false)) return { state: "suspicious", action: null, hits: [], reason: "image_unsupported", route: "human" };
   const d = decideRules(i);
   // dev plan §2.2 (owner choice 2026-10-08): the fast-path injection guard. When the scene asks it, an automatic
-  // decision (pass or block) needs a consistent answer below the threshold; a flagged or missing guard answer sends the
-  // item to the agent instead. It never makes anything a violation by itself.
+  // decision (pass or block) needs a consistent, calibrated answer below the threshold; flagged -> the agent
+  // (injection_suspected); missing or uncalibrated -> a system cause, to a human. Never a violation by itself.
   const guard = i.bundle.scenes[i.scene].injectionGuard;
   if (guard && (d.state === "pass" || d.state === "block")) {
-    const e = effectiveAnswer(i.answers.filter((a) => a.questionSha === guard.question.sha));
+    const got = i.answers.filter((a) => a.questionSha === guard.question.sha);
+    if (got.length === 0) return { state: "suspicious", action: null, hits: d.hits, reason: `judge_incomplete:${questionKey(guard.question)}`, route: "human" };
+    if (got.every((a) => a.p === null)) return { state: "suspicious", action: null, hits: d.hits, reason: `calib_missing:${questionKey(guard.question)}`, route: "human" };
+    const e = effectiveAnswer(got);
     const clear = e.kind === "group" && !e.inconsistent && e.answers.every((a) => a.p !== null) && e.p < guard.threshold;
-    if (!clear) {
-      const flagged = e.kind === "group" && e.answers.some((a) => a.p !== null) && e.p >= guard.threshold;
-      return { state: "suspicious", action: null, hits: d.hits, reason: flagged ? "injection_suspected" : "uncovered:injection_guard" };
-    }
+    if (!clear) return { state: "suspicious", action: null, hits: d.hits, reason: "injection_suspected", route: "agent" };
   }
-  return d;
+  if (d.state !== "suspicious") return d;
+  // §2.2: why is it suspicious? A required question with no answer, or no calibrated answer, is a system cause the
+  // agent cannot fix (its own judge calls would be just as uncalibrated); anything else needs a closer look.
+  const sys = systemCause(i);
+  return sys ? { ...d, reason: sys, route: "human" } : { ...d, route: "agent" };
+}
+
+/** Every question the scene requires for an automatic pass (rule questions of the required categories and their
+ *  exceptions) must have an answer, and at least one calibrated answer. */
+function systemCause(i: EngineInput): string | undefined {
+  const sc = i.bundle.scenes[i.scene];
+  const required = rulesFor(i.bundle, i.scene).filter((r) => sc.requiredCategories.includes(r.category))
+    .flatMap((r) => [r.question, ...r.exceptions.map((x) => x.question)]);
+  for (const q of required) {
+    const got = i.answers.filter((a) => a.questionSha === q.sha);
+    if (got.length === 0) return `judge_incomplete:${questionKey(q)}`;
+    if (got.every((a) => a.p === null)) return `calib_missing:${questionKey(q)}`;
+  }
+  return undefined;
 }
 
 function decideRules(i: EngineInput): Decision {

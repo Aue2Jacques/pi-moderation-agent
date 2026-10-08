@@ -70,7 +70,7 @@ describe("U-01 engine", () => {
     const d = policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [ans(mkt.question.sha, "m", 0.95, "violate"), ...G], judgeOk: true });
     expect(d).toMatchObject({ state: "block", action: "limit" });
     const img = policy.decide({ bundle: B, scene: "comment", hasImages: true, answers: [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m")], judgeOk: true });
-    expect(img.reason).toBe("uncovered:image_check");
+    expect(img).toMatchObject({ reason: "image_unsupported", route: "human" });   // §2.2: a capability gap is a system cause
     const imgAnswers = [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m"), ...pair(B.scenes.comment.imageCheck.question.sha, "i"), ...G];
     // round-9 item 6: an image_check answer without a delivered image never passes
     expect(policy.decide({ bundle: B, scene: "comment", hasImages: true, answers: imgAnswers, judgeOk: true }).state).toBe("suspicious");
@@ -98,10 +98,22 @@ describe("U-01 engine", () => {
     expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [...passShape, ...flagged], judgeOk: true })).toMatchObject({ state: "suspicious", reason: "injection_suspected" });
     const blockShape = [ans(abuse.question.sha, "h", 0.99, "violate")];
     expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [...blockShape, ...flagged], judgeOk: true })).toMatchObject({ state: "suspicious", reason: "injection_suspected", hits: ["ABUSE-001"] });
-    expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: passShape, judgeOk: true })).toMatchObject({ state: "suspicious", reason: "uncovered:injection_guard" });
+    expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: passShape, judgeOk: true })).toMatchObject({ state: "suspicious", reason: "judge_incomplete:injection_guard", route: "human" });
     expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [...passShape, ...G], judgeOk: true }).state).toBe("pass");
+    expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [...passShape, ...flagged], judgeOk: true }).route).toBe("agent");
     // a flagged guard on content that is already suspicious changes nothing
     expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [ans(abuse.question.sha, "x", 0.5, "violate"), ...flagged], judgeOk: true }).reason).not.toBe("injection_suspected");
+  });
+  it("§2.2 where a suspicious item goes: the agent for content questions, a human for system causes", () => {
+    const mid = [ans(abuse.question.sha, "ma", 0.5, "violate"), ans(abuse.question.sha, "mb", 0.5, "violate", "ma", 1), ...pair(mkt.question.sha, "m"), ...G];
+    expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: mid, judgeOk: true })).toMatchObject({ state: "suspicious", route: "agent" });
+    const uncal = [{ ...ans(abuse.question.sha, "ua", 0.02, "none"), p: null }, { ...ans(abuse.question.sha, "ub", 0.02, "none", "ua", 1), p: null }, ...pair(mkt.question.sha, "m"), ...G];
+    expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: uncal, judgeOk: true })).toMatchObject({ state: "suspicious", reason: "calib_missing:ABUSE-001", route: "human" });
+    const noMkt = [...pair(abuse.question.sha, "a"), ...G];
+    expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: noMkt, judgeOk: true })).toMatchObject({ state: "suspicious", reason: "judge_incomplete:MARKETING-003", route: "human" });
+    // a confident block does not wait for the other questions
+    expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [ans(abuse.question.sha, "h", 0.99, "violate"), ...G], judgeOk: true }).state).toBe("block");
+    expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [], judgeOk: false })).toMatchObject({ reason: "judge_unavailable", route: "human" });
   });
 });
 

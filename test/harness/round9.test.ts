@@ -25,7 +25,9 @@ describe("R9-05 calibration is applied on the main path, or nothing is auto-disp
     const db = freshDb();
     seedContent(db, "c1", "comment", { text: "plain text" });
     const out = await gw(db, noCalibrator()).processIntakeOnce();
-    expect(out[0]!.decision).toBe("suspicious");
+    // §2.2 (2026-10-08): missing calibration is a system cause -> straight to a human, not the agent (it could not fix it)
+    expect(out[0]!.decision).toBe("calib_missing");
+    expect(latest(db, "c1")).toMatchObject({ state: "human_queue", release_reason: "calib_missing", trigger: "suspicious" });
     expect(latest(db, "c1").calib_ver).toBe("calib@none");
     const n = db.prepare("SELECT COUNT(*) AS total, SUM(calibrated_probs IS NULL) AS nulls FROM judge_answer").get() as { total: number; nulls: number };
     expect(n.total).toBeGreaterThan(0);
