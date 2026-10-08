@@ -176,7 +176,8 @@ async function runJudge(deps: ExtensionDeps, api: ToolExecutionApi, ctx: Context
   const reqNo = core.openToolRequest(deps.db, g.reviewId, api.callId, deps.now());
   crashAt("J");   // H-22: a replayed tool opens a second tool_request under the same tool_slot
   deps.onExternalCall?.(String(api.conversationId), confirms ? "confirm" : "judge");
-  const request = { contentId: g.contentId, text: content.text, scene: content.scene, evidence: cited.map((e) => ({ evidenceId: e.evidenceId, kind: e.kind, modelView: e.modelView })), questions, ...(confirms ? { shuffleSeed: confirms.seed } : {}) };
+  // E5: the judge sees the model view (placeholders for links, emails, mentions, contact numbers); content.text stays the source
+  const request = { contentId: g.contentId, text: content.text === null ? null : core.modelView(content.text), scene: content.scene, evidence: cited.map((e) => ({ evidenceId: e.evidenceId, kind: e.kind, modelView: e.modelView })), questions, ...(confirms ? { shuffleSeed: confirms.seed } : {}) };
   const requestSha = core.requestDigest(deps.judge, request);   // R9a: everything sent, rule texts included
   let res: Awaited<ReturnType<JudgeClient["classify"]>>;
   try {
@@ -264,7 +265,7 @@ export function buildModerationExtension(deps: ExtensionDeps) {
       const content = core.readContent(db, g.contentId)!;
       const rows = threadContextRows(db, content, review.snapshot_seq);
       const view = rows.map((r) => ({
-        content_id: r.content_id, relation: r.relation, text: (r.text ?? "").slice(0, 200), account_id: r.account_id, event_time: r.event_time,
+        content_id: r.content_id, relation: r.relation, text: core.modelView(r.text ?? "").slice(0, 200), account_id: r.account_id, event_time: r.event_time,
         prior_effective_action: (db.prepare("SELECT action FROM ruling WHERE content_id=? AND ingest_seq<=? ORDER BY seq DESC LIMIT 1").get(r.content_id, review.snapshot_seq) as { action: string } | undefined)?.action ?? null,
       }));
       const id = writeEvidence(deps, g, "thread_context", content.thread_id ?? content.reply_to ?? "none", rows, { untrusted: true, neighbors: view }, review.snapshot_seq);

@@ -55,7 +55,8 @@ export async function runFastpath(deps: FastpathDeps, contentId: string): Promis
   const rules = core.rulesFor(deps.bundle, scene);
   const guard = deps.bundle.scenes[scene].injectionGuard;
   const questions = [...rules.flatMap((r) => [r.question, ...r.exceptions.map((x) => x.question)]), ...(guard ? [guard.question] : [])];
-  const request = { contentId, text: content.text, scene, evidence: [], questions };
+  // E5: the judge sees the model view (placeholders for links, emails, mentions, contact numbers); content.text stays the source
+  const request = { contentId, text: content.text === null ? null : core.modelView(content.text), scene, evidence: [], questions };
   const requestSha = core.requestDigest(deps.judge, request);
   const res = await deps.judge.classify(request);
   const inputSha = core.inputFingerprint(content.text_sha, scene, [], deps.pins.evidenceVer);

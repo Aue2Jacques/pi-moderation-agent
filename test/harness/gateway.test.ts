@@ -270,3 +270,16 @@ describe("§2.2 confirm switch vs judge client (dev plan 2026-10-08)", () => {
     expect(() => new Gateway({ db, bundle: off, judge: noCopy, prices: PRICES, calibrator: passThroughCalibrator("calib@t1"), evidenceVer: "e", judgeModel: "jev-recorded", cfg: DEFAULT_GATEWAY_CONFIG, now: () => Date.now(), gatewayId: "g1" })).not.toThrow();
   });
 });
+
+describe("E5 the judge sees the model view; the stored text is unchanged (dev plan 2026-10-08)", () => {
+  it("links, emails, mentions and contact numbers reach the judge as placeholders", async () => {
+    const db = freshDb();
+    const raw = "normal 加微信 abc_12345 或 13812345678，看 https://example.com/x @小明 #话题#";
+    seedContent(db, "mv1", "comment", { text: raw });
+    const seen: string[] = [];
+    const judge = recordedJudge((req) => { seen.push(req.text ?? ""); return byText(req); });
+    await new Gateway({ db, bundle: BUNDLE, judge, prices: PRICES, calibrator: passThroughCalibrator("calib@t1"), evidenceVer: "evidence@t1", judgeModel: "jev-recorded", cfg: DEFAULT_GATEWAY_CONFIG, now: () => Date.now(), gatewayId: "g1" }).processIntakeOnce();
+    expect(seen).toEqual(["normal 加微信 [联系方式] 或 [联系方式]，看 [链接] [@用户] 话题"]);
+    expect((db.prepare("SELECT text FROM content WHERE content_id='mv1'").get() as { text: string }).text).toBe(raw);
+  });
+});
