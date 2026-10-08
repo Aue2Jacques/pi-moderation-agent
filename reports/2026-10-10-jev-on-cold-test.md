@@ -36,8 +36,81 @@
 - 这些数字**只代表 COLD 这类内容**（种族 / 地区 / 性别话题上的冒犯，含隐性偏见），不代表一般人身辱骂；COLD 的"冒犯"标准和我们 ABUSE 规则的措辞也不完全一样。
 - **未校准**。校准能让分数和实际频率对上（ECE 下降），但改变不了排序（AUC 不变）。漏放能不能降，取决于阈值怎么定，以及 Jev 判 0 分的那些冒犯到底是 Jev 错了还是标签口径不同。
 
+## 漏放核查：盲测第二意见（glm-5.3-flash）
+
+从 339 条漏放里随机抽 100 条，另加两组对照各 50 条：冒犯且被 Jev 拦下的、安全且被 Jev 放行的。三组打乱后交给 glm-5.3-flash（并发 16，单条约 2.2 秒），它看不到 COLD 标签，也不知道条目属于哪组。按两个定义各判一次：COLD 的"冒犯"定义，和本平台辱骂规则。开发者没有看正文。脚本：`scripts/sample-cold-leaks.py` → `scripts/check-cold-leaks.ts` → `scripts/summarize-cold-leaks.py`。成功 199 条，失败 1 条。
+
+| 组 | 条数 | glm 认为冒犯（COLD 定义） | glm 认为违规（本平台规则） |
+|---|---|---|---|
+| 漏放：COLD 说冒犯，Jev 放行 | 99 | **36（36%）** | 36（36%） |
+| 对照：COLD 说冒犯，Jev 拦截 | 50 | 49（98%） | 50（100%） |
+| 对照：COLD 说安全，Jev 放行 | 50 | 7（14%） | 9（18%） |
+
+读法：
+- **对照组说明 glm 是个可用的第二意见**：明显冒犯它 98% 认同 COLD；安全内容它 86% 认同。
+- **漏放里大约三分之二是"标准有分歧"，三分之一是"Jev 真漏了"。**glm 认为漏放的 99 条中 63 条不算冒犯，类型主要是中性讨论或陈述 36、反偏见 10、反讽 9；认为是冒犯的 36 条主要是群体攻击 24、贬低性刻板印象 15。
+- 按这个比例粗估：Jev 真漏放的冒犯约占 339 条的 36%（95% 区间大约 27%–46%），即 COLD 全部冒犯内容的 **约 6%（4%–7%）**。
+- **局限**：glm 和 Jev 都是大模型，可能有同样的偏差，两者一致不能证明 COLD 标错了。glm 一条都没说"拿不准"，所以没有按规则转给负责人的存疑项；但"COLD 与两个模型分歧"本身就是疑点，下面列了链接，供负责人抽看。
+
+### 链接：glm 也认为是冒犯、但被 Jev 放行的 36 条（Jev 真漏的候选）
+
+| # | COLD test.csv | COLD 细分 | glm 类型 | Jev 分数均值 |
+|---|---|---|---|---|
+| 1 | [第 74 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L74) | 攻击群体 | 贬低性刻板印象 | 0.02 |
+| 2 | [第 367 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L367) | 攻击群体 | 群体攻击 | 0 |
+| 3 | [第 402 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L402) | 攻击个人 | 贬低性刻板印象 | 0.07 |
+| 4 | [第 405 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L405) | 攻击群体 | 群体攻击 | 0.065 |
+| 5 | [第 550 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L550) | 攻击群体 | 贬低性刻板印象 | 0.055 |
+| 6 | [第 589 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L589) | 攻击群体 | 群体攻击 | 0.09 |
+| 7 | [第 656 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L656) | 攻击群体 | 贬低性刻板印象 | 0.01 |
+| 8 | [第 894 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L894) | 攻击群体 | 贬低性刻板印象 | 0.03 |
+| 9 | [第 955 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L955) | 攻击群体 | 群体攻击 | 0.09 |
+| 10 | [第 998 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L998) | 攻击群体 | 群体攻击 | 0.035 |
+| 11 | [第 1209 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L1209) | 攻击群体 | 直接辱骂 | 0.055 |
+| 12 | [第 1581 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L1581) | 攻击群体 | 群体攻击 | 0.035 |
+| 13 | [第 1713 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L1713) | 攻击群体 | 贬低性刻板印象 | 0.01 |
+| 14 | [第 1863 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L1863) | 攻击个人 | 贬低性刻板印象 | 0.075 |
+| 15 | [第 2114 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L2114) | 攻击群体 | 贬低性刻板印象 | 0.065 |
+| 16 | [第 2318 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L2318) | 攻击群体 | 群体攻击 | 0.03 |
+| 17 | [第 2507 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L2507) | 攻击群体 | 群体攻击 | 0.01 |
+| 18 | [第 2602 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L2602) | 攻击群体 | 群体攻击 | 0.01 |
+| 19 | [第 2652 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L2652) | 攻击群体 | 贬低性刻板印象 | 0.085 |
+| 20 | [第 2655 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L2655) | 攻击群体 | 群体攻击 | 0.045 |
+| 21 | [第 2661 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L2661) | 攻击群体 | 群体攻击 | 0.065 |
+| 22 | [第 2722 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L2722) | 攻击群体 | 贬低性刻板印象 | 0.02 |
+| 23 | [第 2811 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L2811) | 攻击个人 | 群体攻击 | 0.015 |
+| 24 | [第 3218 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L3218) | 攻击群体 | 群体攻击 | 0.025 |
+| 25 | [第 3234 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L3234) | 攻击个人 | 群体攻击 | 0 |
+| 26 | [第 3393 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L3393) | 攻击群体 | 贬低性刻板印象 | 0.01 |
+| 27 | [第 3537 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L3537) | 攻击个人 | 群体攻击 | 0.045 |
+| 28 | [第 3568 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L3568) | 攻击群体 | 贬低性刻板印象 | 0.09 |
+| 29 | [第 3625 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L3625) | 攻击群体 | 群体攻击 | 0.01 |
+| 30 | [第 4061 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L4061) | 攻击群体 | 群体攻击 | 0.02 |
+| 31 | [第 4248 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L4248) | 攻击群体 | 群体攻击 | 0.07 |
+| 32 | [第 4401 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L4401) | 攻击群体 | 群体攻击 | 0.04 |
+| 33 | [第 4472 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L4472) | 攻击群体 | 群体攻击 | 0.03 |
+| 34 | [第 4756 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L4756) | 攻击群体 | 群体攻击 | 0.03 |
+| 35 | [第 5061 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L5061) | 攻击群体 | 群体攻击 | 0.03 |
+| 36 | [第 5065 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L5065) | 攻击群体 | 群体攻击 | 0.035 |
+
+### 链接：glm 认为不冒犯的 63 条中按行号前 12 条（标准分歧的候选）
+
+| # | COLD test.csv | COLD 细分 | glm 类型 | Jev 分数均值 |
+|---|---|---|---|---|
+| 1 | [第 11 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L11) | 攻击群体 | 中性讨论或陈述 | 0.035 |
+| 2 | [第 18 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L18) | 攻击群体 | 中性讨论或陈述 | 0.025 |
+| 3 | [第 185 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L185) | 攻击群体 | 中性讨论或陈述 | 0 |
+| 4 | [第 256 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L256) | 攻击群体 | 中性讨论或陈述 | 0.01 |
+| 5 | [第 458 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L458) | 攻击群体 | 反偏见 | 0.01 |
+| 6 | [第 482 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L482) | 攻击群体 | 中性讨论或陈述 | 0 |
+| 7 | [第 493 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L493) | 攻击群体 | 反偏见 | 0.015 |
+| 8 | [第 590 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L590) | 攻击群体 | 中性讨论或陈述 | 0 |
+| 9 | [第 610 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L610) | 攻击群体 | 反偏见 | 0.005 |
+| 10 | [第 708 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L708) | 攻击群体 | 中性讨论或陈述 | 0.045 |
+| 11 | [第 769 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L769) | 攻击群体 | 反讽或阴阳怪气 | 0.02 |
+| 12 | [第 1131 行](https://github.com/thu-coai/COLDataset/blob/main/COLDataset/test.csv?plain=1#L1131) | 攻击群体 | 中性讨论或陈述 | 0 |
+
 ## 还没做
 
-- 漏放的 339 条里，Jev 错和 COLD 口径不同各占多少：可以抽样交给 glm-5.3-flash 判，开发者不看正文，存疑的发链接给负责人。
 - 用 train/dev 拟合温度，在 test 上看 ECE 和三态的变化。
 - 对照基线：同样题面换一个模型（或开源守卫模型）跑同一份数据，看 0.86 这个 AUC 算好还是差。
