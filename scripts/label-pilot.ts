@@ -180,7 +180,7 @@ if (phase === "adjudicate") {
   const counts = new Map<string, Record<string, number>>(), needTie: string[] = [], rows: string[] = [];
   let incomplete = 0;
   for (const l of readFileSync("data/eval/eval20k.jsonl", "utf8").split("\n").filter(Boolean)) {
-    const it = JSON.parse(l) as { id: string; group: string };
+    const it = JSON.parse(l) as { id: string; group: string; text: string };
     if (!want.has(it.id)) continue;
     const [a, b] = FZ.models.map((m) => vote(it.id, m));
     if (!a || !b) { incomplete++; continue; }
@@ -188,7 +188,7 @@ if (phase === "adjudicate") {
     const ruling = f.source === "owner" ? rulings.get(it.id) : undefined;
     if (ruling) Object.assign(f, { label: ruling.label, source: "adjudicated", by: ruling.by });
     if (f.source === "needs_tiebreak") needTie.push(it.id);
-    else rows.push(JSON.stringify({ id: it.id, standard: sId, promptSha: FZ.promptSha, label: f.label, source: f.source, ...(f.by ? { by: f.by } : {}), votes: { ds: a, qw: b, ...(a === b ? {} : { tie: vote(it.id, FZ.tiebreak) }) } }));
+    else rows.push(JSON.stringify({ id: it.id, standard: sId, promptSha: FZ.promptSha, textSha: textSha(it.text), label: f.label, source: f.source, ...(f.by ? { by: f.by } : {}), votes: { ds: a, qw: b, ...(a === b ? {} : { tie: vote(it.id, FZ.tiebreak) }) } }));
     for (const g of [it.group, "ALL"]) {
       const c = counts.get(g) ?? counts.set(g, { n: 0 }).get(g)!;
       c.n!++;
