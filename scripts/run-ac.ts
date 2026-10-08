@@ -5,6 +5,7 @@
 //   run <outDir> <A|C>         copy base.db, run the worker with the real main model on every queued review, wait for
 //                              terminal / human, write <outDir>/<arm>.json (per case: route, final state, action, rules,
 //                              tools, judge calls, cost of every physical request, latency, outcome vs the expectation)
+//   rescore <outDir> <A|C>     recompute an arm's rows from its app.db (no model calls), e.g. after a measuring fix
 //   report <outDir>            compare the arms -> <outDir>/report.md and report.json (counts only, no text)
 // A = fixed evidence (always thread context and account history, then judge with both); C = the agent decides what to
 // fetch from its task brief. Everything else is the same: case pool, main model, rules, calibration, evidence, budget,
@@ -31,7 +32,7 @@ for (const line of (() => { try { return readFileSync(".env", "utf8").split("\n"
 const env = (k: string, d?: string): string => { const v = process.env[k] ?? d; if (v === undefined) throw new Error(`missing ${k}`); return v; };
 const sha = (b: string | Buffer) => createHash("sha256").update(b).digest("hex").slice(0, 16);
 const [phase, outDir, arg3] = process.argv.slice(2);
-if (!phase || !outDir) throw new Error("usage: run-ac.ts prepare <outDir> [limit] | run <outDir> <A|C> | report <outDir>");
+if (!phase || !outDir) throw new Error("usage: run-ac.ts prepare <outDir> [limit] | run <outDir> <A|C> | rescore <outDir> <A|C> | report <outDir>");
 
 const CASES = env("CASE_POOL", "data/cases/pool-v1.jsonl");
 const AGENT = env("AGENT_MODEL", "qwen3.8-flash");
@@ -76,6 +77,37 @@ const manifest = (extra: Record<string, unknown>) => ({
   budgetTools: DEFAULT_GATEWAY_CONFIG.budgetTools, budgetMicro: DEFAULT_GATEWAY_CONFIG.budgetMicro, ...extra,
 });
 mkdirSync(outDir, { recursive: true });
+
+/** per-case results from an arm's app.db (run, and rescore of an existing run) */
+function rowsOf(db: core.Db) {
+  const cases = readFileSync(CASES, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Case);
+  const rows = cases.filter((c) => db.prepare("SELECT 1 FROM content WHERE content_id=?").get(c.case_id)).map((c) => {
+    const reviews = db.prepare("SELECT * FROM review WHERE content_id=? ORDER BY seq").all(c.case_id) as core.ReviewRow[];
+    const r = reviews[reviews.length - 1]!;
+    const rul = core.readRuling(db, r.review_id);
+    const agentRan = (db.prepare("SELECT COUNT(*) AS n FROM tool_slot WHERE review_id=?").get(r.review_id) as { n: number }).n > 0;
+    const tools = ((db.prepare("SELECT GROUP_CONCAT(tool) AS t FROM (SELECT tool FROM tool_slot WHERE review_id=? AND status<>'blocked' ORDER BY created_at)").get(r.review_id) as { t: string | null }).t ?? "").split(",").filter(Boolean);
+    const judgeCalls = (db.prepare("SELECT COUNT(*) AS n FROM judge_call WHERE content_id=? AND confirms_call_id IS NULL").get(c.case_id) as { n: number }).n;
+    // every physical request: fast-path judge calls (bound to the review) + the agent's model calls and tool requests
+    const fastMicro = (db.prepare("SELECT COALESCE(SUM(cost_micro),0) AS m FROM judge_call WHERE content_id=? AND attempt IS NULL").get(c.case_id) as { m: number }).m;
+    const agentMicro = agentRan ? core.spentFromLedger(db, prices, r.review_id).spent : 0;
+    const done = (db.prepare("SELECT MAX(created_at) AS t FROM ruling WHERE review_id=?").get(r.review_id) as { t: number | null }).t ?? r.updated_at;
+    const route = r.suspect_reason !== null || agentRan ? "agent" : r.state === "human_queue" ? "human_direct" : "fastpath";
+    const action = rul?.action ?? null;
+    const sys = ["judge_unavailable", "fastpath_error", "budget_cost", "budget_tools", "deadline", "crash", "lease_lost"].some((x) => (r.release_reason ?? "").startsWith(x));
+    const outcome = r.state === "human_queue"
+      ? (c.expected.disposition === "human" ? "correct_human" : sys ? "system_failure" : "human_instead_of_auto")
+      : action === null ? "system_failure"
+        : c.expected.disposition === "human" ? "auto_when_human_expected"
+          : action === c.expected.disposition ? "correct_auto" : "wrong_auto";
+    return { case_id: c.case_id, kind: c.kind, expected: c.expected.disposition, route, state: r.state, action, rules: rul ? JSON.parse(rul.rule_ids) as string[] : [], release: r.release_reason, suspect: r.suspect_reason,
+      outcome, tools, judge_calls: judgeCalls, cost_micro: fastMicro + agentMicro,
+      // agent latency: from the agent's first model call on this review (its run, not the earlier prepare) to the ruling
+      // or release; fast-path cases have no agent latency (their fast path ran once, in prepare)
+      agent_latency_ms: agentRan ? done - ((db.prepare("SELECT MIN(created_at) AS t FROM model_call WHERE review_id=?").get(r.review_id) as { t: number | null }).t ?? done) : null };
+  });
+  return rows;
+}
 
 if (phase === "prepare") {
   const cases = readFileSync(CASES, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Case).slice(0, arg3 ? Number(arg3) : undefined);
@@ -149,44 +181,31 @@ if (phase === "prepare") {
   await worker.waitIdle();
   worker.stopLoops();
   core.outbox.drain(db, (ev) => void core.consumer.apply(db, ev, now()), now());
-  const cases = readFileSync(CASES, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Case);
-  const rows = cases.filter((c) => db.prepare("SELECT 1 FROM content WHERE content_id=?").get(c.case_id)).map((c) => {
-    const reviews = db.prepare("SELECT * FROM review WHERE content_id=? ORDER BY seq").all(c.case_id) as core.ReviewRow[];
-    const r = reviews[reviews.length - 1]!;
-    const rul = core.readRuling(db, r.review_id);
-    const agentRan = (db.prepare("SELECT COUNT(*) AS n FROM tool_slot WHERE review_id=?").get(r.review_id) as { n: number }).n > 0;
-    const tools = ((db.prepare("SELECT GROUP_CONCAT(tool) AS t FROM (SELECT tool FROM tool_slot WHERE review_id=? AND status<>'blocked' ORDER BY created_at)").get(r.review_id) as { t: string | null }).t ?? "").split(",").filter(Boolean);
-    const judgeCalls = (db.prepare("SELECT COUNT(*) AS n FROM judge_call WHERE content_id=? AND confirms_call_id IS NULL").get(c.case_id) as { n: number }).n;
-    // every physical request: fast-path judge calls (bound to the review) + the agent's model calls and tool requests
-    const fastMicro = (db.prepare("SELECT COALESCE(SUM(cost_micro),0) AS m FROM judge_call WHERE content_id=? AND attempt IS NULL").get(c.case_id) as { m: number }).m;
-    const agentMicro = agentRan ? core.spentFromLedger(db, prices, r.review_id).spent : 0;
-    const done = (db.prepare("SELECT MAX(created_at) AS t FROM ruling WHERE review_id=?").get(r.review_id) as { t: number | null }).t ?? r.updated_at;
-    const route = r.suspect_reason !== null || agentRan ? "agent" : r.state === "human_queue" ? "human_direct" : "fastpath";
-    const action = rul?.action ?? null;
-    const sys = ["judge_unavailable", "fastpath_error", "budget_cost", "budget_tools", "deadline", "crash", "lease_lost"].some((x) => (r.release_reason ?? "").startsWith(x));
-    const outcome = r.state === "human_queue"
-      ? (c.expected.disposition === "human" ? "correct_human" : sys ? "system_failure" : "human_instead_of_auto")
-      : action === null ? "system_failure"
-        : c.expected.disposition === "human" ? "auto_when_human_expected"
-          : action === c.expected.disposition ? "correct_auto" : "wrong_auto";
-    return { case_id: c.case_id, kind: c.kind, expected: c.expected.disposition, route, state: r.state, action, rules: rul ? JSON.parse(rul.rule_ids) as string[] : [], release: r.release_reason, suspect: r.suspect_reason,
-      outcome, tools, judge_calls: judgeCalls, cost_micro: fastMicro + agentMicro, latency_ms: done - (db.prepare("SELECT created_at FROM intake WHERE content_id=?").get(c.case_id) as { created_at: number }).created_at };
-  });
+  const rows = rowsOf(db);
   const m = manifest({ phase, arm, instructions: INSTR[arm], deadlineMode: `queued reviews re-based to run start + ${DEADLINE_MS} ms (${rebased} rows)`, started: new Date(t0).toISOString(), ended: new Date().toISOString(), wallMs: now() - t0,
     reconcile: core.reconcile.final(db).filter((v) => v.check !== "outbox_not_drained").map((v) => v.check) });
   const out = JSON.stringify({ manifest: m, rows }, null, 1);
   writeFileSync(join(outDir, `${arm}.json`), out);
   console.log(JSON.stringify({ arm, cases: rows.length, outputSha: sha(out), outcomes: rows.reduce((a: Record<string, number>, r) => { a[r.outcome] = (a[r.outcome] ?? 0) + 1; return a; }, {}) }));
   await worker.close();
+} else if (phase === "rescore") {
+  // recompute the rows of an existing arm from its app.db (e.g. after a fix in how results are measured); no model calls
+  const arm = arg3 as "A" | "C";
+  const file = join(outDir, `${arm}.json`);
+  const prev = JSON.parse(readFileSync(file, "utf8")) as { manifest: Record<string, unknown> };
+  const db = core.openAppDb(join(outDir, arm, "app.db"), "tool");
+  const out = JSON.stringify({ manifest: { ...prev.manifest, rescoredAt: new Date().toISOString(), rescoreCodeSha: codeSha() }, rows: rowsOf(db) }, null, 1);
+  writeFileSync(file, out);
+  console.log(JSON.stringify({ arm, rescored: true, outputSha: sha(out) }));
 } else if (phase === "report") {
-  type Row = { case_id: string; kind: string; expected: string; route: string; outcome: string; tools: string[]; judge_calls: number; cost_micro: number; latency_ms: number; action: string | null; release: string | null };
+  type Row = { case_id: string; kind: string; expected: string; route: string; outcome: string; tools: string[]; judge_calls: number; cost_micro: number; agent_latency_ms: number | null; action: string | null; release: string | null };
   const load = (arm: string) => JSON.parse(readFileSync(join(outDir, `${arm}.json`), "utf8")) as { manifest: Record<string, unknown>; rows: Row[] };
   const A = load("A"), C = load("C");
   const OUT = ["correct_auto", "correct_human", "human_instead_of_auto", "wrong_auto", "auto_when_human_expected", "system_failure"];
   const sum = (rows: Row[]) => {
     const n = rows.length, agent = rows.filter((r) => r.route === "agent");
     const by = Object.fromEntries(OUT.map((o) => [o, rows.filter((r) => r.outcome === o).length]));
-    const lat = agent.map((r) => r.latency_ms).sort((a, b) => a - b);
+    const lat = agent.map((r) => r.agent_latency_ms ?? 0).sort((a, b) => a - b);
     return { n, ...by, auto_coverage: (by.correct_auto! + by.wrong_auto! + by.auto_when_human_expected!) / Math.max(1, n), agent_cases: agent.length,
       tool_calls_per_agent_case: agent.reduce((a, r) => a + r.tools.length, 0) / Math.max(1, agent.length), judge_calls: rows.reduce((a, r) => a + r.judge_calls, 0),
       cost_yuan: rows.reduce((a, r) => a + r.cost_micro, 0) / 1e6, agent_latency_p50_s: (lat[Math.floor(lat.length / 2)] ?? 0) / 1000, agent_latency_max_s: (lat[lat.length - 1] ?? 0) / 1000 };
