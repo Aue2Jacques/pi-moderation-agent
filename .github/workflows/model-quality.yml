@@ -1,0 +1,20 @@
+# Model-quality check, reported separately from the engineering gate (owner decision 2026-10-08): runs each rule's
+# contract tests through the real policy engine on recorded REAL judge answers (fixtures/contract/). A failure here
+# means the recorded judge did not reach the expected decision (e.g. ABUSE-001 c1/c2 under the uncalibrated 0.90 block
+# line); it stays red and visible, and is not fixed by re-recording or lowering thresholds.
+name: model-quality
+on: [push, pull_request]
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.9.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.3
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm run contract

@@ -1,3 +1,5 @@
+# Engineering gate (owner decision 2026-10-08, stage-1 acceptance): must be green. The real-judge contract — a model
+# quality check — runs in model-quality.yml and is reported separately; it does not gate this workflow.
 name: ci
 on: [push, pull_request]
 jobs:
@@ -17,8 +19,7 @@ jobs:
       - run: pnpm run test:unit
       - run: pnpm run test:harness
       - run: pnpm run redact-scan
-      - run: bash scripts/fetch-fixtures.sh
-      - run: pnpm run contract
+      - run: bash scripts/fetch-fixtures.sh   # fixtures present and not stale: an engineering check
   python:
     runs-on: ubuntu-latest
     defaults:
@@ -29,4 +30,4 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv python install 3.11
       - run: uv sync --frozen
-      - run: uv run pytest -q || test $? -eq 5
+      - run: uv run pytest -q   # tests exist now (python/eval); "no tests ran" is no longer accepted
