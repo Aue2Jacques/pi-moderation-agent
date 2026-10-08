@@ -1,15 +1,15 @@
 """Score an eval-cold.ts output against COLD labels. Uncalibrated (raw) Jev probabilities; never reads text.
-Reports: ABUSE score quality (AUC, best F1), the fast path's three-state outcome with the current thresholds
-(block: mean of primary+copy >= 0.90 and EX-QUOTE not_applies on both; pass: both copies < 0.10 with choice none
-on ABUSE and MARKETING), per COLD fine-grained class, plus calibration error and cost/latency.
-usage: python3 -I scripts/score-cold.py data/cold-eval/test-run.jsonl
+Reports: ABUSE score quality (AUC, best F1), the three-state outcome per COLD fine-grained class, calibration error
+and cost/latency. The three states come from the production policy entry (scripts/decide.ts -> policy.decide) under
+the rules version the run was recorded with; this script no longer re-implements them (dev plan 2026-10-08 §2.3: the
+old Python copy passed items with a missing confirmation and had no marketing block path).
+usage: python3 -I scripts/score-cold.py <eval-cold-output.jsonl> <decide-output.jsonl>
 """
 import json
 import sys
 from collections import Counter, defaultdict
 
 FINE = {0: "其他安全", 1: "攻击个人", 2: "攻击群体", 3: "反偏见(安全)"}
-BLOCK, PASS = 0.90, 0.10
 
 _by_i = {}
 for _l in open(sys.argv[1], encoding="utf-8"):
@@ -77,25 +77,27 @@ ece = sum(n / len(ok) * abs(ps / n - ls / n) for n, ps, ls in bins.values())
 print(f"ECE（10 档）{ece:.4f}；各档 预测均值→实际冒犯比例：" + "  ".join(f"{b / 10:.1f}:{ps / n:.2f}→{ls / n:.2f}(n={n})" for b, (n, ps, ls) in sorted(bins.items())))
 
 
-def state(r):
-    a, b = abuse(r), abuse(r, "copy")
-    ex = [(r[w] or {}).get("ABUSE-001.EX-QUOTE") for w in ("primary", "copy")]
-    mk = [(r[w] or {}).get("MARKETING-003") for w in ("primary", "copy")]
-    if mean_p(r) >= BLOCK and all(e and e["choice"] == "not_applies" for e in ex if e is not None):
-        return "拦截"
-    both_low = lambda xs: all(x and x["p"] < PASS and x["choice"] == "none" for x in xs if x is not None)
-    if both_low([a, b]) and both_low(mk):
-        return "放行"
-    return "疑似"
-
-
-print("\n== 快判三态（当前阈值：拦截 ≥0.90，放行 <0.10 且两份都满足）")
+STATE = {"block": "拦截", "pass": "放行", "suspicious": "疑似"}
+decisions = {}
+for _l in open(sys.argv[2], encoding="utf-8"):
+    if _l.strip():
+        _d = json.loads(_l)
+        decisions[_d["i"]] = _d
+print("\n== 快判三态（policy.decide，按该次运行的规则版本；未校准）")
 by = defaultdict(Counter)
-for r in ok:
-    by["全部"][state(r)] += 1
-    by[f"label={r['label']}"][state(r)] += 1
+routes = Counter()
+for r in rows:
+    d = decisions.get(r["i"])
+    if d is None:
+        continue
+    st = STATE[d["state"]]
+    by["全部"][st] += 1
+    by[f"label={r['label']}"][st] += 1
     if r.get("fine") is not None:
-        by[FINE[r["fine"]]][state(r)] += 1
+        by[FINE[r["fine"]]][st] += 1
+    if d["state"] == "suspicious":
+        routes[d.get("route") or "?"] += 1
+print(f"条目 {len(rows)}，有判定 {sum(by['全部'].values())}；疑似的去向 {dict(routes)}")
 for k in ["全部", "label=0", "label=1", *FINE.values()]:
     if k in by:
         c = by[k]
