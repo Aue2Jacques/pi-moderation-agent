@@ -19,7 +19,11 @@ export const DEFAULT_GATEWAY_CONFIG: GatewayConfig = {
   maxAttempts: 3, intakeMaxAttempts: 3, budgetTools: 12, budgetMicro: 50_000, blacklist: [], rateMaxPerMinute: 30,
 };
 
-export type GatewayDeps = { db: Db; bundle: PolicyBundle; ruleTexts?: Record<string, string>; judge: JudgeClient; prices: PriceTable; calibrator: core.Calibrator; evidenceVer: string; judgeModel: string; cfg: GatewayConfig; now: () => number; gatewayId: string };
+/** Stage ③ rule release: a candidate bundle served to a share of new content. It is used only while a passed gate run
+ *  exists for its exact config (rules, calibration, judge, agent model, prices) and only for contents whose rollout bucket
+ *  is below the candidate's rollout_pct in version_pin (kind 'rules'); pct 0 is the rollback. */
+export type Candidate = { bundle: PolicyBundle; ruleTexts?: Record<string, string>; agentModel: string };
+export type GatewayDeps = { db: Db; bundle: PolicyBundle; ruleTexts?: Record<string, string>; judge: JudgeClient; prices: PriceTable; calibrator: core.Calibrator; evidenceVer: string; judgeModel: string; cfg: GatewayConfig; now: () => number; gatewayId: string; candidate?: Candidate };
 
 /**
  * Metric definitions (round-9 item 8). Window = last 300 s unless stated.
@@ -63,6 +67,17 @@ export class Gateway {
     this.rate = new RateLimit(d.cfg.rateMaxPerMinute, 60_000);
     // round-9 item 12: every bundle version G runs with is stored so W can continue reviews pinned to older versions
     core.storeBundle(d.db, d.bundle, d.ruleTexts ?? {}, d.now());
+    if (d.candidate) core.storeBundle(d.db, d.candidate.bundle, d.candidate.ruleTexts ?? {}, d.now());
+  }
+
+  /** The bundle for one new content: the candidate when its gate passed and the content's bucket is inside the rollout. */
+  bundleFor(contentId: string): PolicyBundle {
+    const c = this.d.candidate;
+    if (!c) return this.d.bundle;
+    const pct = core.rolloutPct(this.d.db, "rules", c.bundle.rulesVer);
+    if (pct <= 0 || core.rolloutBucket(contentId) >= pct) return this.d.bundle;
+    const gate = { rulesVer: c.bundle.rulesVer, calibVer: this.d.calibrator.calibVer, judgeModel: this.d.judgeModel, agentModel: c.agentModel, pricesVer: this.d.prices.pricesVer };
+    return core.gateAllows(this.d.db, gate) ? c.bundle : this.d.bundle;
   }
 
   get pins(): core.Pins {
@@ -92,7 +107,8 @@ export class Gateway {
       await Promise.all(Array.from({ length: Math.min(this.d.cfg.intakeConcurrency, rows.length) }, async () => {
         while (next < rows.length) {
           const id = rows[next++]!;
-          const deps = { db, bundle: this.d.bundle, judge: this.d.judge, prices: this.d.prices, pins: this.pins, judgeModel: this.d.judgeModel, calibrator: this.d.calibrator, blacklist: this.blacklist, index: this.index, rate: this.rate,
+          const bundle = this.bundleFor(id);
+          const deps = { db, bundle, judge: this.d.judge, prices: this.d.prices, pins: { ...this.pins, rulesVer: bundle.rulesVer }, judgeModel: this.d.judgeModel, calibrator: this.d.calibrator, blacklist: this.blacklist, index: this.index, rate: this.rate,
             backpressure: () => this.backpressure(), budgetTools: this.d.cfg.budgetTools, budgetMicro: this.d.cfg.budgetMicro, now: this.d.now };
           try {
             const o = await runFastpath(deps, id);
