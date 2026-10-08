@@ -91,7 +91,11 @@ export function allowedActions(input: AllowedInput): AllowedResult {
 
   const allowed = new Set<Action>();
   const blocking = rules.filter((v) => v.blockSupport);
-  for (const v of blocking) allowed.add(byRule.get(v.ruleId)!.defaultAction);
+  // stage-1 review fix 2: several blocking rules -> only the heaviest action is allowed (takedown > limit), for the
+  // agent's submit check exactly as for the fast path; a lighter action citing a lighter rule is no longer accepted
+  const RANK: Record<Action, number> = { pass: 0, limit: 1, takedown: 2 };
+  const heaviest = blocking.map((v) => byRule.get(v.ruleId)!.defaultAction).sort((a, b) => RANK[b] - RANK[a])[0];
+  if (heaviest) allowed.add(heaviest);
   if (blocking.length === 0 && required.every((c) => covered[c])) allowed.add("pass");
   return { allowed, rules, covered, required, effectiveAnswers };
 }

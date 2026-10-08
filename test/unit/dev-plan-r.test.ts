@@ -178,3 +178,18 @@ describe("closeout fix 1: migrations survive interruption (stage-1 review)", () 
     expect((db.prepare("PRAGMA table_info(content)").all() as { name: string }[]).map((c) => c.name)).toContain("mentions");
   });
 });
+
+describe("closeout fix 2: the heaviest action wins in the core, for the agent too (stage-1 review)", () => {
+  it("abuse and marketing both clearly hit: allowed is {takedown} only; an agent limit citing marketing is refused", async () => {
+    const { ABUSE_EX_Q, BUNDLE, MKT_Q, judge } = await import("../helpers.ts");
+    const db = freshDb();
+    const id = queued(db, "c1").review_id;
+    const r = core.acquireLease(db, id, "w1", CFG, T0);
+    const call = judge(db, { id: "jc-hi", contentId: "c1", reviewId: id, p: 0.99, choice: "violate",
+      extraAnswers: [{ question: ABUSE_EX_Q, p: 0.01, choice: "not_applies" }, { question: MKT_Q, p: 0.99, choice: "violate" }] });
+    const sub = (action: core.Action, ruleIds: string[]) => () => core.submitRuling(db, BUNDLE, { reviewId: id, actor: "agent", attempt: r.attempt, workerId: "w1", action, evidenceIds: [], ruleIds, judgeCallIds: [call], pins: PINS, reason: "r" }, T0 + 1000);
+    expect([...core.allowedActions({ bundle: BUNDLE, scene: "comment", hasImages: false, answers: core.trustedAnswers(db, core.requireReview(db, id), BUNDLE, [call], PINS.evidenceVer).answers }).allowed]).toEqual(["takedown"]);
+    try { sub("limit", ["MARKETING-003"])(); expect.unreachable("limit was accepted"); } catch (e) { expect((e as core.CoreError).code).toBe("E_ACTION_NOT_SUPPORTED"); }
+    expect(sub("takedown", ["ABUSE-001"])()).toMatchObject({ ruling: { action: "takedown" } });
+  });
+});
