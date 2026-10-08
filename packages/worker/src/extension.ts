@@ -102,6 +102,13 @@ async function runJudge(deps: ExtensionDeps, api: ToolExecutionApi, ctx: Context
   const cited = citedEvidence(deps, g.reviewId, evidenceIds);
   const evidenceSet = cited.filter((e) => core.CONTENT_BEARING_EVIDENCE.includes(e.kind as core.EvidenceKind)).map((e) => e.bodySha).sort();
   const questions = questionsFor(g, content.scene, ruleIds);
+  // dev plan R5c: a tool replayed after a crash does not pass through beforeTool, so the cost budget is checked here,
+  // right before a new paid request. Spend already incurred stays billed; only new requests are refused.
+  const sp = await spent(deps, api, g, ctx);
+  if (sp.spent >= g.budgetMicro) {
+    deps.hostLoop.request({ conversationId: String(api.conversationId), kind: "release", reason: "budget_cost" });
+    return err("E_BUDGET_COST", "只能 release 或 dispose");
+  }
   const reqNo = core.openToolRequest(deps.db, g.reviewId, api.callId, deps.now());
   crashAt("J");   // H-22: a replayed tool opens a second tool_request under the same tool_slot
   deps.onExternalCall?.(String(api.conversationId), confirms ? "confirm" : "judge");

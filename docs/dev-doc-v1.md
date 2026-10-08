@@ -751,6 +751,7 @@ durable 事实：`Harness.open()` 不启动调度（scheduler `open()` "Dispatch
   `spent = micro(pi.usage.models) + Σ tool_request.cost_micro(settled) + Σ_{tool_request inflight|unknown} tool_slot.reserved_micro`
   同一逻辑调用内已结算的请求与仍未知的请求各算各的，不会互相覆盖；不依赖 `pi.usage.tools`。
 - `model_call` 每次物理响应一行（T13，2026-10-08 R5a 修订）：任务内失败后重试的每一次响应都记账，结算按全部行求和。与 Pi 的 `pi.usage` 逐条对账尚未实现（见 dev plan R5）。
+- **预算在发起新的付费请求前检查（2026-10-08 R5c）**：崩溃后重放的工具不经过 `beforeTool`，所以 judge / confirm 在打开新的 tool_request 之前再按 §7.5 公式检查一次；已花费 ≥ 预算就不发请求，返回 `E_BUDGET_COST` 并请求宿主以 `budget_cost` 转人工。已经发生的花费照常记账。
 - 软限制执行：`beforeTool`/`guard()` 发现 `spent ≥ budget_micro` → block 非终结工具（E_BUDGET_COST）；`afterTools`/`onYield` 发现超限 → 宿主控制循环 release(budget_cost)。超出量写 `review.over_budget_micro`，评测卡报告分布；不宣称绝对费用上限，也不预设"多一次请求"的上界。
 - `onYield` 续跑：T14 写 review 行。
 - **费用可以后续更新，裁决不能**：S5/S6/S7/S11 时用上面公式写 `used_micro`；只要存在 inflight/unknown 的请求或 pi.usage 可能未定（撤权后在飞请求仍会结束），`cost_status=estimated`；宿主控制循环在会话 idle 后、对账时再用同一公式 T17 更新一次，全部 settled 才标 `settled`。G 的 T6（S7/S11）没有 pi.usage，用 `Σ model_call.first_usage 换算 + Σ tool_request.settled + Σ reserved(inflight|unknown)` 作 estimated 初值，W 的宿主循环随后 T17 修正。

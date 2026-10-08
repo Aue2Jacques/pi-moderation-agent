@@ -198,6 +198,21 @@ describe("crash matrix (child process, SIGKILL)", () => {
     h24(db);
   }, 120_000);
 
+  it("R5c budget exhausted, then a crash inside the judge tool: the replayed tool sends no new request; the review goes to a human (budget_cost)", () => {
+    const { env, db, reviewId } = fresh();
+    const crashed = run({ ...env, WORKER_ID: "w1", CRASH_AT: "J" });
+    expect(crashed.signal).toBe("SIGKILL");
+    const slot = (db.prepare("SELECT call_id FROM tool_slot WHERE review_id=? AND tool='judge'").get(reviewId) as { call_id: string }).call_id;
+    core.tx(db, () => db.prepare("UPDATE review SET budget_micro=1 WHERE review_id=?").run(reviewId));   // the spend so far now exceeds the budget
+    const rec = run({ ...env, WORKER_ID: "w2" });
+    expect(rec.status).toBe(0);
+    const done = last(rec.milestones)!;
+    expect((done["calls"] as string[]).filter((k) => k === "judge" || k === "confirm")).toEqual([]);   // no new external judge request
+    expect(db.prepare("SELECT request_no FROM tool_request WHERE review_id=? AND call_id=?").all(reviewId, slot)).toEqual([{ request_no: 1 }]);
+    expect(core.requireReview(db, reviewId)).toMatchObject({ state: "human_queue", release_reason: "budget_cost" });
+    h24(db);
+  }, 120_000);
+
   it("H-05 CRASH_AT=D (gateway killed after delivery, before ack): redelivery → receipts ≥ 2, applied once; constraints hold", () => {
     const dir = mkdtempSync(join(tmpdir(), "crash-g-"));
     const appDb = join(dir, "app.db");
