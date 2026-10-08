@@ -2,8 +2,14 @@
 Reads public datasets under data/datasets/ (never prints text), samples per a fixed quota table with a fixed seed,
 adds programmatic adversarial variants and injection pairs, dedups (exact + simhash), assigns opaque ids and a
 stratified 50/50 dev/test split. Writes:
-  data/eval/eval20k.jsonl      — with text (gitignored; owner and model use only)
-  eval/manifest-v0.1.jsonl     — no text: id, source, source_ref, slice, group, label_orig, label_bin, split (committable)
+  data/eval/eval20k.jsonl      — with text (gitignored; owner and model use only). Three forms per item (dev plan E5):
+                                 raw = the dataset text as given (source of truth); text = the main model view
+                                 (eval_clean + model_view: placeholders for links, emails, mentions, contact numbers —
+                                 what the runtime judge sees); text_strip = the earlier "strip everything" form, kept as
+                                 the control. Sampling, length window and dedup still use text_strip, so the item set and
+                                 ids are the same as before E5.
+  eval/manifest-v0.1.jsonl     — no text: id, source, source_ref, slice, group, label_orig, label_bin, split, and the
+                                 sha of each form (committable)
 Quotas are set slightly above the targets in docs/eval-dataset-plan.md §4 to absorb dedup (STATE-ToxiCN overlaps
 ToxiCN; danmaku repeats) and screening exclusions. Self-written hard negatives (1,800) are produced separately (scripts/gen-hard-negatives.ts) and merged by this script
 when data/eval/hard-negatives.jsonl exists. Prints counts only.
@@ -22,6 +28,12 @@ import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 from normalize import normalize, ok_length  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "python"))
+from eval.model_view import VERSION as VIEW_VERSION, eval_clean, model_view  # noqa: E402
+
+
+def view(raw):
+    return model_view(eval_clean(raw))
 
 R = "data/datasets"
 rng = random.Random(20261012)
@@ -50,11 +62,12 @@ def add(df, text_col, source, slice_, group, label_bin, n, label_col=None, ref_c
         if opaque(source, ref, slice_) in EXCLUDE:
             excluded.append({"id": opaque(source, ref, slice_), "text": normalize(row[text_col]), "slice": slice_, "source": source})
             continue
-        text = normalize(row[text_col])          # one surface form for all sources (plan §4.1)
+        raw = str(row[text_col])
+        text = normalize(raw)                    # strip form: selection, length window and dedup as before E5
         if not ok_length(text):
             continue
         items.append({
-            "text": text, "source": source, "source_ref": ref,
+            "text": view(raw), "text_strip": text, "raw": raw, "source": source, "source_ref": ref,
             "slice": slice_, "group": group, "label_orig": str(row[label_col]) if label_col else None, "label_bin": label_bin,
         })
         taken += 1
@@ -169,7 +182,8 @@ kinds = ["space", "emoji", "swap", "pinyin"]
 n_adv = 0
 for k, i in enumerate(rng.sample(list(pool.index), min(640, len(pool)))):
     kind = kinds[k % len(kinds)]
-    items.append({"text": perturb(normalize(pool.loc[i, "content"]), kind), "source": "ToxiCN+perturb", "source_ref": f"{i}:{kind}", "slice": f"adversarial/{kind}", "group": "adversarial", "label_orig": "toxic", "label_bin": 1})
+    t = perturb(normalize(pool.loc[i, "content"]), kind)   # perturbed from the strip form; no separate model view
+    items.append({"text": t, "text_strip": t, "raw": str(pool.loc[i, "content"]), "source": "ToxiCN+perturb", "source_ref": f"{i}:{kind}", "slice": f"adversarial/{kind}", "group": "adversarial", "label_orig": "toxic", "label_bin": 1})
     n_adv += 1
 report.append(("adversarial", n_adv))
 
@@ -179,7 +193,8 @@ bases_bad = [it for it in items if it["group"] == "abuse"]
 bases_ok = [it for it in items if it["group"] in ("everyday", "dataset_safe")]
 for base_list, lb, n in ((bases_bad, 1, 200), (bases_ok, 0, 200)):
     for k, b in enumerate(rng.sample(base_list, min(n, len(base_list)))):
-        items.append({"text": b["text"] + " " + INJ[k % len(INJ)], "source": b["source"] + "+injection", "source_ref": f"{b['source_ref']}:inj{k % len(INJ)}",
+        sfx = " " + INJ[k % len(INJ)]
+        items.append({"text": b["text"] + sfx, "text_strip": b["text_strip"] + sfx, "raw": b["raw"] + sfx, "source": b["source"] + "+injection", "source_ref": f"{b['source_ref']}:inj{k % len(INJ)}",
                       "slice": f"injection/{'violating' if lb else 'normal'}", "group": "injection", "label_orig": b["label_orig"], "label_bin": lb,
                       "base": (b["source"], b["source_ref"], b["slice"])})
 report.append(("injection", 400))
@@ -190,7 +205,7 @@ if os.path.exists(hn):
     n = 0
     for l in open(hn, encoding="utf-8"):
         r = json.loads(l)
-        items.append({"text": normalize(r["text"]), "source": "self-written", "source_ref": r.get("ref", ""), "slice": f"hard_negative/{r.get('kind', 'misc')}", "group": "hard_negative", "label_orig": None, "label_bin": 0})
+        items.append({"text": view(r["text"]), "text_strip": normalize(r["text"]), "raw": r["text"], "source": "self-written", "source_ref": r.get("ref", ""), "slice": f"hard_negative/{r.get('kind', 'misc')}", "group": "hard_negative", "label_orig": None, "label_bin": 0})
         n += 1
     report.append(("hard negatives", n))
 else:
@@ -207,10 +222,10 @@ def simhash(t):
     return sum(1 << b for b in range(64) if v[b] > 0)
 seen, sims, kept, dup_exact, dup_near = set(), defaultdict(list), [], 0, 0
 for it in items:
-    key = re.sub(r"\s+", "", it["text"])
+    key = re.sub(r"\s+", "", it["text_strip"])
     if key in seen:
         dup_exact += 1; continue
-    h = simhash(it["text"]); band = [(h >> (16 * k)) & 0xFFFF for k in range(4)]
+    h = simhash(it["text_strip"]); band = [(h >> (16 * k)) & 0xFFFF for k in range(4)]
     near = any(bin(h ^ o).count("1") <= 3 for k, b in enumerate(band) for o in sims[(k, b)])
     if near and it["group"] not in ("adversarial", "injection"):
         dup_near += 1; continue
@@ -237,7 +252,9 @@ os.makedirs("data/eval", exist_ok=True); os.makedirs("eval", exist_ok=True)
 with open("data/eval/eval20k.jsonl", "w", encoding="utf-8") as f, open("eval/manifest-v0.1.jsonl", "w", encoding="utf-8") as m:
     for it in sorted(kept, key=lambda x: x["id"]):
         f.write(json.dumps(it, ensure_ascii=False) + "\n")
-        m.write(json.dumps({k: it[k] for k in ("id", "source", "source_ref", "slice", "group", "label_orig", "label_bin", "split")}, ensure_ascii=False) + "\n")
+        sha = lambda t: hashlib.sha256(t.encode()).hexdigest()[:16]
+        m.write(json.dumps({**{k: it[k] for k in ("id", "source", "source_ref", "slice", "group", "label_orig", "label_bin", "split")},
+                            "view": VIEW_VERSION, "text_sha": sha(it["text"]), "strip_sha": sha(it["text_strip"]), "raw_sha": sha(it["raw"])}, ensure_ascii=False) + "\n")
 
 with open("data/eval/excluded.jsonl", "w", encoding="utf-8") as f:
     for it in excluded:
@@ -246,4 +263,5 @@ with open("data/eval/excluded.jsonl", "w", encoding="utf-8") as f:
 print(json.dumps({"sampled": dict(report)}, ensure_ascii=False, indent=1, default=str))
 print(json.dumps({"total_before_dedup": len(items), "dup_exact": dup_exact, "dup_near": dup_near, "kept": len(kept),
                   "by_label": dict(Counter(it["label_bin"] for it in kept)), "by_group": dict(Counter(it["group"] for it in kept)),
-                  "by_split": dict(Counter(it["split"] for it in kept))}, ensure_ascii=False, indent=1))
+                  "by_split": dict(Counter(it["split"] for it in kept)),
+                  "view": VIEW_VERSION, "view_differs_from_strip": dict(Counter(it["group"] for it in kept if it["text"] != it["text_strip"]))}, ensure_ascii=False, indent=1))
