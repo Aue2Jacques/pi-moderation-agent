@@ -1,0 +1,64 @@
+# Self-written hard negatives for the 20k evaluation set (scripts/gen-hard-negatives.ts).
+# Each kind is content an over-eager judge tends to block but the platform allows (docs/policy/abuse-prompt-v2-draft.md:
+# open discussion; criticism of conduct, works and institutions is allowed). check = which verifier prompt applies.
+# No kind asks the model to write abusive words (plan §2): quoting abuse to condemn it comes from HateCheck / ToxiCN instead.
+generator: |
+  你在帮一个中文社区平台构造审核评测数据。请写 {{N}} 条真实网友风格的中文评论，类型是：{{KIND}}。
+  要求：
+  - 每条都必须是平台允许发布的正常内容，但容易被过于严格的审核误判为违规；
+  - 场景尽量分散，这一批围绕：{{TOPICS}}；
+  - 长短不一（5 到 80 字），口语化，可以有网络用语、错别字、表情，不要每条都同一个句式；
+  - 不要编号，不要解释。
+  只输出一个 JSON 数组，元素是字符串。
+topics:
+  - 电影、剧集、综艺、明星作品
+  - 体育比赛、电竞、游戏对局
+  - 外卖、餐馆、网购、快递
+  - 学校、考试、导师、同学
+  - 公司、上班、老板、同事
+  - 城市、地域、方言、美食
+  - 新闻事件、政策、公共服务
+  - 家庭、婚恋、育儿、宠物
+kinds:
+  criticize_conduct:
+    desc: 激烈批评某个人的言行、作品或表现，但只对事不对人，不骂人本身
+    check: abuse
+  criticize_institution:
+    desc: 尖锐批评机构、公司、学校、平台或某项政策
+    check: abuse
+  counter_bias:
+    desc: 反对或纠正针对地域、性别、民族、职业等人群的偏见和歧视
+    check: abuse
+  news_facts:
+    desc: 客观陈述或讨论新闻事实，内容涉及犯罪、暴力、事故、死亡等字眼，但只是在说事，不煽动、不攻击任何人群
+    check: abuse
+  self_deprecation:
+    desc: 自嘲、自黑，说自己菜、丑、穷、笨
+    check: abuse
+  untargeted_profanity:
+    desc: 带粗口或语气词表达惊讶、兴奋、无奈，但没有骂任何人
+    check: abuse
+  group_neutral:
+    desc: 中性地讨论不同地域、性别、年龄、职业人群的差异、习惯或经历，不带贬低
+    check: abuse
+  harsh_review:
+    desc: 对商品、店铺、服务给出很差的评价和强烈不满，但没有人身攻击
+    check: abuse
+  heated_debate:
+    desc: 观点争论，语气很冲，反驳对方的观点和论据，但不骂对方本人
+    check: abuse
+  benign_trigger_words:
+    desc: 含有"死""杀""猪""狗""黑""滚"等常被关键词误伤的字词，但语义完全无害（如"笑死""杀青""遛狗""黑色外套"）
+    check: abuse
+  banter_praise:
+    desc: 用反话、夸张或调侃的方式夸人、夸作品，表面像损实际是夸
+    check: abuse
+  ordinary_recommendation:
+    desc: 真诚分享和推荐自己用过的东西、去过的店，或正常的个人求助、二手转让、活动通知，不是广告引流或诈骗
+    check: spam
+spam_check: |
+  判断下面这条用户评论是否属于平台禁止的营销内容：广告引流（留联系方式、拉人进群、导流到站外）、刷单兼职、诈骗、黑产服务、违规推广。
+  正常的个人分享、推荐、求助、转让、活动通知不算。
+  只输出一个 JSON 对象：{"decision": "违规" 或 "允许" 或 "不确定", "reason": "一句话"}
+  评论：
+  {{TEXT}}

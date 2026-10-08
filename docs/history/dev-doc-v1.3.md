@@ -1,6 +1,6 @@
 # 开发文档 v1.3：pi-moderation-agent
 
-日期：2026-10-09。基于冻结的项目文档 `docs/project-doc-v2.md` v2.3。v1.3 并入第七轮自审（`docs/reviews/round-7-self-review.md`，三个子 agent 分角度 + 本人复核，基于 e0ea08c）的全部 32 条；逐项处理见附录 W。第六轮、第五轮的处理记录在附录 X、Y。历史版本在 `docs/history/`（v1.0、v1.1、v1.2）。**本文自包含。**
+日期：2026-10-07。基于冻结的项目文档 `docs/project-doc-v2.md` v2.3。v1.3 并入第七轮自审（`docs/reviews/round-7-self-review.md`，三个子 agent 分角度 + 本人复核，基于 e0ea08c）的全部 32 条；逐项处理见附录 W。第六轮、第五轮的处理记录在附录 X、Y。历史版本在 `docs/history/`（v1.0、v1.1、v1.2）。**本文自包含。**
 
 写法约定：
 - 与 v2.3 冲突时以 v2.3 为准，并在附录 Z 记录。

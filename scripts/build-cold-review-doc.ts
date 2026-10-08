@@ -12,12 +12,12 @@ for (const line of (() => { try { return readFileSync(".env", "utf8").split("\n"
   if (m && !process.env[m[1]!]) process.env[m[1]!] = m[2]!.replace(/\s+#.*$/, "").trim();
 }
 const env = (k: string, d?: string): string => { const v = process.env[k] ?? d; if (v === undefined) throw new Error(`missing ${k}`); return v; };
-const OUT = process.argv[2] ?? "data/review/cold-examples-2026-10-10.md";
+const OUT = process.argv[2] ?? "data/review/cold-examples-2026-10-07.md";
 const MODEL = env("SENSITIVE_CHECK_MODEL", "glm-5.3-flash");
 const BASE = env("RELAY_BASE_URL").replace(/\/+$/, "");
 const KEY = env("RELAY_API_KEY");
 
-// GitHub line numbers of COLD test.csv (= position + 2), grouped as in reports/2026-10-10-jev-on-cold-test.md
+// GitHub line numbers of COLD test.csv (= position + 2), grouped as in reports/2026-10-07-jev-on-cold-test.md
 const GROUPS: [string, string, number[]][] = [
   ["1a", "Jev 放行，但 COLD 和 glm 都说冒犯（群体攻击）——Jev 真漏的候选", [998, 2661, 3218, 4756]],
   ["1b", "Jev 放行，但 COLD 和 glm 都说冒犯（贬低性刻板印象）——Jev 真漏的候选", [74, 402, 2652, 3393]],
@@ -46,7 +46,7 @@ await Promise.all(Array.from({ length: 16 }, async () => {
 }));
 
 const md: string[] = [
-  "# COLD 例子阅读文档（2026-10-10）",
+  "# COLD 例子阅读文档（2026-10-07）",
   "",
   "给负责人看的。含 COLD 原文，不进 git。开发者没有读过这份文档。拆解模型见文末。",
   "",

@@ -25,7 +25,7 @@ export type ScenesYaml = Record<Scene, {
 /**
  * The text a judge sees = the YAML question + the definition it must apply (rule text with its exclusions; for an
  * exception, the exception text and the rule it belongs to). Without the definition the judge only sees a one-line
- * question and cannot know the rule's boundaries (round-9 follow-up, 2026-10-09). The sha covers the full text, so
+ * question and cannot know the rule's boundaries (round-9 follow-up, 2026-10-07). The sha covers the full text, so
  * editing a rule's definition changes its question sha and invalidates recorded fixtures and calibration buckets.
  */
 export function composeInstructions(q: QuestionYaml, definition?: { rule?: string; exception?: string }): string {

@@ -1,5 +1,5 @@
 # Contract-test fixtures (dev-doc §12.4). Each ref points at a self-written sentence in fixtures/benign/sentences.json
-# (no dataset text). Assignments were fixed BEFORE recording (2026-10-09, round-9 item 9) and are not changed to make
+# (no dataset text). Assignments were fixed BEFORE recording (2026-10-07, round-9 item 9) and are not changed to make
 # results pass. The recorded judge answers live in fixtures/contract/<ref>.json (scripts/record-contract.ts, real Jev).
 # required: true → a missing or stale recording fails CI.
 refs:

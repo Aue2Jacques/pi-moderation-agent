@@ -1,5 +1,7 @@
 # Pi 二开选题调研：Pi 的现状与缺口、行业 harness 进展、招聘匹配（2026-10-06）
 
+> **写法说明（2026-10-08 起统一）**：本文只记录做了什么、为什么这么做、测得的数字，以及考虑不够全面的地方。文中实验数字和看法均**仅供参考**（样本、设置、标注方式都有限），不作为结论；结论由审查方判断。日期按美国纽约时间（America/New_York）。
+
 **结论**：推荐做"**执行和控制分离、崩溃后能接着跑**"的远程沙箱执行层。agent 进程被 kill、断网、重启以后，正在 Modal 沙箱里跑的命令不中断、不重复执行。重启后去沙箱里把真实结果找回来，而不是返回 `interrupted`。交付形式是 pi-durable 的一个 `ExecutionEnv` 实现，加上一个崩溃后可安全重放的 bash 工具，用 Pi 官方的 conformance 套件和故障注入实验来证明。
 
 > 口径：我克隆了 `earendil-works/pi`（HEAD 2026-10-06，ddaa0a0）和 `harbor-framework/harbor`（2026-10-05）直接读源码；issue 和 discussion 用 `gh` 拉取；其他产品看的是 GitHub release 或官方 changelog。标"未核实"的是只看到搜索摘要、没打开原文；标"估计"的是推算。
@@ -129,8 +131,7 @@ OpenCode 本期主要是修复：ACP 会话恢复（1.18.31）和会话身份 he
 
 ---
 
-## 5. 推荐方案
-
+## 5. 当时推荐的方案（仅供参考）
 **做什么**：做一个 package，名字可以叫 `pi-env-modal`，包含两部分。
 
 1. **`ModalExecutionEnv`**：实现 durable 的 `ExecutionEnv` 接口（FileSystem 加 Shell）。命令在 Modal 沙箱里以 detached 方式运行，pid、输出和退出码写进沙箱里的日志目录。Modal JS SDK 0.11.0（2026-09-29）里有 `Sandbox.fromId()`，worker 重启后可以重新连上同一个沙箱，这一点我已在它的 d.ts 里确认。

@@ -22,7 +22,7 @@ export type EffectiveGroup = {
   inconsistent: boolean;
   /**
    * mean p of the group's answers (only meaningful when !inconsistent). Same input, same model: the judge's answers
-   * still differ by up to ~0.04 (50-run probe 2026-10-09), so a verdict must not depend on which copy happens to be latest.
+   * still differ by up to ~0.04 (50-run probe 2026-10-07), so a verdict must not depend on which copy happens to be latest.
    */
   p: number;
   choice: string;

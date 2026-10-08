@@ -25,3 +25,5 @@ dist-types/
 __pycache__/
 run/
 logs/
+# the eval manifest holds ids and labels only (no text), so it is committed
+!eval/*.jsonl

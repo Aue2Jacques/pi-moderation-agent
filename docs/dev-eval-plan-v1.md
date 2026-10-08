@@ -1,5 +1,7 @@
 # 审核智能体系统：开发与评测方案评审（2026-10-07）
 
+> **写法说明（2026-10-08 起统一）**：本文只记录做了什么、为什么这么做、测得的数字，以及考虑不够全面的地方。文中实验数字和看法均**仅供参考**（样本、设置、标注方式都有限），不作为结论；结论由审查方判断。日期按美国纽约时间（America/New_York）。
+
 **结论**：方案可行，但需求文档里有 4 处默认前提和源码对不上，开工前要先改。
 
 1. **pi-durable 不能运行 coding-agent 的扩展。** `registerTool`、`tool_call`、`registerVirtualModel`、`resources_discover` 都用不上（#10386 仍 open；`coding-agent/src/experimental/durable/README.md:66` 写明 "Not here: … extensions"）。审核 agent 要用 durable 自己的那套 `defineExtension/defineTool/hook` 来写。

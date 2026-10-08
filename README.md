@@ -1,10 +1,14 @@
 # pi-moderation-agent
 
+> **写法说明（2026-10-08 起统一）**：本文只记录做了什么、为什么这么做、测得的数字，以及考虑不够全面的地方。文中实验数字和看法均**仅供参考**（样本、设置、标注方式都有限），不作为结论；结论由审查方判断。日期按美国纽约时间（America/New_York）。
+
 在 [Pi](https://github.com/earendil-works/pi) 之上二开的内容审核 agent 系统（求职项目，面向 Agent / Harness 开发岗）。
 
 **技术中心一句话**：让模型决定需要查什么，但不让模型决定自己拥有什么权限、采用哪套规则、哪些结果可以提交。
 
-**系统位置一句话**：判官（Jev）是机审与大模型审核之间的分流阀——规则写成问题、输出可校准概率，决定谁直接处置、谁进 Pi 上的 agent 查证据；各家主流中间层做法与差距见 [reports/2026-10-09-industry-middle-layer-vs-jev.md](reports/2026-10-09-industry-middle-layer-vs-jev.md)。
+**系统位置一句话**：判官（Jev）是机审与大模型审核之间的分流阀——规则写成问题、输出可校准概率，决定谁直接处置、谁进 Pi 上的 agent 查证据；各家主流中间层做法与差距见 [reports/2026-10-07-industry-middle-layer-vs-jev.md](reports/2026-10-07-industry-middle-layer-vs-jev.md)。
+
+**日期约定**：仓库里的日期一律按美国纽约时间（America/New_York）。2026-10-08 起统一；此前写超前的日期（10-09 到 10-11）已按 git 提交时间改回实际日期（10-07、10-08）。
 
 ## 现在在哪一步
 
@@ -28,9 +32,9 @@
 
 测试：unit 65、harness 39（崩溃用例 7 个 SIGKILL + 1 个无崩溃基线；gateway 7 个；第九轮 12 个）。`pnpm run check` 同时类型检查 packages、test、scripts。
 
-**下一步计划（草案，待负责人确认）**：[docs/dev-plan-2026-10-10.md](docs/dev-plan-2026-10-10.md) 合并了第十轮（整仓审阅，12 条代码问题，3 条 P1）和第十一轮（方向：主线收回到"agent 能否把疑似查清楚"）两份审查。顺序是：先修明确缺口，再统一裁决语义并按疑似原因分流，然后建 60–100 条带标签案例池、简化 agent 接口，最后跑 A/C 对比。计划第 7 节列了 5 个需要负责人拍板的决定。
+**下一步计划（草案，待负责人确认）**：[docs/dev-plan-2026-10-07.md](docs/dev-plan-2026-10-07.md) 合并了第十轮（整仓审阅，12 条代码问题，3 条 P1）和第十一轮（方向：主线收回到"agent 能否把疑似查清楚"）两份审查。顺序是：先修明确缺口，再统一裁决语义并按疑似原因分流，然后建 60–100 条带标签案例池、简化 agent 接口，最后跑 A/C 对比。计划第 7 节列了 5 个需要负责人拍板的决定。
 
-### 已知问题与待决（2026-10-09，客观记录，未处理）
+### 已知问题与待决（2026-10-07，客观记录，未处理）
 
 都已写进开发文档附录 U，等外部审查后再定怎么改：
 
@@ -50,7 +54,11 @@
 | [docs/project-doc-v2.md](docs/project-doc-v2.md) | **项目文档（权威）**：目标、业务、范围与分类体系、企业级属性、架构、模块设计、Pi 接口映射、数据、评测、演示、计划、风险；附录 C/D/E 是三轮审查的修订记录 |
 | [docs/dev-doc-v1.md](docs/dev-doc-v1.md) | **开发文档 v1.5**（v1.4 + 第九轮验收审查处理，附录 U；§14.1 四态表）：仓库结构、app.db DDL、状态转换表、事务边界 T1–T16、有效判官结果与 allowedActions、错误码、接口、租约/恢复/预算、Pi 绑定写法（按 pi-durable 1.0.4 的 d.ts 核对）、评测执行协议、用例目录与 CI、部署配置、分阶段开工与停止条件；附录 W 是 v2.3 契约覆盖表，附录 V/X 是第八、七轮处理记录；旧版在 docs/history/ |
 | [docs/reviews/](docs/reviews/) | 十一轮审查原文：可行性、设计、harness/agent 角度、基于 GitHub 的终审、开发文档 v1.0 审查、v1.1 审查、v1.2 自审、v1.3 审查、阶段 1–4 验收审查、整仓审阅（bbe6340）、方向与优先级（bbe6340） |
-| [docs/dev-plan-2026-10-10.md](docs/dev-plan-2026-10-10.md) | **当前开发计划（草案）**：合并第十、十一轮审查；修复清单、裁决语义真值表、疑似分流、案例池、agent 接口、A/C 对比、待拍板事项 |
+| [docs/methods-for-review-2026-10-08.md](docs/methods-for-review-2026-10-08.md) | **给审查用的做法说明**：参考的标准规范、数据组成、清洗、标注标准试标、切分与评测协议、图片审核计划；每部分写做法、理由、数据（仅供参考）和不足 |
+| [docs/project-status-2026-10-08.md](docs/project-status-2026-10-08.md) | 全盘状态汇总：七条线各在哪一步、待拍板、已定事项 |
+| [docs/eval-dataset-plan.md](docs/eval-dataset-plan.md) | 2 万条综合评测集方案与清洗记录 |
+| [docs/policy/abuse-standard-v3.md](docs/policy/abuse-standard-v3.md) | 辱骂类统一标注标准 v3 与试标数据 |
+| [docs/dev-plan-2026-10-07.md](docs/dev-plan-2026-10-07.md) | **当前开发计划（草案）**：合并第十、十一轮审查；修复清单、裁决语义真值表、疑似分流、案例池、agent 接口、A/C 对比、待拍板事项 |
 | [docs/requirements-v1.md](docs/requirements-v1.md) | 需求文档 v1（历史，第 12–15 节记录了早期修订） |
 | [docs/dev-eval-plan-v1.md](docs/dev-eval-plan-v1.md) | 开发与评测方案 v1（历史；Pi 源码映射细节仍有参考价值） |
 | [docs/confirmed-items-2026-10-07.md](docs/confirmed-items-2026-10-07.md) | 早期 63 条确认事项清单（历史） |

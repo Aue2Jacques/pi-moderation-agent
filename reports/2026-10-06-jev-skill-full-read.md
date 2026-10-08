@@ -1,5 +1,7 @@
 # wuyoscar/jev-skill 全文精读（2026-10-06）
 
+> **写法说明（2026-10-08 起统一）**：本文只记录做了什么、为什么这么做、测得的数字，以及考虑不够全面的地方。文中实验数字和看法均**仅供参考**（样本、设置、标注方式都有限），不作为结论；结论由审查方判断。日期按美国纽约时间（America/New_York）。
+
 读了：README 全部 108 个用例、5 个 SKILL.md、references 下 22 个文件（community 证据账本 R01–R12/P01–P21/N01–N05、implementation-patterns 22 个模式、agent-recipes 28 条、human-recipes 28 条、intake 76 条、x-intake 29 条、pitfalls、calibration）、evals 全部结果、三份 update 日志。
 
 ## 一、它真正是什么

@@ -1,5 +1,7 @@
 # Pi × 判断层（Jev 及开源替代）调研（2026-10-06 实测）
 
+> **写法说明（2026-10-08 起统一）**：本文只记录做了什么、为什么这么做、测得的数字，以及考虑不够全面的地方。文中实验数字和看法均**仅供参考**（样本、设置、标注方式都有限），不作为结论；结论由审查方判断。日期按美国纽约时间（America/New_York）。
+
 ## 背景
 - TypeSafe Jev 于 2026-09-15 发布：决策专用模型，输入 JSON 状态 + 带类型的问题（choice / score / noul 即 yes-no），一次前向输出每个选项的概率，不生成文字。需要申请权限。
 - 发布一周内约 30 个开源复刻；到 9-22 GitHub 上有 2,170 个公开 Jev 项目（arXiv 2609.30216《Jev in the Wild》）。
@@ -48,7 +50,7 @@
 - JevAdvBench（arXiv 2609.31142）：812 题 + 9,744 攻击，追加一句观点就有 12.1% 翻转率。
 - 目录：[awesome-decision-models](https://github.com/AnotiaWang/awesome-decision-models) 615★、[awesome-jev](https://github.com/yibie/awesome-jev) 2.2k★、jevoss / openkev（测任何说 Jev 协议的模型）。
 
-## 判断
+## 当时的看法（仅供参考）
 1. 判断层是 Pi 生态里最新、最空的一块：所有项目不到三周，全部绑 Jev 云端，几乎没有数字。
 2. 不用 Jev 完全可行：Pi 原生支持 llama.cpp 决策模型；中转站上 qwen3.8-flash / glm-5.3 有 logprobs，可照 notjev 做 API 判官；开源 4B 级模型在 JevBench 上已经不输 Jev。
 3. 没人回答的问题：在同一模型同一批任务上，加判断层（谁来判、判哪几个点、阈值多少）对通过率、成本、危险动作各有多大影响；开源判官替换 Jev 掉多少。这正是"机制 + 双闸门"形态。

@@ -36,7 +36,7 @@ export function jevModel(models: Models, modelId = "jev-latest"): ClassifierMode
 
 /**
  * Deterministic option-order shuffle for the confirmation copy. Guaranteed to change the order when there are ≥ 2 options:
- * a seeded Fisher–Yates can return the identity permutation (seed 17 did, for every 3-option question, until 2026-10-09),
+ * a seeded Fisher–Yates can return the identity permutation (seed 17 did, for every 3-option question, until 2026-10-07),
  * in which case the order is rotated by one.
  */
 export function shuffleCriteria(criteria: Record<string, string>, seed: number): Record<string, string> {

@@ -1,5 +1,7 @@
 # Pi 二开生态汇总（2026-10-06 实测）
 
+> **写法说明（2026-10-08 起统一）**：本文只记录做了什么、为什么这么做、测得的数字，以及考虑不够全面的地方。文中实验数字和看法均**仅供参考**（样本、设置、标注方式都有限），不作为结论；结论由审查方判断。日期按美国纽约时间（America/New_York）。
+
 数据来源：GitHub API（star/语言/更新日期为 2026-10-06 当天实测）、各仓库 README、pi.dev 包目录、arXiv/博客原文。标"估计"的是推算。
 
 ## 规模
@@ -73,8 +75,7 @@ oh-my-pi 34,450★（Stencil Labs 的 fork，8 万行 Rust 核心、LSP/DAP）�
 
 SaladDay/pi-from-scratch 1,265★（600 行手写 nano-pi）、cellinlab/how-pi-agent-works 932★、ZhangHanDong/pi-book 336★、antinomie-lab/pi-book 426★、xiaomoBoy/pi-bluebook 301★、ranxi2001/zero2Agent 673★（**面向大厂 Agent 研发岗求职的教程，有 Pi 专章 + 807 道面试题**）、weijiafu14/pi2dsh 212★（Pi 扩展原样跑在 DeepSeek Harness 上）。
 
-## 判断
-
+## 当时的看法（仅供参考）
 1. 同行会停下来看的，全是"一个机制 + 一组数字"：SoL-Pi、little-coder、pi-warden、FrontierHarness。纯功能补充（子 agent、权限、沙箱、UI、通知）数量最多、最没人看。
 2. 已被做满的方向：子 agent、压缩/记忆、权限/沙箱、桌面/Web 前端。
 3. 相对空的方向：判断层只有 3 个项目且都很新（9 月）；"harness 在不同模型上的稳定性/配对"只有 FrontierHarness 一个数据点；SoL-Pi 自己承认只在一个模型上搜过。

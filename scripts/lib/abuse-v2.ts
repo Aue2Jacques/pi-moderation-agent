@@ -10,10 +10,12 @@ const SYSTEM = "你是中文内容审核员。只输出一个 JSON 对象，不�
 export type V2Answer = { decision: string; rule: string; target: string; basis: string; confidence: number; reason: string };
 export type ChatCfg = { model: string; base: string; key: string };
 
-/** Model-specific request knobs on the relay: max_tokens = official max; thinking off where the model allows it. */
+/** Model-specific request knobs on the relay: max_tokens = official max; thinking off where the model allows it.
+ *  (Requests also send stream:false: the relay answers gemini with SSE unless told otherwise.) */
 function knobs(model: string): Record<string, unknown> {
   if (model.startsWith("deepseek")) return { max_tokens: 393216, thinking: { type: "disabled" } };
   if (model.startsWith("qwen")) return { max_tokens: 131072, enable_thinking: false };
+  if (model.startsWith("gemini")) return { max_tokens: 65536 };
   return { max_tokens: 131072 };
 }
 
@@ -23,7 +25,7 @@ export async function judgeV2(cfg: ChatCfg, text: string): Promise<V2Answer | nu
     try {
       const res = await fetch(`${cfg.base}/chat/completions`, {
         method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${cfg.key}` },
-        body: JSON.stringify({ model: cfg.model, ...knobs(cfg.model), messages: [{ role: "system", content: SYSTEM }, { role: "user", content: user }] }),
+        body: JSON.stringify({ model: cfg.model, stream: false, ...knobs(cfg.model), messages: [{ role: "system", content: SYSTEM }, { role: "user", content: user }] }),
         signal: AbortSignal.timeout(120_000),
       });
       if (!res.ok) continue;
