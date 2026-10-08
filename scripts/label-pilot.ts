@@ -194,7 +194,7 @@ if (phase === "sample") {
   process.exit(0);
 }
 const std = STANDARDS[stdId ?? ""];
-if (!std || !idsPath) throw new Error("usage: label-pilot.ts run|score|sample <abuse-v4|abuse-v4.1|abuse-v4.2|marketing-v1|guard-v1> <ids.txt> [concurrency]");
+if (!std || !idsPath) throw new Error("usage: label-pilot.ts run|score|sample <abuse-v4|abuse-v4.1|abuse-v4.2|abuse-v4.3|marketing-v1|guard-v1> <ids.txt> [concurrency]");
 // LABEL_PILOT_MODELS=gemini-3.8-flash runs only the tie-break model (run phase); score always pairs the two labelers
 const MODELS = ["deepseek-v4.1-flash", "qwen3.8-flash"];
 const RUN_MODELS = process.env.LABEL_PILOT_MODELS?.split(",") ?? MODELS;

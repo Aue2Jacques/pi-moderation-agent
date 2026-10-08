@@ -37,6 +37,10 @@ export const ABUSE_V41: Standard = { ...ABUSE_V4, id: "abuse-v4.1", ...load("lab
  *  (docs/policy/labeling-standard-v4.md §6). v4.1's rewording is not carried over. */
 export const ABUSE_V42: Standard = { ...ABUSE_V4, id: "abuse-v4.2", ...load("label-abuse-v4.2.txt") };
 
+/** ABUSE-001 v4.3: v4.2 plus one glossary line — cursing someone's parents / family (euphemisms, homophones). Read-through
+ *  of gemini's tie-break "allow" labels found this one blind spot shared by qwen and gemini (labeling-standard-v4 §5e). */
+export const ABUSE_V43: Standard = { ...ABUSE_V4, id: "abuse-v4.3", ...load("label-abuse-v4.3.txt") };
+
 /** MARKETING-003 (label-marketing-v1): contact / off-platform lead (m1) or black-market / fraud (m3) -> violate;
  *  selling or soliciting (m2) -> violate unless it is also called a natural recommendation (m4), which contradicts it
  *  -> uncertain; otherwise any "不确定" on m1–m3 -> uncertain; else allow. */
@@ -56,7 +60,7 @@ export const GUARD_V1: Standard = {
   label: (a) => (yes(a, "g1") ? "violate" : unsure(a, "g1") ? "uncertain" : "allow"),
 };
 
-export const STANDARDS: Record<string, Standard> = { [ABUSE_V4.id]: ABUSE_V4, [ABUSE_V41.id]: ABUSE_V41, [ABUSE_V42.id]: ABUSE_V42, [MARKETING_V1.id]: MARKETING_V1, [GUARD_V1.id]: GUARD_V1 };
+export const STANDARDS: Record<string, Standard> = { [ABUSE_V4.id]: ABUSE_V4, [ABUSE_V41.id]: ABUSE_V41, [ABUSE_V42.id]: ABUSE_V42, [ABUSE_V43.id]: ABUSE_V43, [MARKETING_V1.id]: MARKETING_V1, [GUARD_V1.id]: GUARD_V1 };
 
 /** Read a model's JSON answer for a standard: the questions it answered and the ones it left out; undefined when there
  *  is no JSON object or any answer is not one of 是 / 否 / 不确定. */
@@ -93,11 +97,12 @@ export function majority(labels: readonly Label[]): Label {
   return top && top[1] * 2 > labels.length ? top[0] : "uncertain";
 }
 
-/** Frozen labeling setup (owner, 2026-10-08): ABUSE-001 is labeled with abuse-v4.2; each of the two labeling models
+/** Frozen labeling setup (owner, 2026-10-08): ABUSE-001 is labeled with abuse-v4.3 (v4.2 was frozen first and replaced
+ *  the same day by v4.3 — one glossary line; v4.2 labels are kept apart, never mixed); each of the two labeling models
  *  answers 3 times and keeps its majority; where the two disagree, gemini-3.8-flash (also 3 answers, majority) casts a
  *  third vote; what is still split goes to the owner. Changing the prompt makes a new version, never this one. */
 export const FROZEN_ABUSE = {
-  standard: "abuse-v4.2", promptSha: "64910d875ddd", votesPerModel: 3,
+  standard: "abuse-v4.3", promptSha: "93af2764de5d", votesPerModel: 3,
   models: ["deepseek-v4.1-flash", "qwen3.8-flash"], tiebreak: "gemini-3.8-flash",
 } as const;
 
