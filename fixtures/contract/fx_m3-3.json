@@ -4,76 +4,59 @@
  "source": "run_batch",
  "index": 2,
  "text_sha": "ec36b5900d6f774038cba1b936751bb4a2d61bd14c9d72cee56db7aa0c8904b2",
- "recorded_at": "2026-10-08T00:58:27.201Z",
+ "recorded_at": "2026-10-08T10:50:12.916Z",
  "judge": {
   "provider": "jev",
   "api": "typesafe-system-one",
   "model": "jev-latest"
  },
- "rules_ver": "rules@172fd34d27d6",
+ "rules_ver": "rules@174a6f7f9b55",
  "questions": {
-  "ABUSE-001/rule": "03dac9ce57fce4101eefa508723d36d8cefe339156f1aeda2572538f4d87986f",
-  "ABUSE-001/exception/EX-QUOTE": "f600ec8c616015ed360fc01b7a351f31e1fe07f1ec9a59ba9ab796beb05e4374",
+  "ABUSE-001/rule": "5bdb94c6581c79389066bfa60ceb4bb67d696d5e92a00c90dba73f1eba881fb1",
   "MARKETING-003/rule": "57de0a21e4cb9508fb576dc51e851548670ea346c3be98597c31fda2e1c3b96f"
  },
  "primary": {
-  "03dac9ce57fce4101eefa508723d36d8cefe339156f1aeda2572538f4d87986f": {
+  "5bdb94c6581c79389066bfa60ceb4bb67d696d5e92a00c90dba73f1eba881fb1": {
    "choice": "none",
    "probs": {
     "violate": 0,
-    "unknown": 0,
-    "none": 1
-   }
-  },
-  "f600ec8c616015ed360fc01b7a351f31e1fe07f1ec9a59ba9ab796beb05e4374": {
-   "choice": "not_applies",
-   "probs": {
-    "unknown": 0.03,
-    "not_applies": 0.97,
-    "applies": 0
+    "none": 1,
+    "unknown": 0
    }
   },
   "57de0a21e4cb9508fb576dc51e851548670ea346c3be98597c31fda2e1c3b96f": {
    "choice": "none",
    "probs": {
     "violate": 0,
-    "unknown": 0,
-    "none": 1
+    "none": 1,
+    "unknown": 0
    }
   }
  },
  "variant": {
   "seed": 17,
   "answers": {
-   "03dac9ce57fce4101eefa508723d36d8cefe339156f1aeda2572538f4d87986f": {
+   "5bdb94c6581c79389066bfa60ceb4bb67d696d5e92a00c90dba73f1eba881fb1": {
     "choice": "none",
     "probs": {
      "violate": 0,
-     "unknown": 0,
-     "none": 1
-    }
-   },
-   "f600ec8c616015ed360fc01b7a351f31e1fe07f1ec9a59ba9ab796beb05e4374": {
-    "choice": "not_applies",
-    "probs": {
-     "unknown": 0.07,
-     "not_applies": 0.93,
-     "applies": 0
+     "none": 1,
+     "unknown": 0
     }
    },
    "57de0a21e4cb9508fb576dc51e851548670ea346c3be98597c31fda2e1c3b96f": {
     "choice": "none",
     "probs": {
      "violate": 0,
-     "unknown": 0,
-     "none": 1
+     "none": 1,
+     "unknown": 0
     }
    }
   }
  },
- "latency_ms": 1124,
+ "latency_ms": 1301,
  "usage": {
-  "input": 1331,
-  "output": 282
+  "input": 967,
+  "output": 175
  }
 }

@@ -1,6 +1,8 @@
 // U-01 engine, U-02 calib, U-07 rules YAML, U-08 prompt labels, U-10 logprob parsing, U-11 shadow
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { parse } from "yaml";
 import type { AnswerRecord, Rule } from "../../packages/core/src/index.ts";
 import * as policy from "../../packages/policy/src/index.ts";
 import * as judges from "../../packages/judges/src/index.ts";
@@ -10,6 +12,10 @@ const loaded = policy.loadBundle(join(ROOT, "rules"), join(ROOT, "config", "scen
 const B = loaded.bundle;
 const abuse = B.rules.find((r) => r.ruleId === "ABUSE-001")!;
 const mkt = B.rules.find((r) => r.ruleId === "MARKETING-003")!;
+// the exception machinery stays in the code for future rules; ABUSE-001 lost its exception (§2.2), so those tests use
+// a test-only copy of the old rule loaded through the same YAML loader
+const abuseX = policy.ruleFromYaml(parse(readFileSync(join(ROOT, "test", "fixtures", "rule-with-exception.yaml"), "utf8")) as policy.RuleYaml);
+const BX = { ...B, rules: [abuseX, mkt] };
 
 const ans = (sha: string, id: string, p: number, choice: string, confirms?: string, at = 0): AnswerRecord => ({
   judgeCallId: id, questionSha: sha, choice, p, evidenceSet: [], inputSha: "in", model: "m", calibVer: "c", confirmsCallId: confirms ?? null, createdAt: at,
@@ -19,7 +25,8 @@ const pair = (sha: string, prefix: string, p = 0.02): AnswerRecord[] => [ans(sha
 describe("U-07 rules YAML", () => {
   it("loads the bundle, derives question shas, versions rules+scenes together", () => {
     expect(B.rules.map((r) => r.ruleId)).toEqual(["ABUSE-001", "MARKETING-003"]);
-    expect(abuse.exceptions[0]!.question.appliesChoice).toBe("applies");
+    expect(abuse.exceptions).toEqual([]);                                     // EX-QUOTE removed (dev plan 2026-10-08 §2.2)
+    expect(abuseX.exceptions[0]!.question.appliesChoice).toBe("applies");
     expect(abuse.question.passChoices).toEqual(["none"]);
     expect(B.rulesVer).toMatch(/^rules@[0-9a-f]{12}$/);
     expect(B.scenes.comment.requiredCategories).toEqual(["ABUSE", "MARKETING"]);
@@ -45,12 +52,16 @@ describe("U-01 engine", () => {
     expect(d.reason).toBe("uncovered:ABUSE");
   });
   it("rule with exception: block only when the exception was asked and is not_applies", () => {
-    const hi = ans(abuse.question.sha, "h", 0.99, "violate");
-    expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [hi], judgeOk: true }).state).toBe("suspicious");
-    const d = policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [hi, ans(abuse.exceptions[0]!.question.sha, "h", 0.01, "not_applies")], judgeOk: true });
+    const hi = ans(abuseX.question.sha, "h", 0.99, "violate");
+    expect(policy.decide({ bundle: BX, scene: "comment", hasImages: false, answers: [hi], judgeOk: true }).state).toBe("suspicious");
+    const d = policy.decide({ bundle: BX, scene: "comment", hasImages: false, answers: [hi, ans(abuseX.exceptions[0]!.question.sha, "h", 0.01, "not_applies")], judgeOk: true });
     expect(d).toMatchObject({ state: "block", action: "takedown", hits: ["ABUSE-001"] });
-    const applies = policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [hi, ans(abuse.exceptions[0]!.question.sha, "h", 0.9, "applies")], judgeOk: true });
+    const applies = policy.decide({ bundle: BX, scene: "comment", hasImages: false, answers: [hi, ans(abuseX.exceptions[0]!.question.sha, "h", 0.9, "applies")], judgeOk: true });
     expect(applies.state).toBe("suspicious");
+  });
+  it("ABUSE-001 without an exception: a high abuse answer alone blocks (§2.2)", () => {
+    const d = policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [ans(abuse.question.sha, "h", 0.99, "violate")], judgeOk: true });
+    expect(d).toMatchObject({ state: "block", action: "takedown", hits: ["ABUSE-001"] });
   });
   it("marketing block → limit; images without image_check → suspicious", () => {
     const d = policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [ans(mkt.question.sha, "m", 0.95, "violate")], judgeOk: true });
@@ -65,9 +76,9 @@ describe("U-01 engine", () => {
   });
   it("contract runner: required fixture missing = fail, optional = skip", () => {
     const rec = new Map<string, policy.Recorded>([
-      ["fx/a1-1", { scene: "comment", hasImages: false, judgeOk: true, answers: [ans(abuse.question.sha, "1", 0.99, "violate"), ans(abuse.exceptions[0]!.question.sha, "1", 0.01, "not_applies"), ...pair(mkt.question.sha, "m")] }],
+      ["fx/a1-1", { scene: "comment", hasImages: false, judgeOk: true, answers: [ans(abuse.question.sha, "1", 0.99, "violate"), ...pair(mkt.question.sha, "m")] }],
       ["fx/a1-3", { scene: "comment", hasImages: false, judgeOk: true, answers: [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m")] }],
-      ["fx/a1-5", { scene: "comment", hasImages: false, judgeOk: true, answers: [ans(abuse.question.sha, "1", 0.5, "violate")] }],
+      ["fx/a1-5", { scene: "comment", hasImages: false, judgeOk: true, answers: [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m")] }],   // c5 now expects pass (§2.2)
       ["fx/m3-1", { scene: "comment", hasImages: false, judgeOk: true, answers: [ans(mkt.question.sha, "1", 0.95, "violate")] }],
       ["fx/m3-3", { scene: "comment", hasImages: false, judgeOk: true, answers: [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m")] }],
     ]);
@@ -82,12 +93,12 @@ describe("U-01 engine", () => {
 
 describe("U-11 shadow", () => {
   it("threshold-only vs semantic vs none; insufficient when a new question has no recorded answer", () => {
-    expect(policy.classifyChange(abuse, { ...abuse, thresholds: { block: 0.95, pass: 0.1 } })).toBe("threshold_only");
-    expect(policy.classifyChange(abuse, { ...abuse, question: { ...abuse.question, sha: "other" } })).toBe("semantic");
-    expect(policy.classifyChange(abuse, { ...abuse, exceptions: [] })).toBe("semantic");
-    expect(policy.classifyChange(abuse, abuse)).toBe("none");
-    expect(policy.isInsufficient(abuse, new Set([abuse.question.sha]))).toBe(true);
-    expect(policy.isInsufficient(abuse, new Set([abuse.question.sha, abuse.exceptions[0]!.question.sha]))).toBe(false);
+    expect(policy.classifyChange(abuseX, { ...abuseX, thresholds: { block: 0.95, pass: 0.1 } })).toBe("threshold_only");
+    expect(policy.classifyChange(abuseX, { ...abuseX, question: { ...abuseX.question, sha: "other" } })).toBe("semantic");
+    expect(policy.classifyChange(abuseX, { ...abuseX, exceptions: [] })).toBe("semantic");     // removing an exception is a semantic change
+    expect(policy.classifyChange(abuseX, abuseX)).toBe("none");
+    expect(policy.isInsufficient(abuseX, new Set([abuseX.question.sha]))).toBe(true);
+    expect(policy.isInsufficient(abuseX, new Set([abuseX.question.sha, abuseX.exceptions[0]!.question.sha]))).toBe(false);
   });
 });
 
@@ -147,15 +158,16 @@ describe("confirmation copy is really reordered (seed 17 used to return the iden
     expect(judges.shuffleCriteria({ only: "x" }, 17)).toEqual({ only: "x" });
   });
   it("buildQuestions: readable wire keys, confirm copy reordered, every key maps back to its sha", () => {
-    const b = judges.buildQuestions([abuse.question, ...abuse.exceptions.map((x) => x.question), mkt.question], true, 17);
+    const b = judges.buildQuestions([abuseX.question, ...abuseX.exceptions.map((x) => x.question), mkt.question], true, 17);
     expect(Object.keys(b.questions)).toEqual(["ABUSE-001", "ABUSE-001#confirm", "ABUSE-001.EX-QUOTE", "ABUSE-001.EX-QUOTE#confirm", "MARKETING-003", "MARKETING-003#confirm"]);
-    expect(b.toSha).toEqual({ "ABUSE-001": abuse.question.sha, "ABUSE-001.EX-QUOTE": abuse.exceptions[0]!.question.sha, "MARKETING-003": mkt.question.sha });
-    expect(Object.keys(b.questions["ABUSE-001#confirm"]!.type === "choice" ? (b.questions["ABUSE-001#confirm"] as { criteria: Record<string, string> }).criteria : {})).not.toEqual(Object.keys(abuse.question.criteria));
+    expect(b.toSha).toEqual({ "ABUSE-001": abuseX.question.sha, "ABUSE-001.EX-QUOTE": abuseX.exceptions[0]!.question.sha, "MARKETING-003": mkt.question.sha });
+    expect(Object.keys(b.questions["ABUSE-001#confirm"]!.type === "choice" ? (b.questions["ABUSE-001#confirm"] as { criteria: Record<string, string> }).criteria : {})).not.toEqual(Object.keys(abuseX.question.criteria));
   });
   it("the judge sees the rule definition (with its exclusions), and the exception sees both texts", () => {
     expect(abuse.question.instructions).toContain("规则定义：");
     expect(abuse.question.instructions).toContain("不包括");
-    expect(abuse.exceptions[0]!.question.instructions).toContain("例外定义：");
-    expect(abuse.exceptions[0]!.question.instructions).toContain("规则定义：");
+    expect(abuse.question.instructions).toContain("反偏见");                  // §2.2: anti-bias stays in the definition
+    expect(abuseX.exceptions[0]!.question.instructions).toContain("例外定义：");
+    expect(abuseX.exceptions[0]!.question.instructions).toContain("规则定义：");
   });
 });

@@ -1,0 +1,26 @@
+# Test-only: ABUSE-001 v1 as it was before EX-QUOTE was removed (dev plan 2026-10-08 §2.2). Kept so the generic
+# exception machinery (exception questions, wire keys, shadow classification) stays tested; not loaded at runtime.
+rule_id: ABUSE-001
+version: 1
+category: ABUSE
+scenes: [comment, danmaku, nickname, post]
+severity: 2
+default_action: takedown
+text: 针对个人或群体的辱骂、仇恨、歧视、人身攻击。不包括反偏见与报道性引用、自嘲、无指向的粗口。
+exceptions:
+  - id: EX-QUOTE
+    text: 引用他人言论以举报、反驳或报道，不构成攻击。
+    question:
+      id: ex_quote
+      instructions: 这条内容是否属于引用他人言论以举报、反驳或报道？
+      options: { applies: 是，属于引用举报或反驳, not_applies: 否，是直接的攻击或贬损, unknown: 无法判断 }
+      violation_option: applies
+      applies_choice: applies
+      not_applies_choice: not_applies
+question:
+  id: abuse
+  instructions: 按平台规则判断这条内容是否包含针对个人或群体的辱骂、仇恨、歧视或人身攻击。
+  options: { violate: 包含辱骂、仇恨、歧视或人身攻击, none: 不包含, unknown: 无法判断 }
+  violation_option: violate
+  pass_choices: [none]
+thresholds: { block: 0.90, pass: 0.10, keyed_by_option_count: true }
