@@ -24,12 +24,16 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 
+// Items come from the eval set unless LABEL_PILOT_ITEMS names another jsonl of {id, text, group, split} (e.g. the case
+// pool's own texts, which are not in the eval set).
+const ITEMS = process.env.LABEL_PILOT_ITEMS ?? "data/eval/eval20k.jsonl";
+
 // Text identity (dev plan E2/E5): a row counts only for the text it was asked on. Rows record textSha (sha of the text
 // sent); rows written before E5 carry none and were asked on the strip form, so they count only where the model view
 // equals it. Changing the eval text therefore re-asks exactly the items whose text changed.
 const textSha = (t: string) => createHash("sha256").update(t).digest("hex").slice(0, 16);
 let shaCache: Map<string, { cur: string; legacy: string }> | undefined;
-const shasOf = () => (shaCache ??= new Map(readFileSync("data/eval/eval20k.jsonl", "utf8").split("\n").filter(Boolean).map((l) => {
+const shasOf = () => (shaCache ??= new Map(readFileSync(ITEMS, "utf8").split("\n").filter(Boolean).map((l) => {
   const r = JSON.parse(l) as { id: string; text: string; text_strip?: string };
   return [r.id, { cur: textSha(r.text), legacy: textSha(r.text_strip ?? r.text) }] as const;
 })));
@@ -59,7 +63,7 @@ if (phase === "compare") {
   const A = load(sa), B = load(sb);
   const want = new Set(readFileSync(idsFile, "utf8").split("\n").filter(Boolean));
   const out = new Map<string, Record<string, number>>();
-  for (const l of readFileSync("data/eval/eval20k.jsonl", "utf8").split("\n").filter(Boolean)) {
+  for (const l of readFileSync(ITEMS, "utf8").split("\n").filter(Boolean)) {
     const it = JSON.parse(l) as { id: string; group: string };
     if (!want.has(it.id)) continue;
     const a = A.get(it.id), b = B.get(it.id);
@@ -129,7 +133,7 @@ if (phase === "vote") {
   const A = runsA.split(","), B = runsB?.split(",");
   const out = new Map<string, Record<string, number>>();
   const bump = (g: string, k: string) => { const c = out.get(g) ?? out.set(g, {}).get(g)!; c[k] = (c[k] ?? 0) + 1; };
-  for (const l of readFileSync("data/eval/eval20k.jsonl", "utf8").split("\n").filter(Boolean)) {
+  for (const l of readFileSync(ITEMS, "utf8").split("\n").filter(Boolean)) {
     const it = JSON.parse(l) as { id: string; group: string };
     if (!want.has(it.id)) continue;
     const va = M.map((m) => voted(A, it.id, m)), vb = B ? M.map((m) => voted(B, it.id, m)) : undefined;
@@ -179,7 +183,7 @@ if (phase === "adjudicate") {
     .map((l) => JSON.parse(l) as { id: string; label: Label; by: string }).map((r) => [r.id, r] as const));
   const counts = new Map<string, Record<string, number>>(), needTie: string[] = [], rows: string[] = [];
   let incomplete = 0;
-  for (const l of readFileSync("data/eval/eval20k.jsonl", "utf8").split("\n").filter(Boolean)) {
+  for (const l of readFileSync(ITEMS, "utf8").split("\n").filter(Boolean)) {
     const it = JSON.parse(l) as { id: string; group: string; text: string };
     if (!want.has(it.id)) continue;
     const [a, b] = FZ.models.map((m) => vote(it.id, m));
@@ -197,7 +201,11 @@ if (phase === "adjudicate") {
     }
   }
   writeFileSync(`data/eval/labels-${sId}-needs-tiebreak.txt`, needTie.join("\n") + (needTie.length ? "\n" : ""));
-  writeFileSync(`data/eval/labels-${sId}.jsonl`, rows.join("\n") + (rows.length ? "\n" : ""));
+  // merge: rows of other ids (another sample of the same standard) are kept; this run's ids are replaced
+  const labelsFile = `data/eval/labels-${sId}.jsonl`;
+  const kept = (existsSync(labelsFile) ? readFileSync(labelsFile, "utf8") : "").split("\n").filter(Boolean).filter((l) => !want.has((JSON.parse(l) as { id: string }).id));
+  const all = [...kept, ...rows];
+  writeFileSync(labelsFile, all.join("\n") + (all.length ? "\n" : ""));
   console.log(JSON.stringify({ standard: sId, items: want.size, incomplete, needsTiebreak: needTie.length, labeled: rows.length }));
   for (const [g, c] of [...counts].sort()) console.log(g.padEnd(14), JSON.stringify(c));
   process.exit(0);
@@ -206,7 +214,7 @@ if (phase === "sample") {
   const [, group, n, out, ...excl] = process.argv.slice(2);
   const skip = new Set(excl.flatMap((f) => readFileSync(f, "utf8").split("\n").filter(Boolean)));
   const h = (id: string) => createHash("sha256").update(`label-pilot-holdout|${id}`).digest("hex");
-  const pick = readFileSync("data/eval/eval20k.jsonl", "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { id: string; group: string; split: string })
+  const pick = readFileSync(ITEMS, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { id: string; group: string; split: string })
     .filter((x) => x.group === group && x.split === "dev" && !skip.has(x.id)).map((x) => x.id).sort((a, b) => h(a).localeCompare(h(b))).slice(0, Number(n));
   writeFileSync(out!, pick.join("\n") + "\n");
   console.log(JSON.stringify({ group, picked: pick.length, out }));
@@ -222,7 +230,7 @@ const OUT = `data/eval/label-pilot-${std.id}${process.env.LABEL_PILOT_TAG ? `.${
 type Item = { id: string; text: string; group: string; slice: string; label_bin: number };
 type Row = { id: string; model: string; promptSha: string; textSha?: string; ok: boolean; followUp?: boolean; answers?: Record<string, Answer>; label?: Label };
 const ids = new Set(readFileSync(idsPath, "utf8").split("\n").filter(Boolean));
-const items = readFileSync("data/eval/eval20k.jsonl", "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Item).filter((x) => ids.has(x.id));
+const items = readFileSync(ITEMS, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Item).filter((x) => ids.has(x.id));
 const rowsNow = (): Row[] => (existsSync(OUT) ? readFileSync(OUT, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Row) : []).filter((r) => r.ok && r.promptSha === std.promptSha && freshText(r));
 
 function knobs(model: string): Record<string, unknown> {
