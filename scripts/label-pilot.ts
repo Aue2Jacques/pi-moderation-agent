@@ -6,6 +6,7 @@
 //                                                not, uncertain share, per-question agreement
 //   compare <stdA> <stdB> <ids.txt>             on items both models answered under both versions: violate-vs-not
 //                                                agreement and which model alone said violate, by group
+//   stability <std> <ids.txt> <tag>             per model: same label in the main run and the repeat run <tag>
 //   sample <group> <n> <out.txt> [exclude.txt…]  fresh dev-split ids of one group, none from the exclude files, by a
 //                                                fixed hash order (no text read) — a holdout for a reworded standard
 // Labeling models: deepseek-v4.1-flash and qwen3.8-flash (owner decision); deepseek's channel does not take a
@@ -55,6 +56,31 @@ if (phase === "compare") {
   for (const [g, c] of [...out].sort()) console.log(g.padEnd(14), JSON.stringify(c));
   process.exit(0);
 }
+if (phase === "stability") {
+  const [, sId, idsFile, tag] = process.argv.slice(2);
+  if (!STANDARDS[sId ?? ""] || !idsFile || !tag) throw new Error("usage: label-pilot.ts stability <std> <ids.txt> <tag>");
+  const sha = STANDARDS[sId!]!.promptSha;
+  const want = new Set(readFileSync(idsFile, "utf8").split("\n").filter(Boolean));
+  const read = (f: string) => {
+    const m = new Map<string, string>();
+    for (const l of (existsSync(f) ? readFileSync(f, "utf8") : "").split("\n").filter(Boolean)) {
+      const r = JSON.parse(l) as { id: string; model: string; ok: boolean; promptSha: string; label: string };
+      if (r.ok && r.promptSha === sha && want.has(r.id)) m.set(`${r.id}|${r.model}`, r.label);
+    }
+    return m;
+  };
+  const a = read(`data/eval/label-pilot-${sId}.jsonl`), b = read(`data/eval/label-pilot-${sId}.${tag}.jsonl`);
+  for (const model of ["deepseek-v4.1-flash", "qwen3.8-flash"]) {
+    let n = 0, same3 = 0, sameBin = 0;
+    for (const [k, la] of a) {
+      if (!k.endsWith(`|${model}`) || !b.has(k)) continue;
+      const lb = b.get(k)!;
+      n++; if (la === lb) same3++; if ((la === "violate") === (lb === "violate")) sameBin++;
+    }
+    console.log(`${model.padEnd(22)} n=${n}  same 3-way ${((100 * same3) / Math.max(1, n)).toFixed(1)}%  same violate-vs-not ${((100 * sameBin) / Math.max(1, n)).toFixed(1)}%`);
+  }
+  process.exit(0);
+}
 if (phase === "sample") {
   const [, group, n, out, ...excl] = process.argv.slice(2);
   const skip = new Set(excl.flatMap((f) => readFileSync(f, "utf8").split("\n").filter(Boolean)));
@@ -68,7 +94,8 @@ if (phase === "sample") {
 const std = STANDARDS[stdId ?? ""];
 if (!std || !idsPath) throw new Error("usage: label-pilot.ts run|score|sample <abuse-v4|abuse-v4.1|abuse-v4.2|marketing-v1|guard-v1> <ids.txt> [concurrency]");
 const MODELS = ["deepseek-v4.1-flash", "qwen3.8-flash"];
-const OUT = `data/eval/label-pilot-${std.id}.jsonl`;
+// LABEL_PILOT_TAG=rep2 writes / reads a separate repeat run (same prompt, same models) to measure run-to-run stability
+const OUT = `data/eval/label-pilot-${std.id}${process.env.LABEL_PILOT_TAG ? `.${process.env.LABEL_PILOT_TAG}` : ""}.jsonl`;
 type Item = { id: string; text: string; group: string; slice: string; label_bin: number };
 type Row = { id: string; model: string; promptSha: string; ok: boolean; followUp?: boolean; answers?: Record<string, Answer>; label?: Label };
 const ids = new Set(readFileSync(idsPath, "utf8").split("\n").filter(Boolean));
