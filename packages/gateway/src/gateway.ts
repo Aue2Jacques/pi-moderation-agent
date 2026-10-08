@@ -52,6 +52,12 @@ export class Gateway {
   #busy = false;
 
   constructor(d: GatewayDeps) {
+    // §2.2: a scene that requires a confirming answer can never auto-pass if the judge client does not return the
+    // in-call confirmation copy; refuse that configuration instead of silently sending everything to the agent
+    if (d.judge.inCallConfirm === false) {
+      const needs = Object.entries(d.bundle.scenes).filter(([, sc]) => sc.confirmPass !== false).map(([k]) => k);
+      if (needs.length) throw new Error(`judge client has inCallConfirm=false but scenes ${needs.join(",")} require confirm_pass`);
+    }
     this.d = d;
     this.blacklist = new Blacklist(d.cfg.blacklist);
     this.rate = new RateLimit(d.cfg.rateMaxPerMinute, 60_000);

@@ -10,6 +10,7 @@ export function piJudge(models: Models, model: ClassifierModel<ClassifierApi>, o
   return {
     provider: model.provider,
     api: model.api,
+    inCallConfirm: o.inCallConfirm,
     classify: async (req: JudgeRequest): Promise<JudgeResponse> => {
       const t0 = Date.now();
       // an explicit confirm call (req.shuffleSeed set) sends only the shuffled copy; a primary call sends original (+ in-call copy)

@@ -43,7 +43,7 @@ function exceptionVerdict(q: Question, answers: readonly AnswerRecord[]): "appli
   return "unknown";
 }
 
-function verdictFor(ruleId: string, q: Question, thresholds: { block: number; pass: number }, exceptions: Rule["exceptions"], answers: readonly AnswerRecord[], out: Record<string, string[]>): RuleVerdict {
+function verdictFor(ruleId: string, q: Question, thresholds: { block: number; pass: number }, exceptions: Rule["exceptions"], answers: readonly AnswerRecord[], out: Record<string, string[]>, confirmPass = true): RuleVerdict {
   const e = effectiveAnswer(byQuestion(answers, q.sha));
   const exc: RuleVerdict["exceptions"] = {};
   for (const x of exceptions) exc[x.id] = exceptionVerdict(x.question, answers);
@@ -58,7 +58,8 @@ function verdictFor(ruleId: string, q: Question, thresholds: { block: number; pa
       // itself satisfy pass (e.g. same choice, p=0.40). Only the pairs after the last such doubt count.
       const lastDoubt = Math.max(-Infinity, ...e.answers.filter((a) => !passOk(a)).map((a) => a.createdAt));
       const afterDoubt: EffectiveGroup = { ...e, answers: e.answers.filter((a) => a.createdAt > lastDoubt) };
-      passSupport = passOk(e.answers[e.answers.length - 1]!) && isConfirmed(afterDoubt, passOk);
+      // §2.2 (owner 2026-10-07: measure with and without): confirmation is a per-scene policy switch, on by default
+      passSupport = passOk(e.answers[e.answers.length - 1]!) && (!confirmPass || isConfirmed(afterDoubt, passOk));
     }
   }
   const suspicious = e.kind === "group" && !passSupport && !blockSupport;
@@ -70,7 +71,8 @@ export function allowedActions(input: AllowedInput): AllowedResult {
   const imageDelivered = input.imageDelivered ?? false;
   const sceneCfg = bundle.scenes[scene];
   const effectiveAnswers: Record<string, string[]> = {};
-  const rules = rulesFor(bundle, scene).map((r) => verdictFor(r.ruleId, r.question, r.thresholds, r.exceptions, answers, effectiveAnswers));
+  const confirmPass = sceneCfg.confirmPass ?? true;
+  const rules = rulesFor(bundle, scene).map((r) => verdictFor(r.ruleId, r.question, r.thresholds, r.exceptions, answers, effectiveAnswers, confirmPass));
   const byRule = new Map(rulesFor(bundle, scene).map((r) => [r.ruleId, r] as const));
 
   const required = [...sceneCfg.requiredCategories];
@@ -79,7 +81,7 @@ export function allowedActions(input: AllowedInput): AllowedResult {
   const covered: Record<string, boolean> = {};
   for (const c of required) {
     if (c === "image_check") {
-      const v = verdictFor("image_check", sceneCfg.imageCheck.question, sceneCfg.imageCheck.thresholds, [], answers, effectiveAnswers);
+      const v = verdictFor("image_check", sceneCfg.imageCheck.question, sceneCfg.imageCheck.thresholds, [], answers, effectiveAnswers, confirmPass);
       covered[c] = imageDelivered && v.passSupport;   // an image_check answer without a delivered image is not coverage
     } else {
       const rs = rules.filter((v) => byRule.get(v.ruleId)?.category === c);

@@ -113,6 +113,9 @@ export type SceneConfig = {
   /** Fast-path injection guard (dev plan 2026-10-08 §2.2, owner choice): asked with the rule questions; at or above
    *  `threshold` the fast path neither passes nor blocks — the item goes to the agent as injection_suspected. Optional. */
   injectionGuard?: { threshold: number; question: Question };
+  /** An automatic pass needs a second, confirming answer (shuffled options). Default true. Dev plan §2.2: a policy
+   *  switch so both settings can be measured (owner 2026-10-07). */
+  confirmPass?: boolean;
 };
 
 export type PolicyBundle = {

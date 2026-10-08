@@ -197,3 +197,16 @@ describe("confirmation copy is really reordered (seed 17 used to return the iden
     expect(abuseX.exceptions[0]!.question.instructions).toContain("规则定义：");
   });
 });
+
+describe("§2.2 confirmation is a per-scene switch (dev plan 2026-10-08)", () => {
+  it("on (default): one low answer is not enough to pass; off: it is; blocks are unaffected", () => {
+    const one = [ans(abuse.question.sha, "x", 0.02, "none"), ans(mkt.question.sha, "y", 0.02, "none"), ans(guardQ.sha, "z", 0.02, "none")];
+    expect(B.scenes.comment.confirmPass).toBeUndefined();                                  // the shipped config keeps the default (on)
+    expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: one, judgeOk: true }).state).toBe("suspicious");
+    const off = { ...B, scenes: { ...B.scenes, comment: { ...B.scenes.comment, confirmPass: false } } };
+    expect(policy.decide({ bundle: off, scene: "comment", hasImages: false, answers: one, judgeOk: true }).state).toBe("pass");
+    expect(policy.decide({ bundle: off, scene: "comment", hasImages: false, answers: [ans(abuse.question.sha, "h", 0.99, "violate"), ans(guardQ.sha, "z", 0.02, "none")], judgeOk: true }).state).toBe("block");
+    expect(policy.sceneFromYaml({ required_categories: [], allowed_actions: ["pass"], pending_visibility: "hidden", deadline_ms: 1, human_sla_ms: 1, default_severity: 1,
+      image_check: { thresholds: { block: 0.9, pass: 0.1 }, question: { id: "i", instructions: "i", options: { violate: "v", none: "n", unknown: "u" }, violation_option: "violate", pass_choices: ["none"] } }, confirm_pass: false } as never).confirmPass).toBe(false);
+  });
+});

@@ -260,3 +260,13 @@ describe("§2.2 fast-path injection guard (dev plan 2026-10-08)", () => {
   });
 });
 
+
+describe("§2.2 confirm switch vs judge client (dev plan 2026-10-08)", () => {
+  it("a judge client without the in-call copy is refused while any scene requires confirmation", () => {
+    const db = freshDb();
+    const noCopy = { ...recordedJudge(byText), inCallConfirm: false };
+    expect(() => new Gateway({ db, bundle: BUNDLE, judge: noCopy, prices: PRICES, calibrator: passThroughCalibrator("calib@t1"), evidenceVer: "e", judgeModel: "jev-recorded", cfg: DEFAULT_GATEWAY_CONFIG, now: () => Date.now(), gatewayId: "g1" })).toThrow(/confirm_pass/);
+    const off = { ...BUNDLE, scenes: Object.fromEntries(Object.entries(BUNDLE.scenes).map(([k, v]) => [k, { ...v, confirmPass: false }])) } as core.PolicyBundle;
+    expect(() => new Gateway({ db, bundle: off, judge: noCopy, prices: PRICES, calibrator: passThroughCalibrator("calib@t1"), evidenceVer: "e", judgeModel: "jev-recorded", cfg: DEFAULT_GATEWAY_CONFIG, now: () => Date.now(), gatewayId: "g1" })).not.toThrow();
+  });
+});

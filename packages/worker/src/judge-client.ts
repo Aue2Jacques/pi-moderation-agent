@@ -23,6 +23,8 @@ export type JudgeResponse =
 export interface JudgeClient {
   readonly provider: string;
   readonly api: string;
+  /** whether a primary request also returns the shuffled confirmation copy (undefined: not declared, e.g. recorded clients) */
+  readonly inCallConfirm?: boolean;
   classify(req: JudgeRequest): Promise<JudgeResponse>;
 }
 
