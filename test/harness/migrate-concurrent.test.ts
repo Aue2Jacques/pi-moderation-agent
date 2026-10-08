@@ -30,8 +30,8 @@ function oldShapeDb(): string {
 }
 
 describe("closeout fix 1: concurrent migration", () => {
-  it("two processes migrating one old file at once: both succeed, the structure is complete (5 rounds)", async () => {
-    for (let round = 0; round < 5; round++) {
+  it("two processes migrating one old file at once: both succeed, the structure is complete (15 rounds)", async () => {
+    for (let round = 0; round < 15; round++) {   // the openAppDb race showed up in about 1 run in 3 of 5 rounds
       const path = oldShapeDb();
       const [a, b] = await Promise.all([child(path), child(path)]);
       expect([a.code, b.code], `${a.err}\n${b.err}`).toEqual([0, 0]);

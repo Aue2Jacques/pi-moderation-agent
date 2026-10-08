@@ -24,6 +24,11 @@ export function ensurePrivateDbFile(path: string): void {
 export function openAppDb(path: string, role: Role): Db {
   ensurePrivateDbFile(path);
   const db = new DatabaseSync(path, { enableForeignKeyConstraints: true });
+  // the busy timeout must be set BEFORE journal_mode: switching (or re-asserting) WAL needs the lock, and while another
+  // process writes — e.g. G and W starting together, one of them migrating — it failed at once with "database is
+  // locked" (found by test/harness/migrate-concurrent.test.ts). Opening waits as long as a migration may take, then the
+  // role's short timeout applies.
+  db.exec("PRAGMA busy_timeout=60000");
   db.exec("PRAGMA journal_mode=WAL");
   db.exec("PRAGMA synchronous=NORMAL");
   db.exec(`PRAGMA busy_timeout=${BUSY_MS[role]}`);
