@@ -23,6 +23,17 @@
 // temperature, so none is sent.
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+
+// Text identity (dev plan E2/E5): a row counts only for the text it was asked on. Rows record textSha (sha of the text
+// sent); rows written before E5 carry none and were asked on the strip form, so they count only where the model view
+// equals it. Changing the eval text therefore re-asks exactly the items whose text changed.
+const textSha = (t: string) => createHash("sha256").update(t).digest("hex").slice(0, 16);
+let shaCache: Map<string, { cur: string; legacy: string }> | undefined;
+const shasOf = () => (shaCache ??= new Map(readFileSync("data/eval/eval20k.jsonl", "utf8").split("\n").filter(Boolean).map((l) => {
+  const r = JSON.parse(l) as { id: string; text: string; text_strip?: string };
+  return [r.id, { cur: textSha(r.text), legacy: textSha(r.text_strip ?? r.text) }] as const;
+})));
+const freshText = (r: { id: string; textSha?: string }): boolean => { const s = shasOf().get(r.id); return !!s && (r.textSha ?? s.legacy) === s.cur; };
 import { FROZEN_ABUSE, STANDARDS, finalLabel, followUpFor, majority, readAnswers, type Answer, type Label } from "./lib/labeling.ts";
 
 for (const line of (() => { try { return readFileSync(".env", "utf8").split("\n"); } catch { return []; } })()) {
@@ -41,7 +52,7 @@ if (phase === "compare") {
     const f = `data/eval/label-pilot-${st.id}.jsonl`;
     for (const l of (existsSync(f) ? readFileSync(f, "utf8") : "").split("\n").filter(Boolean)) {
       const r = JSON.parse(l) as { id: string; model: string; ok: boolean; promptSha: string; label: string };
-      if (r.ok && r.promptSha === st.promptSha) (by.get(r.id) ?? by.set(r.id, {}).get(r.id)!)[r.model] = r;
+      if (r.ok && r.promptSha === st.promptSha && freshText(r)) (by.get(r.id) ?? by.set(r.id, {}).get(r.id)!)[r.model] = r;
     }
     return by;
   };
@@ -75,7 +86,7 @@ if (phase === "stability") {
     const m = new Map<string, string>();
     for (const l of (existsSync(f) ? readFileSync(f, "utf8") : "").split("\n").filter(Boolean)) {
       const r = JSON.parse(l) as { id: string; model: string; ok: boolean; promptSha: string; label: string };
-      if (r.ok && r.promptSha === sha && want.has(r.id)) m.set(`${r.id}|${r.model}`, r.label);
+      if (r.ok && r.promptSha === sha && want.has(r.id) && freshText(r)) m.set(`${r.id}|${r.model}`, r.label);
     }
     return m;
   };
@@ -103,7 +114,7 @@ if (phase === "vote") {
       const m = new Map<string, string>(), f = `data/eval/label-pilot-${sId}${tag === "main" ? "" : `.${tag}`}.jsonl`;
       for (const l of (existsSync(f) ? readFileSync(f, "utf8") : "").split("\n").filter(Boolean)) {
         const r = JSON.parse(l) as { id: string; model: string; ok: boolean; promptSha: string; label: string };
-        if (r.ok && r.promptSha === sha && want.has(r.id)) m.set(`${r.id}|${r.model}`, r.label);
+        if (r.ok && r.promptSha === sha && want.has(r.id) && freshText(r)) m.set(`${r.id}|${r.model}`, r.label);
       }
       runCache.set(tag, m);
     }
@@ -153,7 +164,7 @@ if (phase === "adjudicate") {
     const f = `data/eval/label-pilot-${sId}${tag === "main" ? "" : `.${tag}`}.jsonl`;
     for (const l of (existsSync(f) ? readFileSync(f, "utf8") : "").split("\n").filter(Boolean)) {
       const r = JSON.parse(l) as { id: string; model: string; ok: boolean; promptSha: string; label: Label };
-      if (!r.ok || r.promptSha !== FROZEN_ABUSE.promptSha || !want.has(r.id)) continue;
+      if (!r.ok || r.promptSha !== FROZEN_ABUSE.promptSha || !want.has(r.id) || !freshText(r)) continue;
       const k = `${r.id}|${r.model}`, a = answers.get(k) ?? answers.set(k, []).get(k)!;
       a[ti] = r.label;
     }
@@ -208,10 +219,10 @@ const RUN_MODELS = process.env.LABEL_PILOT_MODELS?.split(",") ?? MODELS;
 // LABEL_PILOT_TAG=rep2 writes / reads a separate repeat run (same prompt, same models) to measure run-to-run stability
 const OUT = `data/eval/label-pilot-${std.id}${process.env.LABEL_PILOT_TAG ? `.${process.env.LABEL_PILOT_TAG}` : ""}.jsonl`;
 type Item = { id: string; text: string; group: string; slice: string; label_bin: number };
-type Row = { id: string; model: string; promptSha: string; ok: boolean; followUp?: boolean; answers?: Record<string, Answer>; label?: Label };
+type Row = { id: string; model: string; promptSha: string; textSha?: string; ok: boolean; followUp?: boolean; answers?: Record<string, Answer>; label?: Label };
 const ids = new Set(readFileSync(idsPath, "utf8").split("\n").filter(Boolean));
 const items = readFileSync("data/eval/eval20k.jsonl", "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Item).filter((x) => ids.has(x.id));
-const rowsNow = (): Row[] => (existsSync(OUT) ? readFileSync(OUT, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Row) : []).filter((r) => r.ok && r.promptSha === std.promptSha);
+const rowsNow = (): Row[] => (existsSync(OUT) ? readFileSync(OUT, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Row) : []).filter((r) => r.ok && r.promptSha === std.promptSha && freshText(r));
 
 function knobs(model: string): Record<string, unknown> {
   if (model.startsWith("deepseek")) return { max_tokens: 393216, thinking: { type: "disabled" } };
@@ -251,7 +262,7 @@ if (phase === "run") {
         } catch { /* retry */ }
       }
       if (answers) ok++; else failed++;
-      appendFileSync(OUT, JSON.stringify({ id: it.id, model, promptSha: std.promptSha, ok: !!answers, ...(followUp ? { followUp } : {}), ...(answers ? { answers, label: std.label(answers) } : {}) }) + "\n");
+      appendFileSync(OUT, JSON.stringify({ id: it.id, model, promptSha: std.promptSha, textSha: textSha(it.text), ok: !!answers, ...(followUp ? { followUp } : {}), ...(answers ? { answers, label: std.label(answers) } : {}) }) + "\n");
     }
   }));
   console.log(JSON.stringify({ standard: std.id, promptSha: std.promptSha, items: items.length, jobs: jobs.length, ok, failed }));
