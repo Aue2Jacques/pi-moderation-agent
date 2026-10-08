@@ -221,16 +221,23 @@ def simhash(t):
             v[b] += 1 if (h >> b) & 1 else -1
     return sum(1 << b for b in range(64) if v[b] > 0)
 seen, sims, kept, dup_exact, dup_near = set(), defaultdict(list), [], 0, 0
+# E6: a dropped duplicate keeps a link to the kept item it duplicated (same decisions as before; these maps are extra)
+seen_item, sims_item, dup_of = {}, defaultdict(list), {}
 for it in items:
     key = re.sub(r"\s+", "", it["text_strip"])
     if key in seen:
+        dup_of[(it["source"], it["source_ref"], it["slice"])] = seen_item[key]
         dup_exact += 1; continue
     h = simhash(it["text_strip"]); band = [(h >> (16 * k)) & 0xFFFF for k in range(4)]
     near = any(bin(h ^ o).count("1") <= 3 for k, b in enumerate(band) for o in sims[(k, b)])
     if near and it["group"] not in ("adversarial", "injection"):
+        dup_of[(it["source"], it["source_ref"], it["slice"])] = next(oi for k, b in enumerate(band) for (oh, oi) in sims_item[(k, b)] if bin(h ^ oh).count("1") <= 3)
         dup_near += 1; continue
     seen.add(key)
-    for k, b in enumerate(band): sims[(k, b)].append(h)
+    seen_item[key] = it
+    for k, b in enumerate(band):
+        sims[(k, b)].append(h)
+        sims_item[(k, b)].append((h, it))
     kept.append(it)
 
 # ---------------- ids and split ----------------
@@ -244,16 +251,68 @@ for s, lst in by_slice.items():
     for k, it in enumerate(lst):
         it["split"] = "dev" if k % 2 == 0 else "test"
 split_of = {it["id"]: it["split"] for it in kept if "split" in it}
+
+# ---------------- text families (dev plan E6) ----------------
+# one family = one original text with its variants: an injection item joins its base; an adversarial item joins the
+# text it was perturbed from; near-duplicates across sources (simhash, hamming <= 3) join each other. A missing parent is
+# an error, never a silent default. The formal split (scripts/split-formal.py) assigns whole families.
+fam_parent = {}
+def _find(x):
+    while fam_parent.setdefault(x, x) != x:
+        fam_parent[x] = fam_parent[fam_parent[x]]
+        x = fam_parent[x]
+    return x
+def _union(a, b):
+    ra, rb = _find(a), _find(b)
+    if ra != rb:
+        fam_parent[max(ra, rb)] = min(ra, rb)
+ids = {it["id"] for it in kept}
+fam_text = {}
+for it in kept:
+    if "base" in it:
+        bid = opaque(*it["base"])
+        if bid not in ids:
+            # the base was dropped as a duplicate: the family is the kept item it duplicated
+            rep = dup_of.get(tuple(it["base"]))
+            if rep is None or rep.get("id") not in ids:
+                raise SystemExit(f"E6: injection item {it['id']} has no parent {bid} in the set and no kept duplicate of it")
+            bid = rep["id"]
+        _union(it["id"], bid)
+        continue
+    fam_text[it["id"]] = re.sub(r"\s+", "", normalize(it["raw"]) if it["group"] == "adversarial" else it["text_strip"])
+by_key = defaultdict(list)
+for i, t in fam_text.items():
+    by_key[t].append(i)
+for lst in by_key.values():
+    for j in lst[1:]:
+        _union(lst[0], j)
+fam_bands = defaultdict(list)
+for i, t in fam_text.items():
+    h = simhash(t)
+    for k in range(4):
+        b = (k, (h >> (16 * k)) & 0xFFFF)
+        for (oi, oh) in fam_bands[b]:
+            if bin(h ^ oh).count("1") <= 3:
+                _union(i, oi)
+        fam_bands[b].append((i, h))
+for it in kept:
+    it["family_id"] = "f" + hashlib.sha256(_find(it["id"]).encode()).hexdigest()[:12]
+
 for it in kept:   # an injected item goes wherever its base went, so dev never sees a test item's text
     if "base" in it:
-        it["split"] = split_of.get(opaque(*it.pop("base")), "test")
+        b = it.pop("base")
+        rep = dup_of.get(tuple(b))
+        # E6/E8: a base dropped as a duplicate -> follow the kept duplicate; never a silent default to "test"
+        it["split"] = split_of.get(opaque(*b)) or (split_of.get(rep["id"]) if rep is not None else None)
+        if it["split"] is None:
+            raise SystemExit(f"E6: injection item {it['id']} has no parent split")
 
 os.makedirs("data/eval", exist_ok=True); os.makedirs("eval", exist_ok=True)
 with open("data/eval/eval20k.jsonl", "w", encoding="utf-8") as f, open("eval/manifest-v0.1.jsonl", "w", encoding="utf-8") as m:
     for it in sorted(kept, key=lambda x: x["id"]):
         f.write(json.dumps(it, ensure_ascii=False) + "\n")
         sha = lambda t: hashlib.sha256(t.encode()).hexdigest()[:16]
-        m.write(json.dumps({**{k: it[k] for k in ("id", "source", "source_ref", "slice", "group", "label_orig", "label_bin", "split")},
+        m.write(json.dumps({**{k: it[k] for k in ("id", "source", "source_ref", "slice", "group", "label_orig", "label_bin", "split", "family_id")}, "split_kind": "temporary 50/50 (dev plan E8); the formal split is scripts/split-formal.py",
                             "view": VIEW_VERSION, "text_sha": sha(it["text"]), "strip_sha": sha(it["text_strip"]), "raw_sha": sha(it["raw"])}, ensure_ascii=False) + "\n")
 
 with open("data/eval/excluded.jsonl", "w", encoding="utf-8") as f:
@@ -264,4 +323,5 @@ print(json.dumps({"sampled": dict(report)}, ensure_ascii=False, indent=1, defaul
 print(json.dumps({"total_before_dedup": len(items), "dup_exact": dup_exact, "dup_near": dup_near, "kept": len(kept),
                   "by_label": dict(Counter(it["label_bin"] for it in kept)), "by_group": dict(Counter(it["group"] for it in kept)),
                   "by_split": dict(Counter(it["split"] for it in kept)),
+                  "families": len({it["family_id"] for it in kept}), "multi_member_families": sum(1 for c in Counter(it["family_id"] for it in kept).values() if c > 1),
                   "view": VIEW_VERSION, "view_differs_from_strip": dict(Counter(it["group"] for it in kept if it["text"] != it["text_strip"]))}, ensure_ascii=False, indent=1))
