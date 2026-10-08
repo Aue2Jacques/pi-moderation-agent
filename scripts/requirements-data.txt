@@ -1,0 +1,10 @@
+# Data scripts (scripts/build-eval20k.py, split-formal.py, profile-eval.py ...) run with the .venv-data interpreter
+# (dev plan E7). Versions as found on the dev box 2026-10-08; pypinyin was MISSING there, so eval20k v0.1's
+# adversarial/pinyin slice was built as spacing perturbations (see docs/eval-dataset-plan.md). The builder now refuses
+# to run without it; a rebuild with pypinyin installed is a new dataset version (v0.2), not v0.1.
+pandas==3.0.6
+pyarrow==25.0.1
+numpy==2.4.6
+scikit-learn==1.9.1
+zhconv==1.4.3
+pypinyin

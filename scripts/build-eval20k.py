@@ -25,6 +25,9 @@ import sys
 from collections import Counter, defaultdict
 
 import pandas as pd
+# E7: required, not optional. Without it the pinyin perturbation used to fall back silently to inserting spaces (that is
+# how eval20k v0.1's adversarial/pinyin slice was built: pypinyin was missing on the dev box). scripts/requirements-data.txt
+from pypinyin import lazy_pinyin  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 from normalize import normalize, ok_length  # noqa: E402
@@ -167,14 +170,10 @@ def perturb(t, kind):
             i = rng.randrange(len(cs) - 1); cs[i], cs[i + 1] = cs[i + 1], cs[i]
         return "".join(cs)
     if kind == "pinyin":
-        try:
-            from pypinyin import lazy_pinyin
-            cs = list(t); ks = [i for i, c in enumerate(cs) if "一" <= c <= "鿿"]
-            for i in rng.sample(ks, min(len(ks), max(1, len(ks) // 6))):
-                cs[i] = lazy_pinyin(cs[i])[0]
-            return "".join(cs)
-        except ImportError:
-            return " ".join(t)
+        cs = list(t); ks = [i for i, c in enumerate(cs) if "一" <= c <= "鿿"]
+        for i in rng.sample(ks, min(len(ks), max(1, len(ks) // 6))):
+            cs[i] = lazy_pinyin(cs[i])[0]
+        return "".join(cs)
     return t
 used = {(it["source"], it["source_ref"]) for it in items}
 pool = tox[(tox["toxic"] == 1) & ~tox.index.astype(str).isin({r for s, r in used if s == "ToxiCN"})]
