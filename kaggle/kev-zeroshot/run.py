@@ -10,13 +10,17 @@ def sh(cmd, check=True):
     return subprocess.run(cmd, shell=True, check=check)
 
 sh(f"{sys.executable} -m pip install -q uv pyyaml")
-sh("git clone -q --depth 1 https://github.com/thu-coai/COLDataset.git /kaggle/temp/cold || true")
-sh("git clone -q --depth 1 https://github.com/jaredpalmer/kev.git /kaggle/temp/kev")
+# dev plan E4: every source pinned (scripts/kaggle-run.sh fills the commits in at push time)
+PINS = {"repo": "__REPO_SHA__", "cold": "__COLD_SHA__", "kev": "__KEV_SHA__"}
+assert all(not v.startswith("__") for v in PINS.values()), "push with scripts/kaggle-run.sh: it pins every source commit"
+print("pins", PINS, flush=True)
+sh("git clone -q https://github.com/thu-coai/COLDataset.git /kaggle/temp/cold && cd /kaggle/temp/cold && git checkout -q __COLD_SHA__")
+sh("git clone -q https://github.com/jaredpalmer/kev.git /kaggle/temp/kev && cd /kaggle/temp/kev && git checkout -q __KEV_SHA__")
 sh("cd /kaggle/temp/kev && uv sync -q --extra serve")
 sh("cd /kaggle/temp/kev && uv pip install -q flash-linear-attention || true", check=False)
 
 import yaml
-spec = yaml.safe_load(urllib.request.urlopen("https://raw.githubusercontent.com/Aue2Jacques/pi-moderation-agent/main/rules/prompts/jev-variants.yaml").read().decode("utf-8"))["variants"]
+spec = yaml.safe_load(urllib.request.urlopen("https://raw.githubusercontent.com/Aue2Jacques/pi-moderation-agent/__REPO_SHA__/rules/prompts/jev-variants.yaml").read().decode("utf-8"))["variants"]
 def to_kev(qs):
     out = {}
     for k, q in qs.items():

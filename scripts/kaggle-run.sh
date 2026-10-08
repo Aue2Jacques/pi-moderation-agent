@@ -8,6 +8,14 @@ src=$1; out=$2
 user=${KAGGLE_USERNAME:-$(python3 -I -c "import json,os;print(json.load(open(os.path.expanduser('~/.kaggle/kaggle.json')))['username'])" 2>/dev/null || true)}
 [ -n "$user" ] || { echo "set KAGGLE_USERNAME or provide ~/.kaggle/kaggle.json"; exit 2; }
 work=$(mktemp -d); cp "$src"/*.py "$work"/
+# dev plan E4: pin every source the kernel pulls — this repo at the current pushed commit, COLDataset and kev at their
+# current HEAD — so a later run gets exactly the same questions, data and code; the pins are printed in the run log
+repo_sha=${REPO_SHA:-$(git rev-parse HEAD)}   # REPO_SHA: explicit commit (the dev box is synced by copying files; its HEAD is stale)
+git branch -r --contains "$repo_sha" 2>/dev/null | grep -q . || { echo "HEAD $repo_sha is not pushed; push first (the kernel fetches it from GitHub)"; exit 2; }
+cold_sha=$(git ls-remote https://github.com/thu-coai/COLDataset.git HEAD | cut -f1)
+kev_sha=$(git ls-remote https://github.com/jaredpalmer/kev.git HEAD | cut -f1)
+sed -i "s/__REPO_SHA__/$repo_sha/g; s/__COLD_SHA__/$cold_sha/g; s/__KEV_SHA__/$kev_sha/g" "$work"/*.py
+echo "pins: repo=$repo_sha cold=$cold_sha kev=$kev_sha"
 sed "s/__KAGGLE_USER__/$user/g" "$src/kernel-metadata.template.json" > "$work/kernel-metadata.json"
 slug=$(python3 -I -c "import json;print(json.load(open('$work/kernel-metadata.json'))['id'])")
 [ "${WAIT_ONLY:-0}" = 1 ] || kaggle kernels push -p "$work"

@@ -8,8 +8,13 @@ def sh(cmd):
     subprocess.run(cmd, shell=True, check=True)
 
 sh(f"{sys.executable} -m pip install -q laya pyyaml")
-sh("git clone -q --depth 1 https://github.com/thu-coai/COLDataset.git /kaggle/temp/cold || true")
-spec_url = "https://raw.githubusercontent.com/Aue2Jacques/pi-moderation-agent/main/rules/prompts/jev-variants.yaml"
+sh(f"{sys.executable} -m pip show laya | head -2")   # E4: record the installed version in the run log
+# dev plan E4: every source pinned (scripts/kaggle-run.sh fills the commits in at push time)
+PINS = {"repo": "__REPO_SHA__", "cold": "__COLD_SHA__"}
+assert all(not v.startswith("__") for v in PINS.values()), "push with scripts/kaggle-run.sh: it pins every source commit"
+print("pins", PINS, flush=True)
+sh("git clone -q https://github.com/thu-coai/COLDataset.git /kaggle/temp/cold && cd /kaggle/temp/cold && git checkout -q __COLD_SHA__")
+spec_url = "https://raw.githubusercontent.com/Aue2Jacques/pi-moderation-agent/__REPO_SHA__/rules/prompts/jev-variants.yaml"
 import yaml
 spec = yaml.safe_load(urllib.request.urlopen(spec_url).read().decode("utf-8"))["variants"]
 
