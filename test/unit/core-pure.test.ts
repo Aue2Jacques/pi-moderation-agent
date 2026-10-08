@@ -160,3 +160,19 @@ describe("case-pool writers (dev plan §3)", () => {
     expect(row.ingest_seq).toBeGreaterThan(0);
   });
 });
+
+describe("offline durable reconcile (W dead)", () => {
+  it("flags live tasks after a terminal review and live tasks with no review; lists investigating reviews", async () => {
+    const { freshDb, PINS, CFG } = await import("../helpers.ts");
+    const core = await import("../../packages/core/src/index.ts");
+    const db = freshDb();
+    const mk = (id: string) => { core.intakeInsert(db, { contentId: id, scene: "comment", text: id, eventTime: 1 }, 1); return core.createSuspiciousReview(db, { contentId: id, pins: PINS, judgeModel: "jev", judgeCallIds: [], pendingVisibility: "hidden", deadlineMs: CFG.deadlineMs, budgetTools: 12, budgetMicro: 50_000 }, 2).review; };
+    const a = mk("a"), b = mk("b");
+    db.prepare("UPDATE review SET state='human_queue', conversation_id='10' WHERE review_id=?").run(a.review_id);
+    db.prepare("UPDATE review SET state='investigating', conversation_id='20', lease_owner='w1', lease_until=5 WHERE review_id=?").run(b.review_id);
+    const out = core.reconcile.durableOffline(db, [{ conversationId: "10", status: "running" }, { conversationId: "20", status: "terminal" }, { conversationId: "30", status: "pending" }], [{ conversationId: "20", status: "placed" }], 100);
+    expect(out.violations.map((v) => v.check).sort()).toEqual(["durable_live_after_terminal", "durable_live_without_review"]);
+    expect(out.investigating).toEqual([{ reviewId: b.review_id, conversationId: "20", liveTasks: 0, openSubmissions: 1, leaseExpired: true }]);
+    expect(core.reconcile.durableOffline(db, [{ conversationId: "10", status: "terminal" }], [], 100).violations).toEqual([]);
+  });
+});

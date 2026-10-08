@@ -106,3 +106,30 @@ export function durable(db: Db, sessions: readonly SessionLike[], now: number): 
   }
   return v;
 }
+
+export type DurableTaskRow = { conversationId: string; status: string };
+export type DurableSubmissionRow = { conversationId: string; status: string };
+export type OfflineDurable = { violations: Violation[]; investigating: { reviewId: string; conversationId: string | null; liveTasks: number; openSubmissions: number; leaseExpired: boolean }[] };
+
+/**
+ * Stage-① known gap: the durable side when W is DEAD (its in-memory grants are gone, /sessions cannot answer). Reads
+ * what W's session store holds — read-only rows of its tasks and submissions — instead of asking a live W.
+ * Violations: live (non-terminal) tasks in a conversation whose review is terminal (a restart would resume them), and
+ * live tasks in a conversation no review points to. Investigating reviews are listed with their durable state so an
+ * operator can see what a restart will find; a lease that expired while W was down is normal (recovery re-leases).
+ */
+export function durableOffline(db: Db, tasks: readonly DurableTaskRow[], submissions: readonly DurableSubmissionRow[], now: number): OfflineDurable {
+  const v: Violation[] = [];
+  const live = new Map<string, number>();
+  for (const t of tasks) if (t.status !== "terminal") live.set(t.conversationId, (live.get(t.conversationId) ?? 0) + 1);
+  const open = new Map<string, number>();
+  for (const s of submissions) if (s.status === "queued" || s.status === "placed") open.set(s.conversationId, (open.get(s.conversationId) ?? 0) + 1);
+  for (const [conv, n] of live) {
+    const r = db.prepare("SELECT review_id, state FROM review WHERE conversation_id=?").get(conv) as { review_id: string; state: string } | undefined;
+    if (!r) { v.push({ check: "durable_live_without_review", ref: conv, detail: { liveTasks: n } }); continue; }
+    if (r.state === "disposed" || r.state === "human_disposed" || r.state === "human_queue") v.push({ check: "durable_live_after_terminal", ref: r.review_id, detail: { state: r.state, liveTasks: n } });
+  }
+  const investigating = (db.prepare("SELECT review_id, conversation_id, lease_until FROM review WHERE state='investigating'").all() as { review_id: string; conversation_id: string | null; lease_until: number | null }[])
+    .map((r) => ({ reviewId: r.review_id, conversationId: r.conversation_id, liveTasks: r.conversation_id ? live.get(r.conversation_id) ?? 0 : 0, openSubmissions: r.conversation_id ? open.get(r.conversation_id) ?? 0 : 0, leaseExpired: (r.lease_until ?? 0) < now }));
+  return { violations: v, investigating };
+}

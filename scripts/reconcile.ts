@@ -3,7 +3,9 @@
 //   durable-side checks from W's /sessions (with --w / W_URL; an unreachable W then fails the gate). Exit 0 only when there
 //   are no violations AND everything accepted has finished
 //   (open human-queue items are allowed: they wait for a person by design; pass --require-human-closed to forbid them).
-// usage: node --experimental-strip-types scripts/reconcile.ts [app.db] [--w http://127.0.0.1:8081] [--require-human-closed] [--no-final]
+//   W dead: --w-offline <session.sqlite> reads W's session store read-only (tasks, submissions) instead of /sessions.
+// usage: node --experimental-strip-types scripts/reconcile.ts [app.db] [--w http://127.0.0.1:8081 | --w-offline data/session.sqlite] [--require-human-closed] [--no-final]
+import { DatabaseSync } from "node:sqlite";
 import * as core from "../packages/core/src/index.ts";
 
 const args = process.argv.slice(2);
@@ -11,6 +13,7 @@ const flag = (k: string): boolean => args.includes(k);
 const opt = (k: string): string | undefined => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : undefined; };
 const dbPath = args.find((a, i) => !a.startsWith("--") && (i === 0 || !args[i - 1]!.startsWith("--"))) ?? process.env["APP_DB"] ?? "data/app.db";
 const wUrl = opt("--w") ?? process.env["W_URL"];
+const wOffline = opt("--w-offline");
 
 const db = core.openAppDb(dbPath, "tool");
 const now = Date.now();
@@ -31,6 +34,23 @@ if (wUrl) {
     durableStatus = `checked ${sessions.length} sessions`;
   } catch (e) {
     durableStatus = `W unreachable: ${(e as Error).message}`;
+    durableFailed = true;
+  }
+}
+
+let offline: core.reconcile.OfflineDurable | undefined;
+if (wOffline) {
+  // read-only: opening a harness on this store could resume its tasks; only its tables are read
+  try {
+    const sdb = new DatabaseSync(wOffline, { readOnly: true });
+    const tasks = (sdb.prepare("SELECT conversation_id, status FROM tasks").all() as { conversation_id: number; status: string }[]).map((t) => ({ conversationId: String(t.conversation_id), status: t.status }));
+    const subs = (sdb.prepare("SELECT conversation_id, status FROM submissions").all() as { conversation_id: number; status: string }[]).map((t) => ({ conversationId: String(t.conversation_id), status: t.status }));
+    sdb.close();
+    offline = core.reconcile.durableOffline(db, tasks, subs, Date.now());
+    durable = offline.violations;
+    durableStatus = `offline: read ${tasks.length} tasks, ${subs.length} submissions from ${wOffline}`;
+  } catch (e) {
+    durableStatus = `W session store unreadable: ${(e as Error).message}`;
     durableFailed = true;
   }
 }
@@ -61,7 +81,7 @@ console.log(JSON.stringify({
     reviews_without_cost: (db.prepare("SELECT COUNT(*) n FROM review WHERE trigger<>'fast' AND state IN ('disposed','human_queue','human_disposed') AND used_micro IS NULL AND conversation_id IS NOT NULL").get() as { n: number }).n,
   },
   rejections: (db.prepare("SELECT COUNT(*) n FROM audit WHERE kind='submit_rejected'").get() as { n: number }).n,
-  instant: count(instant), final: count(final), durable: count(durable), durable_status: durableStatus,
+  instant: count(instant), final: count(final), durable: count(durable), durable_status: durableStatus, ...(offline ? { durable_offline_investigating: offline.investigating } : {}),
   instant_sample: instant.slice(0, 5), final_sample: final.slice(0, 5), durable_sample: durable.slice(0, 5),
 }, null, 1));
 process.exit(ok ? 0 : 1);
