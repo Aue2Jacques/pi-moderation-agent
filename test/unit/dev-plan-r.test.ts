@@ -193,3 +193,22 @@ describe("closeout fix 2: the heaviest action wins in the core, for the agent to
     expect(sub("takedown", ["ABUSE-001"])()).toMatchObject({ ruling: { action: "takedown" } });
   });
 });
+
+describe("closeout fix 3: model-request egress gate", () => {
+  it("active and finalize pass; no grant fails; revoked without a signal fails; revoked waits until aborted", async () => {
+    const { admitModelRequest } = await import("../../packages/worker/src/extension.ts");
+    const grants = (mode?: string) => ({ get: () => (mode ? { mode } : undefined) }) as never;
+    await expect(admitModelRequest(grants("active"), "c", {})).resolves.toBeUndefined();
+    await expect(admitModelRequest(grants("finalize"), "c", {})).resolves.toBeUndefined();
+    await expect(admitModelRequest(grants(), "c", {})).rejects.toThrow(/without a grant/);
+    await expect(admitModelRequest(grants("revoked"), "c", {})).rejects.toThrow(/revoked grant/);
+    const ac = new AbortController();
+    let settled = false;
+    const held = admitModelRequest(grants("revoked"), "c", { signal: ac.signal }).catch((e) => { settled = true; throw e; });
+    await new Promise((ok) => setTimeout(ok, 80));
+    expect(settled).toBe(false);                                                // still held: nothing left
+    ac.abort(new Error("aborted by host"));
+    await expect(held).rejects.toThrow(/aborted by host/);
+    await expect(admitModelRequest(grants("revoked"), "c", { signal: new AbortController().signal }, 60)).rejects.toThrow(/held 60 ms/);
+  });
+});

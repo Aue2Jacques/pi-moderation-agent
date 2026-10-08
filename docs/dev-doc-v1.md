@@ -713,6 +713,7 @@ durable 事实：`Harness.open()` 不启动调度（scheduler `open()` "Dispatch
    对 a：grants[conv] = {mode:"finalize", reviewId}。对 b：grants[conv] = {mode:"revoked", reviewId}。
 6. 准入信号量按 active 数量预占。
    - **2026-10-08 修订（R3）**：恢复也受准入上限约束。按 created_at 从旧到新取 d，active 达到 admitMax 后其余归入 e deferred：不取租约；若 durable 有为其恢复的任务，给 revoked grant（工具一律拒绝），resume 后 abort。会话和证据保留，空出槽位后由 admitOnce 作为下一代次接管。
+   - **2026-10-08 修订（第 ① 阶段收尾修 3）**：上面的做法只限制了授权数量；暂缓会话在 resume 之后、abort 之前仍会发出模型请求（实测：上限 2 时 5 个会话发出请求）。现在在模型外发入口（`beforeRequest`，每次实际请求都经过，包括 Pi 的重试和重启后恢复的请求）设闸门：只有持 active 授权（受准入上限约束）或 finalize 授权（审次已有裁决，最多是关闭会话所需的那一次中断的请求，不计入准入）的会话可以发；revoked（含暂缓）在闸门处等待直到被中止，一个请求都不发；没有授权的直接失败。Pi 的 "poll"（延迟 / 批量响应）阶段不经过这个钩子，本项目的模型提供方不使用它。
 7. resume()。此后：
    - active：纯重放。
    - finalize：恢复的终结工具按 finalize 路径读回业务结果、memo、terminate；恢复的是 generation 任务时，模型随后发出的 dispose/release 在 beforeTool 放行（§8.4），同样走 finalize 路径。

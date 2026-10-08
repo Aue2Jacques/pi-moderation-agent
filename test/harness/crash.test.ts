@@ -147,7 +147,7 @@ describe("crash matrix (child process, SIGKILL)", () => {
     h24(db);
   }, 120_000);
 
-  it("R3 recovery obeys the admission limit: 6 live sessions, limit 2 → at most 2 run at once, the rest wait and all 6 finish", () => {
+  it("R3 recovery obeys the admission limit: 6 live sessions, limit 2 → at most 2 run at once (grants and actual model requests), the rest wait and all 6 finish", () => {
     const dir = mkdtempSync(join(tmpdir(), "crash-many-"));
     const appDb = join(dir, "app.db");
     const db = core.openAppDb(appDb, "test");
@@ -163,6 +163,10 @@ describe("crash matrix (child process, SIGKILL)", () => {
     expect((started["active"] as string[]).length).toBeLessThanOrEqual(2);
     expect((started["deferred"] as string[]).length).toBe(6 - (started["active"] as string[]).length);
     expect(started["liveAfterStart"] as number).toBeLessThanOrEqual(2);                        // deferred sessions' resumed tasks were stopped
+    // stage-1 closeout fix 3: during recovery no deferred review sent a model request, and at most the admitted ones did
+    const calls = started["modelCallsByReview"] as Record<string, number>;
+    for (const rid of started["deferred"] as string[]) expect(calls[rid] ?? 0, `deferred ${rid}`).toBe(0);
+    expect(Object.keys(calls).length).toBeLessThanOrEqual(2);
     const done = last(rec.milestones)!;
     expect(done["maxActive"] as number).toBeLessThanOrEqual(2);
     expect(done).toMatchObject({ milestone: "done", open: 0, grants: 0 });

@@ -29,7 +29,11 @@ if (process.env["KILL_AFTER_ADMIT"]) {
 }
 const started = await fx.worker.start();
 const liveAfterStart = (await fx.worker.harness.inspect(BACKGROUND_CONTEXT)).tasks.length;
-log({ milestone: "started", ...started, activeGrants: fx.worker.grants.count("active"), liveAfterStart });
+// model requests that actually left during recovery (counted after the egress gate), by conversation -> review id
+const reviewOfConv = new Map((db.prepare("SELECT review_id, conversation_id FROM review WHERE conversation_id IS NOT NULL").all() as { review_id: string; conversation_id: string }[]).map((r) => [r.conversation_id, r.review_id] as const));
+const modelCallsByReview: Record<string, number> = {};
+for (const c of fx.calls.filter((x) => x.kind === "model")) { const rid = reviewOfConv.get(c.conversationId) ?? c.conversationId; modelCallsByReview[rid] = (modelCallsByReview[rid] ?? 0) + 1; }
+log({ milestone: "started", ...started, activeGrants: fx.worker.grants.count("active"), liveAfterStart, modelCallsByReview });
 let maxActive = fx.worker.grants.count("active");
 for (let round = 0; round < 40 && open(db) > 0; round++) {
   await fx.worker.waitIdle();

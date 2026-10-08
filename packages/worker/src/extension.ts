@@ -88,6 +88,26 @@ export function threadContextRows(db: Db, c: core.ContentRow, snapshotSeq: numbe
   return out;
 }
 
+/** Egress gate for model requests (stage-1 closeout fix 3); see beforeRequest. Pi passes its task runtime as the hook
+ *  api, and that object carries the run's abort signal (not in the declared HookApi type); without it a revoked
+ *  request fails at once instead of waiting, so the gate can never hang a session. */
+export async function admitModelRequest(grants: Grants, conversationId: string, api: unknown, maxWaitMs = 120_000): Promise<void> {
+  const signal = (api as { signal?: AbortSignal }).signal;
+  const deadline = Date.now() + maxWaitMs;
+  for (;;) {
+    const g = grants.get(conversationId);
+    if (g && (g.mode === "active" || g.mode === "finalize")) return;
+    if (!g) throw new Error(`model request for ${conversationId} without a grant`);
+    if (!signal) throw new Error(`model request for ${conversationId} under a ${g.mode} grant`);
+    if (signal.aborted) throw signal.reason ?? new Error("aborted");
+    if (Date.now() > deadline) throw new Error(`model request for ${conversationId} held ${maxWaitMs} ms under a ${g.mode} grant`);
+    await new Promise<void>((ok) => {
+      const t = setTimeout(ok, 25);
+      signal.addEventListener("abort", () => { clearTimeout(t); ok(); }, { once: true });
+    });
+  }
+}
+
 /** Unified eligibility check (docs §7.3). Called first in every tool and before every external request. */
 export function guard(deps: ExtensionDeps, api: Pick<ToolExecutionApi, "conversationId">): Grant {
   const g = deps.grants.get(String(api.conversationId));
@@ -432,9 +452,15 @@ export function buildModerationExtension(deps: ExtensionDeps) {
     }),
     hook(GenerationTask, {
       beforeRequest: async (request, api) => {
+        // stage-1 closeout fix 3: the egress gate. beforeRequest runs before every physical model request (first
+        // attempt, Pi's retries, and requests resumed after a restart). Only a conversation that holds an active grant
+        // (counted by admission) or a finalize grant (its review already has a ruling; at most the one interrupted turn
+        // needed to close the session) may send. A revoked grant — including reviews deferred over the admission
+        // limit on restart — waits here until the host loop aborts it, so nothing leaves; no grant at all fails.
+        await admitModelRequest(grants, String(api.conversationId), api);
         const g = grants.get(String(api.conversationId));
         if (g) crashAt("A");
-        deps.onExternalCall?.(String(api.conversationId), "model");
+        deps.onExternalCall?.(String(api.conversationId), "model");   // counted only once the request may really leave
         return request;
       },
       afterResponse: async (message, api) => {
