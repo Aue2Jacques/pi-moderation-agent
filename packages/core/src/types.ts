@@ -41,7 +41,7 @@ export type RulingRow = {
 
 export type ContentRow = {
   content_id: string; scene: Scene; text_sha: string | null; text: string | null; image_refs: string | null;
-  account_id: string | null; thread_id: string | null; event_time: number; ingest_seq: number; created_at: number;
+  account_id: string | null; thread_id: string | null; reply_to: string | null; mentions: string | null; event_time: number; ingest_seq: number; created_at: number;
 };
 
 export type JudgeCallRow = {

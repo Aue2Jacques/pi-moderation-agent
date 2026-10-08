@@ -835,7 +835,7 @@ const done = (s: RulingSummary) => ({ content: text(`disposed ${s.action}`), det
 | 工具 | 执行体 | 写 evidence | 外部调用（经 guard + T11'） |
 |---|---|---|---|
 | get_account_history | synth_event + ruling(join content 取 account_id) as-of 查询 | 是 | 无 |
-| get_thread_context | content as-of 查询，前后各 3 条 | 是 | 无 |
+| get_thread_context | content as-of 查询：回复链（≤3 层）、直接回复（≤3）、@ 账号在本线程的发言（≤3），再补前 3 后 3（2026-10-08 R8b） | 是 | 无 |
 | get_image | 取图 → Clef 适配器 → T16（内置 image_check 问题） | 是 | 是（同 review_id + image sha 复用） |
 | find_similar_dispositions | simhash（text_sha）近邻 + as-of 有效裁决 | 是 | 无 |
 | load_rule | 规则正文与例外（按 review.rules_ver） | 是（kind=rule，不进 evidence_set） | 无 |
@@ -913,6 +913,7 @@ SELECT action FROM ruling WHERE content_id=? AND ingest_seq <= :snapshot_seq ORD
 | 工具 | model_view | 查询 |
 |---|---|---|
 | get_thread_context | 前后各 3 条：`{content_id, text（截断 200 字）, account_id, event_time, prior_effective_action}`，整体 `untrusted:true` | content `thread_id=? AND ingest_seq ≤ snapshot_seq`，按 event_time 取邻居；prior_effective_action 用上面的 SQL |
+| | **2026-10-08 修订（R8b）**：每条加 `relation`：`parent` / `ancestor`（沿 `content.reply_to` 上溯，≤3 层）、`reply`（直接回复本条，≤3）、`mentioned`（`content.mentions` 里每个账号在本线程、本条之前最近的一条，≤3 个账号）、`before` / `after`（同线程按时间前 3、后 3，不重复已列出的）。原实现是"距离最近的 6 条"，并不是前后各 3。内容表新增 `reply_to`、`mentions`（intake 字段 `replyTo`、`mentions`），旧库由 ensureSchema 迁移。 |
 | get_account_history | 结构化：近 7 天各动作计数、最近 5 条裁决 `{seq, action, rule_ids, created_at}`、申诉次数 | synth_event `account_id=? AND ingest_seq ≤ snapshot_seq AND event_time ≥ created_at − 7d`；ruling JOIN content ON content_id 取 account_id，`ruling.ingest_seq ≤ snapshot_seq AND ruling.created_at ≥ created_at − 7d` |
 | find_similar_dispositions | `{content_id, simhash_distance, action_as_of, event_time}` | content + ruling 同上 |
 | load_rule | 规则正文与例外（可信通道） | rules_ver |

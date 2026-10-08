@@ -83,7 +83,10 @@ function insertHumanQueue(db: Db, r: ReviewRow, reason: string, severity: number
 
 // ---------- T1 ----------
 
-export type NewContent = { contentId: string; scene: Scene; text?: string; imageRefs?: string[]; accountId?: string; threadId?: string; eventTime: number; prio?: number };
+export type NewContent = { contentId: string; scene: Scene; text?: string; imageRefs?: string[]; accountId?: string; threadId?: string;
+  /** the content this one replies to, and the accounts it @-mentions (R8b: thread context follows these relations) */
+  replyTo?: string; mentions?: string[];
+  eventTime: number; prio?: number };
 
 export function intakeInsert(db: Db, c: NewContent, at: number): { inserted: boolean } {
   return tx(db, () => {
@@ -91,8 +94,9 @@ export function intakeInsert(db: Db, c: NewContent, at: number): { inserted: boo
     if (exists) return { inserted: false };
     const seq = nextSeq(db);
     const text = c.text ?? null;
-    db.prepare("INSERT INTO content(content_id, scene, text_sha, text, image_refs, account_id, thread_id, event_time, ingest_seq, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
-      .run(c.contentId, c.scene, text === null ? null : sha256(text), text, c.imageRefs ? JSON.stringify(c.imageRefs) : null, c.accountId ?? null, c.threadId ?? null, c.eventTime, seq, at);
+    db.prepare("INSERT INTO content(content_id, scene, text_sha, text, image_refs, account_id, thread_id, reply_to, mentions, event_time, ingest_seq, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
+      .run(c.contentId, c.scene, text === null ? null : sha256(text), text, c.imageRefs ? JSON.stringify(c.imageRefs) : null, c.accountId ?? null, c.threadId ?? null,
+        c.replyTo ?? null, c.mentions?.length ? JSON.stringify(c.mentions) : null, c.eventTime, seq, at);
     db.prepare("INSERT INTO intake(content_id, prio, status, created_at, updated_at) VALUES (?,?,'received',?,?)").run(c.contentId, c.prio ?? 5, at, at);
     return { inserted: true };
   });

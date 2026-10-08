@@ -37,6 +37,9 @@ function migrate(db: Db): void {
     // R2: before this column, only generation 1 could ever bind a submission (the bind required submission_id IS NULL)
     db.exec("ALTER TABLE review ADD COLUMN submission_attempt INTEGER; UPDATE review SET submission_attempt=1 WHERE submission_id IS NOT NULL;");
   }
+  const content = new Set((db.prepare("PRAGMA table_info(content)").all() as { name: string }[]).map((c) => c.name));
+  if (!content.has("reply_to")) db.exec("ALTER TABLE content ADD COLUMN reply_to TEXT; ALTER TABLE content ADD COLUMN mentions TEXT;");   // R8b
+  db.exec("CREATE INDEX IF NOT EXISTS content_reply ON content(reply_to, event_time)");
   const mc = new Set((db.prepare("PRAGMA table_info(model_call)").all() as { name: string }[]).map((c) => c.name));
   if (!mc.has("response_key")) {
     // R5a: model_call was one row per generation task (first response only); rebuild with the per-response key.

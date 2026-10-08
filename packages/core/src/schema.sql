@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS content (
   text         TEXT,
   image_refs   TEXT,
   account_id   TEXT, thread_id TEXT,
+  reply_to     TEXT,           -- the content this one replies to (dev plan 2026-10-08 R8b); index created in db.ts migrate()
+  mentions     TEXT,           -- JSON array of account ids it @-mentions (R8b)
   event_time   INTEGER NOT NULL,
   ingest_seq   INTEGER NOT NULL,
   created_at   INTEGER NOT NULL
