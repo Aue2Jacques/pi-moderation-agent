@@ -9,6 +9,7 @@ import { crashAt } from "./crash.ts";
 import type { Grant, Grants } from "./grants.ts";
 import type { HostLoop } from "./host-loop.ts";
 import type { JudgeClient } from "./judge-client.ts";
+import { supportOf, type Support } from "./support.ts";
 
 export type ExtensionDeps = {
   db: Db;
@@ -160,6 +161,11 @@ function writeEvidence(deps: ExtensionDeps, g: Grant, kind: core.EvidenceKind, s
   });
 }
 
+/** dev plan §3: evidence of this kind already fetched in this review (any attempt: later attempts may cite it) */
+function fetched(db: Db, reviewId: string, kind: "thread_context" | "account_history"): { evidence_id: string; model_view: string } | undefined {
+  return db.prepare("SELECT evidence_id, model_view FROM evidence WHERE review_id=? AND kind=? ORDER BY created_at LIMIT 1").get(reviewId, kind) as { evidence_id: string; model_view: string } | undefined;
+}
+
 async function runJudge(deps: ExtensionDeps, api: ToolExecutionApi, ctx: Context, g: Grant, ruleIds: string[], evidenceIds: string[], confirms: { callId: string; seed: number } | undefined): Promise<ToolExecutionResult> {
   const review = core.requireReview(deps.db, g.reviewId);
   const content = core.readContent(deps.db, g.contentId)!;
@@ -173,12 +179,26 @@ async function runJudge(deps: ExtensionDeps, api: ToolExecutionApi, ctx: Context
     deps.hostLoop.request({ conversationId: String(api.conversationId), kind: "release", reason: "budget_cost" });
     return err("E_BUDGET_COST", "只能 release 或 dispose");
   }
-  const reqNo = core.openToolRequest(deps.db, g.reviewId, api.callId, deps.now());
-  crashAt("J");   // H-22: a replayed tool opens a second tool_request under the same tool_slot
-  deps.onExternalCall?.(String(api.conversationId), confirms ? "confirm" : "judge");
   // E5: the judge sees the model view (placeholders for links, emails, mentions, contact numbers); content.text stays the source
   const request = { contentId: g.contentId, text: content.text === null ? null : core.modelView(content.text), scene: content.scene, evidence: cited.map((e) => ({ evidenceId: e.evidenceId, kind: e.kind, modelView: e.modelView })), questions, ...(confirms ? { shuffleSeed: confirms.seed } : {}) };
   const requestSha = core.requestDigest(deps.judge, request);   // R9a: everything sent, rule texts included
+  const supportFor = (): Support | null => {
+    // dev plan §3: what the answers on this evidence set support now, by the submit check's own functions
+    const same = (deps.db.prepare("SELECT judge_call_id, evidence_set FROM judge_call WHERE review_id=?").all(g.reviewId) as { judge_call_id: string; evidence_set: string }[])
+      .filter((c) => JSON.stringify((JSON.parse(c.evidence_set) as string[]).slice().sort()) === JSON.stringify(evidenceSet)).map((c) => c.judge_call_id);
+    try { return supportOf(deps.db, core.requireReview(deps.db, g.reviewId), g.bundle, same); } catch { return null; }
+  };
+  if (!confirms) {
+    // dev plan §3: the same judge request is not paid for twice; the earlier answer is returned
+    const prev = deps.db.prepare("SELECT judge_call_id FROM judge_call WHERE review_id=? AND request_sha=? AND status='ok' AND confirms_call_id IS NULL ORDER BY created_at LIMIT 1").get(g.reviewId, requestSha) as { judge_call_id: string } | undefined;
+    const ev = prev ? deps.db.prepare("SELECT model_view FROM evidence WHERE review_id=? AND kind='judge' AND source_ref=?").get(g.reviewId, prev.judge_call_id) as { model_view: string } | undefined : undefined;
+    if (prev && ev) {
+      return { content: text(JSON.stringify({ judge_call_id: prev.judge_call_id, status: "ok", answers: JSON.parse(ev.model_view), already_judged: true, note: "同一证据、同样的问题已经判过，返回的是上次的结果；需要复核请用 confirm，需要新判断请先取新证据", support: supportFor(), dispose_with: { evidence_ids: evidenceIds } })), details: { judge_call_id: prev.judge_call_id, status: "ok" } };
+    }
+  }
+  const reqNo = core.openToolRequest(deps.db, g.reviewId, api.callId, deps.now());
+  crashAt("J");   // H-22: a replayed tool opens a second tool_request under the same tool_slot
+  deps.onExternalCall?.(String(api.conversationId), confirms ? "confirm" : "judge");
   let res: Awaited<ReturnType<JudgeClient["classify"]>>;
   try {
     res = await deps.judge.classify(request);
@@ -217,7 +237,7 @@ async function runJudge(deps: ExtensionDeps, api: ToolExecutionApi, ctx: Context
   core.settleToolRequest(deps.db, g.reviewId, api.callId, reqNo, cost, judgeCallId, deps.now());
   const summary = res.status === "ok" ? Object.fromEntries(questions.map((q) => [q.ruleId ? `${q.ruleId}/${q.kind}` : q.kind, res.answers[q.sha] ? { choice: res.answers[q.sha]!.choice, p: res.answers[q.sha]!.probs[q.violationOption] } : null])) : { status: res.status };
   writeEvidence(deps, g, "judge", judgeCallId, { questions: questions.map((q) => q.sha), summary }, summary, review.snapshot_seq);
-  return { content: text(JSON.stringify({ judge_call_id: judgeCallId, status: res.status, answers: summary })), details: { judge_call_id: judgeCallId, status: res.status } };
+  return { content: text(JSON.stringify({ judge_call_id: judgeCallId, status: res.status, answers: summary, support: supportFor(), dispose_with: { evidence_ids: evidenceIds } })), details: { judge_call_id: judgeCallId, status: res.status } };
 }
 
 export function buildModerationExtension(deps: ExtensionDeps) {
@@ -263,6 +283,8 @@ export function buildModerationExtension(deps: ExtensionDeps) {
       if (g.mode !== "active") return err("E_LEASE_LOST");
       const review = core.requireReview(db, g.reviewId);
       const content = core.readContent(db, g.contentId)!;
+      const had = fetched(db, g.reviewId, "thread_context");
+      if (had) return { content: text(JSON.stringify({ evidence_id: had.evidence_id, ...(JSON.parse(had.model_view) as object), already_fetched: true, note: "本审次已经取过线程上下文，返回的是已有证据" })) };
       const rows = threadContextRows(db, content, review.snapshot_seq);
       const view = rows.map((r) => ({
         content_id: r.content_id, relation: r.relation, text: core.modelView(r.text ?? "").slice(0, 200), account_id: r.account_id, event_time: r.event_time,
@@ -282,6 +304,8 @@ export function buildModerationExtension(deps: ExtensionDeps) {
       if (g.mode !== "active") return err("E_LEASE_LOST");
       const review = core.requireReview(db, g.reviewId);
       const content = core.readContent(db, g.contentId)!;
+      const had = fetched(db, g.reviewId, "account_history");
+      if (had) return { content: text(JSON.stringify({ evidence_id: had.evidence_id, ...(JSON.parse(had.model_view) as object), already_fetched: true, note: "本审次已经取过账号历史，返回的是已有证据" })) };
       const since = review.created_at - 7 * 86_400_000;
       const events = content.account_id
         ? (db.prepare("SELECT kind, payload, event_time FROM synth_event WHERE account_id=? AND ingest_seq<=? AND event_time>=? ORDER BY event_time DESC LIMIT 50").all(content.account_id, review.snapshot_seq, since) as { kind: string; payload: string; event_time: number }[])

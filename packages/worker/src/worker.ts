@@ -8,6 +8,7 @@ import type { Db, ReviewRow } from "@mod/core";
 import { buildModerationExtension, type ExtensionDeps } from "./extension.ts";
 import { crashAt } from "./crash.ts";
 import { Grants, type Grant } from "./grants.ts";
+import { taskBrief } from "./brief.ts";
 import { HostLoop } from "./host-loop.ts";
 
 const ctx = BACKGROUND_CONTEXT;
@@ -150,9 +151,12 @@ export class Worker {
   #generationInput(r: ReviewRow): { content: string; requestId: string } {
     // closeout fix 5: the confirmation rule the agent is told follows this review's pinned scene config (deterministic
     // for a given review, so a resubmission after a crash carries the same text under the same requestId)
-    const note = confirmNote(this.#bundleFor(r)?.bundle.scenes[core.readContent(this.#o.db, r.content_id)!.scene as core.Scene]);
+    const bundle = this.#bundleFor(r)?.bundle;
+    const note = confirmNote(bundle?.scenes[core.readContent(this.#o.db, r.content_id)!.scene as core.Scene]);
+    // dev plan §3: the review's own task (why suspicious, where it is stuck, what to verify, evidence, budget, stop rule)
+    const brief = bundle ? taskBrief(this.#o.db, r, bundle) : "";
     return r.attempt === 1
-      ? { content: `${this.#o.instructions}\n${note}`, requestId: r.review_id }
+      ? { content: `${this.#o.instructions}\n${brief}\n${note}`, requestId: r.review_id }
       : { content: `上一代次已中止；已有证据仍可引用。继续审核。\n${note}`, requestId: `${r.review_id}#a${r.attempt}` };
   }
 
