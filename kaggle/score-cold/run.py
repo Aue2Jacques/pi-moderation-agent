@@ -78,9 +78,16 @@ def oof(X, y):
     return out
 
 def funnel(s, y, lt, ft):
-    pos = sorted(v for v, l in zip(s, y) if l == 1); neg = sorted(v for v, l in zip(s, y) if l == 0)
-    t = pos[int(len(pos) * lt)]; u = neg[min(len(neg) - 1, int(len(neg) * (1 - ft)))]
-    return 0.0 if u <= t else sum(1 for v in s if t <= v < u) / len(s)
+    # inline copy of python/eval/funnel.py (Kaggle runs this file alone; keep them identical). Thresholds are taken
+    # where the ACTUAL leak / false-block rates meet the targets (dev plan 2026-10-08 §2.3); returns the to-agent share.
+    pos = [v for v, l in zip(s, y) if l == 1]; neg = [v for v, l in zip(s, y) if l == 0]
+    cands = sorted(set(s)) + [math.inf]
+    leak = lambda t: sum(1 for v in pos if v < t) / len(pos)
+    fb = lambda u: sum(1 for v in neg if v >= u) / len(neg)
+    t = max((c for c in cands if leak(c) <= lt), default=min(cands))
+    u = min(c for c in cands if fb(c) <= ft)
+    t = min(t, u)
+    return sum(1 for v in s if t <= v < u) / len(s)
 
 for model in ("laya", "kev"):
     dev_p, test_p = find(f"{model}-dev.jsonl"), find(f"{model}-test.jsonl")

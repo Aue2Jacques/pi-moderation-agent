@@ -8,8 +8,12 @@ usage: python3 -I scripts/score-jev-variants.py <baseline-run.jsonl> <A.jsonl> <
 """
 import json
 import math
+import os
 import random
 import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "python"))
+from eval.funnel import funnel  # noqa: E402
 
 base_p, a_p, b_p, c_p = sys.argv[1:5]
 
@@ -116,23 +120,12 @@ for k, s in sig.items():
     print(f"  {auc(s, y):.3f}  {k}")
 
 
-def funnel(s, leak_target, fb_target):
-    pos = sorted(v for v, l in zip(s, y) if l == 1)
-    neg = sorted(v for v, l in zip(s, y) if l == 0)
-    t = pos[int(len(pos) * leak_target)]          # below t: auto pass; leak = share of offensive below t
-    u = neg[min(len(neg) - 1, int(len(neg) * (1 - fb_target)))]   # at/above u: auto block; false block = safe above u
-    if u <= t:
-        return 0.0, t, u
-    sus = sum(1 for v in s if t <= v < u) / len(s)
-    return sus, t, u
-
-
-print("\n== 漏斗取舍：把漏放、误拦固定在同样水平，比较要交给 agent 的比例（越低越好）")
+print("\n== 漏斗取舍：漏放、误拦都按实际值核对（dev plan 2026-10-08 §2.3；旧版按分位数取阈值、同分时会失效，旧数字作废）")
 for lt, ft in ((0.15, 0.05), (0.10, 0.03), (0.20, 0.05)):
-    print(f"  漏放 {lt:.0%}、误拦 {ft:.0%} 时：")
+    print(f"  目标 漏放 ≤{lt:.0%}、误拦 ≤{ft:.0%}：")
     for k in ["现在的做法（选择题，3 题一起问，原序+副本均值）", "A 选择题单独问：违规概率", "B 打分题：分数（0–4）", "C 是非题 7 道 → 组合模型（5 折交叉验证）", "A+B+C 全部一起 → 组合模型（参考上限，要调 3 次）"]:
-        sus, t, u = funnel(sig[k], lt, ft)
-        print(f"    交 agent {sus:6.1%}  {k}")
+        r = funnel(sig[k], y, lt, ft)
+        print(f"    交 agent {r['to_agent']:6.1%}  实际漏放 {r['leak_actual']:5.1%}  实际误拦 {r['fb_actual']:5.1%}  放行线 <{r['pass_below']:.4g}  拦截线 ≥{r['block_at_or_above']:.4g}  n={r['n']}（违规 {r['n_violating']} / 正常 {r['n_normal']}）  {k}")
 
 # does choice confidence separate right from wrong argmax decisions?
 choice = [A[i]["answers"]["abuse"]["choice"] for i in ids]
