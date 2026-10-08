@@ -216,3 +216,30 @@ describe("R5b fast-path judge cost on the dashboard (dev plan 2026-10-08)", () =
     expect(m.cost_micro_window).toBe(2 * 950);   // two fast-path requests; the agent review has no cost yet
   });
 });
+
+describe("R7 human work on a review pinned to an older rules version (dev plan 2026-10-08)", () => {
+  it("after the gateway moves to a new bundle, claim lists the review's own rules and the human ruling is accepted under its version", async () => {
+    const db = freshDb();
+    seedContent(db, "v1", "comment", { text: "MAYBE text" });
+    await makeGateway(db).processIntakeOnce();                                                 // review created under rules@test1 (stored)
+    const rid = (db.prepare("SELECT review_id FROM review WHERE content_id='v1'").get() as { review_id: string }).review_id;
+    core.releaseToHuman(db, rid, { kind: "control" }, "timeout", 2, 1000, Date.now());
+    const NEW: core.PolicyBundle = { ...BUNDLE, rulesVer: "rules@test2", rules: BUNDLE.rules.filter((r) => r.ruleId === "ABUSE-001") };   // marketing rule removed
+    const g2 = makeGateway(db, {}, () => Date.now(), NEW);
+    const server = createHttpServer({ db, gateway: g2, bundle: NEW, humanAuth: HUMAN, now: () => Date.now() });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const H = { authorization: "Bearer tok", "x-reviewer": "rev1", "content-type": "application/json" };
+    try {
+      const claim = (await (await fetch(`${base}/api/human/claim`, { method: "POST", headers: H })).json()) as { review: { review_id: string }; rules: { rule_id: string }[] };
+      expect(claim.review.review_id).toBe(rid);
+      expect(claim.rules.map((x) => x.rule_id).sort()).toEqual(["ABUSE-001", "MARKETING-003"]);   // the review's version, not the gateway's
+      const sub = await fetch(`${base}/api/human/submit`, { method: "POST", headers: H, body: JSON.stringify({ review_id: rid, action: "limit", rule_ids: ["MARKETING-003"], reason: "lead" }) });
+      expect(sub.status).toBe(200);
+      expect(core.readRuling(db, rid)).toMatchObject({ actor: "human", action: "limit", rules_ver: "rules@test1" });
+    } finally {
+      server.close();
+    }
+  });
+});
+

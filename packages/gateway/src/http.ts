@@ -39,6 +39,10 @@ function auth(d: HttpDeps, req: IncomingMessage): { reviewerId: string } | undef
 
 export function createHttpServer(d: HttpDeps): Server {
   const { db, gateway } = d;
+  // dev plan R7: human work on a review uses the rules version the review is pinned to — the gateway's own bundle, or
+  // the copy stored when that version was in use. undefined: that version was never stored here.
+  const bundleOf = (r: core.ReviewRow): core.PolicyBundle | undefined =>
+    r.rules_ver === d.bundle.rulesVer ? d.bundle : (core.loadStoredBundle(db, r.rules_ver)?.bundle as core.PolicyBundle | undefined);
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
@@ -101,7 +105,9 @@ export function createHttpServer(d: HttpDeps): Server {
         });
         if (!row) return json(res, 200, { review: null });
         const r = core.readReview(db, row.review_id)!;
-        return json(res, 200, { review: pick(r, REVIEW_PUBLIC), rules: core.rulesFor(d.bundle, core.readContent(db, r.content_id)!.scene).map((x) => ({ rule_id: x.ruleId, default_action: x.defaultAction })) });
+        const pinned = bundleOf(r);
+        if (!pinned) return json(res, 409, { code: "E_BUNDLE_MISSING", message: `rules ${r.rules_ver} not stored` });
+        return json(res, 200, { review: pick(r, REVIEW_PUBLIC), rules: core.rulesFor(pinned, core.readContent(db, r.content_id)!.scene).map((x) => ({ rule_id: x.ruleId, default_action: x.defaultAction })) });
       }
       if (req.method === "POST" && path === "/api/human/submit") {
         const who = auth(d, req);
@@ -109,8 +115,10 @@ export function createHttpServer(d: HttpDeps): Server {
         const b = await readJson(req);
         const r = core.readReview(db, String(b["review_id"]));
         if (!r) return json(res, 404, { code: "E_REVIEW_NOT_FOUND" });
+        const pinned = bundleOf(r);
+        if (!pinned) return json(res, 409, { code: "E_BUNDLE_MISSING", message: `rules ${r.rules_ver} not stored` });
         try {
-          const out = core.submitRuling(db, d.bundle, { reviewId: r.review_id, actor: "human", action: b["action"] as core.Action, evidenceIds: [], ruleIds: (b["rule_ids"] as string[] | undefined) ?? [], judgeCallIds: [],
+          const out = core.submitRuling(db, pinned, { reviewId: r.review_id, actor: "human", action: b["action"] as core.Action, evidenceIds: [], ruleIds: (b["rule_ids"] as string[] | undefined) ?? [], judgeCallIds: [],
             pins: { rulesVer: r.rules_ver, calibVer: r.calib_ver, evidenceVer: r.evidence_ver }, reason: String(b["reason"] ?? ""), humanAuth: { reviewerId: who.reviewerId, token: String(req.headers["authorization"]).slice(7) } }, d.now(), d.humanAuth);
           if (b["rule_id"] && typeof b["label"] === "string") core.tx(db, () => db.prepare("INSERT INTO feedback(feedback_id, review_id, rule_id, human_label, machine_prob, created_at) VALUES (?,?,?,?,?,?)").run(core.uuid(), r.review_id, String(b["rule_id"]), String(b["label"]), null, d.now()));
           return json(res, 200, { ruling: { action: out.ruling.action, duplicate: out.duplicate } });
