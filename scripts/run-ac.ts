@@ -90,7 +90,9 @@ function rowsOf(db: core.Db) {
   const cases = readFileSync(CASES, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Case);
   const rows = cases.filter((c) => db.prepare("SELECT 1 FROM content WHERE content_id=?").get(c.case_id)).map((c) => {
     const reviews = db.prepare("SELECT * FROM review WHERE content_id=? ORDER BY seq").all(c.case_id) as core.ReviewRow[];
-    const r = reviews[reviews.length - 1]!;
+    const r = reviews[reviews.length - 1];
+    if (!r) return { case_id: c.case_id, kind: c.kind, pair: c.pair ?? null, expected: c.expected.disposition, route: "none", state: "not_processed", action: null, rules: [] as string[], release: null, suspect: null,
+      outcome: "system_failure", tools: [] as string[], judge_calls: 0, cost_micro: 0, agent_latency_ms: null };
     const rul = core.readRuling(db, r.review_id);
     const agentRan = (db.prepare("SELECT COUNT(*) AS n FROM tool_slot WHERE review_id=?").get(r.review_id) as { n: number }).n > 0;
     const tools = ((db.prepare("SELECT GROUP_CONCAT(tool) AS t FROM (SELECT tool FROM tool_slot WHERE review_id=? AND status<>'blocked' ORDER BY created_at)").get(r.review_id) as { t: string | null }).t ?? "").split(",").filter(Boolean);
@@ -138,10 +140,16 @@ if (phase === "prepare") {
   const PREP_CFG = { ...DEFAULT_GATEWAY_CONFIG, queueAgentMax: 1_000_000, queueHumanMax: 1_000_000, outstandingMax: 1_000_000 };
   const gw = new Gateway({ db, bundle, ruleTexts: texts, judge: judgeFor(), prices, calibrator, evidenceVer: "evidence@ac", judgeModel: JEV, cfg: PREP_CFG, now: () => Date.now(), gatewayId: "g-ac" });
   const outcomes: unknown[] = [];
-  for (let round = 0; round < 50; round++) {
+  // until the intake is empty (was: at most 50 batches = 800 items — the 3,002-item test run stopped there); a batch
+  // that makes no progress three times in a row ends the loop and is reported
+  let stuck = 0;
+  for (;;) {
     const left = (db.prepare("SELECT COUNT(*) AS n FROM intake WHERE status<>'judged'").get() as { n: number }).n;
     if (left === 0) break;
-    outcomes.push(...await gw.processIntakeOnce());
+    const got = await gw.processIntakeOnce();
+    outcomes.push(...got);
+    stuck = got.length ? 0 : stuck + 1;
+    if (stuck >= 3) { console.error(`prepare: ${left} intake rows made no progress`); break; }
   }
   db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   const byDecision: Record<string, number> = {};
