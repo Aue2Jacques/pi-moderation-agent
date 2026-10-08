@@ -138,6 +138,7 @@ CREATE TABLE synth_event (
   payload    TEXT NOT NULL,
   event_time INTEGER NOT NULL, ingest_seq INTEGER NOT NULL
 );
+-- payload：prior_ruling = {"action": "pass|limit|takedown", "rule_ids": [...]}（2026-10-08 R8a 约定；get_account_history 按 action 计入 counts，格式不对的计为 unknown）。
 CREATE INDEX synth_event_acct ON synth_event(account_id, event_time);
 
 CREATE TABLE intake (

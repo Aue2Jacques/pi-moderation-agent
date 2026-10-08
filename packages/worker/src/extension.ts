@@ -224,9 +224,23 @@ export function buildModerationExtension(deps: ExtensionDeps) {
       const rulings = content.account_id
         ? (db.prepare("SELECT r.seq, r.action, r.rule_ids, r.created_at FROM ruling r JOIN content c ON c.content_id=r.content_id WHERE c.account_id=? AND r.ingest_seq<=? AND r.created_at>=? AND r.content_id<>? ORDER BY r.created_at DESC LIMIT 5").all(content.account_id, review.snapshot_seq, since, content.content_id) as { seq: number; action: string; rule_ids: string; created_at: number }[])
         : [];
+      // dev plan R8a: counts cover every ruling and event in the window (the lists above are capped for display), and
+      // imported prior rulings (synth_event kind 'prior_ruling', payload {"action": ..., "rule_ids": [...]}) count too
       const counts: Record<string, number> = {};
-      for (const r of rulings) counts[r.action] = (counts[r.action] ?? 0) + 1;
-      const view = { counts, recent_rulings: rulings, appeals: events.filter((e) => e.kind === "appeal").length, warnings: events.filter((e) => e.kind === "warning").length };
+      let appeals = 0, warnings = 0;
+      if (content.account_id) {
+        for (const r of db.prepare("SELECT r.action, COUNT(*) AS n FROM ruling r JOIN content c ON c.content_id=r.content_id WHERE c.account_id=? AND r.ingest_seq<=? AND r.created_at>=? AND r.content_id<>? GROUP BY r.action").all(content.account_id, review.snapshot_seq, since, content.content_id) as { action: string; n: number }[]) counts[r.action] = r.n;
+        for (const e of db.prepare("SELECT kind, payload FROM synth_event WHERE account_id=? AND ingest_seq<=? AND event_time>=?").all(content.account_id, review.snapshot_seq, since) as { kind: string; payload: string }[]) {
+          if (e.kind === "appeal") appeals++;
+          else if (e.kind === "warning") warnings++;
+          else if (e.kind === "prior_ruling") {
+            let action = "unknown";
+            try { action = String((JSON.parse(e.payload) as { action?: unknown }).action ?? "unknown"); } catch { /* malformed import: counted as unknown */ }
+            counts[action] = (counts[action] ?? 0) + 1;
+          }
+        }
+      }
+      const view = { counts, recent_rulings: rulings, appeals, warnings };
       const id = writeEvidence(deps, g, "account_history", content.account_id ?? "none", { events, rulings }, view, review.snapshot_seq);
       return { content: text(JSON.stringify({ evidence_id: id, ...view })) };
     })(api, ctx),
