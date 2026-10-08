@@ -84,3 +84,11 @@ export function parseAnswers(std: Standard, raw: string): Record<string, Answer>
 /** The follow-up turn asking only for the questions a model left out (seen with qwen3.8-flash omitting q7). */
 export const followUpFor = (missing: string[]): string =>
   `你漏答了 ${missing.join("、")}。请按上面的题目补答，只输出一个 JSON，只含这几个键：{${missing.map((q) => `"${q}":"是|否|不确定"`).join(",")}}`;
+
+/** One labeler's label over repeated answers: the label more than half of them give; otherwise uncertain. */
+export function majority(labels: readonly Label[]): Label {
+  const c = new Map<Label, number>();
+  for (const l of labels) c.set(l, (c.get(l) ?? 0) + 1);
+  const top = [...c].sort((a, b) => b[1] - a[1])[0];
+  return top && top[1] * 2 > labels.length ? top[0] : "uncertain";
+}

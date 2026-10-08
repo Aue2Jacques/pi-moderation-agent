@@ -7,13 +7,17 @@
 //   compare <stdA> <stdB> <ids.txt>             on items both models answered under both versions: violate-vs-not
 //                                                agreement and which model alone said violate, by group
 //   stability <std> <ids.txt> <tag>             per model: same label in the main run and the repeat run <tag>
+//   vote <std> <ids.txt> <runsA> [runsB]         each model's label = majority of the runs listed (e.g. main,rep2,rep3;
+//                                                "main" is the untagged run; no label with a majority -> uncertain);
+//                                                by group: two-model agreement on the voted labels; with runsB, also
+//                                                whether each model's voted label is the same across the two run sets
 //   sample <group> <n> <out.txt> [exclude.txt…]  fresh dev-split ids of one group, none from the exclude files, by a
 //                                                fixed hash order (no text read) — a holdout for a reworded standard
 // Labeling models: deepseek-v4.1-flash and qwen3.8-flash (owner decision); deepseek's channel does not take a
 // temperature, so none is sent.
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { STANDARDS, followUpFor, readAnswers, type Answer, type Label } from "./lib/labeling.ts";
+import { STANDARDS, followUpFor, majority, readAnswers, type Answer, type Label } from "./lib/labeling.ts";
 
 for (const line of (() => { try { return readFileSync(".env", "utf8").split("\n"); } catch { return []; } })()) {
   const m = /^([A-Z_]+)=(.*)$/.exec(line.trim());
@@ -78,6 +82,58 @@ if (phase === "stability") {
       n++; if (la === lb) same3++; if ((la === "violate") === (lb === "violate")) sameBin++;
     }
     console.log(`${model.padEnd(22)} n=${n}  same 3-way ${((100 * same3) / Math.max(1, n)).toFixed(1)}%  same violate-vs-not ${((100 * sameBin) / Math.max(1, n)).toFixed(1)}%`);
+  }
+  process.exit(0);
+}
+if (phase === "vote") {
+  const [, sId, idsFile, runsA, runsB] = process.argv.slice(2);
+  if (!STANDARDS[sId ?? ""] || !idsFile || !runsA) throw new Error("usage: label-pilot.ts vote <std> <ids.txt> <runsA> [runsB]");
+  const sha = STANDARDS[sId!]!.promptSha;
+  const M = ["deepseek-v4.1-flash", "qwen3.8-flash"];
+  const want = new Set(readFileSync(idsFile, "utf8").split("\n").filter(Boolean));
+  const runCache = new Map<string, Map<string, string>>();
+  const run = (tag: string) => {
+    if (!runCache.has(tag)) {
+      const m = new Map<string, string>(), f = `data/eval/label-pilot-${sId}${tag === "main" ? "" : `.${tag}`}.jsonl`;
+      for (const l of (existsSync(f) ? readFileSync(f, "utf8") : "").split("\n").filter(Boolean)) {
+        const r = JSON.parse(l) as { id: string; model: string; ok: boolean; promptSha: string; label: string };
+        if (r.ok && r.promptSha === sha && want.has(r.id)) m.set(`${r.id}|${r.model}`, r.label);
+      }
+      runCache.set(tag, m);
+    }
+    return runCache.get(tag)!;
+  };
+  /** voted label of one model on one item over a run set; undefined unless every run answered */
+  const voted = (tags: string[], id: string, model: string): string | undefined => {
+    const ls = tags.map((t) => run(t).get(`${id}|${model}`));
+    if (ls.some((l) => l === undefined)) return undefined;
+    return majority(ls as Label[]);
+  };
+  const A = runsA.split(","), B = runsB?.split(",");
+  const out = new Map<string, Record<string, number>>();
+  const bump = (g: string, k: string) => { const c = out.get(g) ?? out.set(g, {}).get(g)!; c[k] = (c[k] ?? 0) + 1; };
+  for (const l of readFileSync("data/eval/eval20k.jsonl", "utf8").split("\n").filter(Boolean)) {
+    const it = JSON.parse(l) as { id: string; group: string };
+    if (!want.has(it.id)) continue;
+    const va = M.map((m) => voted(A, it.id, m)), vb = B ? M.map((m) => voted(B, it.id, m)) : undefined;
+    if (va.some((v) => !v) || (vb && vb.some((v) => !v))) continue;
+    for (const g of [it.group, "ALL"]) {
+      bump(g, "n");
+      if ((va[0] === "violate") === (va[1] === "violate")) bump(g, "A agree");
+      if (va[0] === va[1]) bump(g, "A agree3");
+      if (va.some((v) => v === "uncertain")) bump(g, "A anyUncertain");
+      if (vb) {
+        if ((vb[0] === "violate") === (vb[1] === "violate")) bump(g, "B agree");
+        M.forEach((m, i) => { if ((va[i] === "violate") === (vb[i] === "violate")) bump(g, `${m.slice(0, 4)} A=B`); });
+      }
+    }
+  }
+  const pct = (a = 0, n = 1) => `${((100 * a) / Math.max(1, n)).toFixed(1)}%`;
+  console.log(JSON.stringify({ standard: sId, runsA, runsB: runsB ?? null }));
+  for (const [g, c] of [...out].sort()) {
+    const n = c.n!;
+    console.log(`${g.padEnd(14)} n=${String(n).padStart(4)}  A violate-vs-not agree ${pct(c["A agree"], n)}  A 3-way ${pct(c["A agree3"], n)}  A any-uncertain ${pct(c["A anyUncertain"], n)}` +
+      (B ? `  B agree ${pct(c["B agree"], n)}  same voted label A vs B: ds ${pct(c["deep A=B"], n)} qw ${pct(c["qwen A=B"], n)}` : ""));
   }
   process.exit(0);
 }
