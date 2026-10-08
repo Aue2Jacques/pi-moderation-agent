@@ -28,6 +28,8 @@
 
 测试：unit 65、harness 39（崩溃用例 7 个 SIGKILL + 1 个无崩溃基线；gateway 7 个；第九轮 12 个）。`pnpm run check` 同时类型检查 packages、test、scripts。
 
+**下一步计划（草案，待负责人确认）**：[docs/dev-plan-2026-10-10.md](docs/dev-plan-2026-10-10.md) 合并了第十轮（整仓审阅，12 条代码问题，3 条 P1）和第十一轮（方向：主线收回到"agent 能否把疑似查清楚"）两份审查。顺序是：先修明确缺口，再统一裁决语义并按疑似原因分流，然后建 60–100 条带标签案例池、简化 agent 接口，最后跑 A/C 对比。计划第 7 节列了 5 个需要负责人拍板的决定。
+
 ### 已知问题与待决（2026-10-09，客观记录，未处理）
 
 都已写进开发文档附录 U，等外部审查后再定怎么改：
@@ -47,7 +49,8 @@
 |---|---|
 | [docs/project-doc-v2.md](docs/project-doc-v2.md) | **项目文档（权威）**：目标、业务、范围与分类体系、企业级属性、架构、模块设计、Pi 接口映射、数据、评测、演示、计划、风险；附录 C/D/E 是三轮审查的修订记录 |
 | [docs/dev-doc-v1.md](docs/dev-doc-v1.md) | **开发文档 v1.5**（v1.4 + 第九轮验收审查处理，附录 U；§14.1 四态表）：仓库结构、app.db DDL、状态转换表、事务边界 T1–T16、有效判官结果与 allowedActions、错误码、接口、租约/恢复/预算、Pi 绑定写法（按 pi-durable 1.0.4 的 d.ts 核对）、评测执行协议、用例目录与 CI、部署配置、分阶段开工与停止条件；附录 W 是 v2.3 契约覆盖表，附录 V/X 是第八、七轮处理记录；旧版在 docs/history/ |
-| [docs/reviews/](docs/reviews/) | 九轮审查原文：可行性、设计、harness/agent 角度、基于 GitHub 的终审、开发文档 v1.0 审查、v1.1 审查、v1.2 自审、v1.3 审查、阶段 1–4 验收审查 |
+| [docs/reviews/](docs/reviews/) | 十一轮审查原文：可行性、设计、harness/agent 角度、基于 GitHub 的终审、开发文档 v1.0 审查、v1.1 审查、v1.2 自审、v1.3 审查、阶段 1–4 验收审查、整仓审阅（bbe6340）、方向与优先级（bbe6340） |
+| [docs/dev-plan-2026-10-10.md](docs/dev-plan-2026-10-10.md) | **当前开发计划（草案）**：合并第十、十一轮审查；修复清单、裁决语义真值表、疑似分流、案例池、agent 接口、A/C 对比、待拍板事项 |
 | [docs/requirements-v1.md](docs/requirements-v1.md) | 需求文档 v1（历史，第 12–15 节记录了早期修订） |
 | [docs/dev-eval-plan-v1.md](docs/dev-eval-plan-v1.md) | 开发与评测方案 v1（历史；Pi 源码映射细节仍有参考价值） |
 | [docs/confirmed-items-2026-10-07.md](docs/confirmed-items-2026-10-07.md) | 早期 63 条确认事项清单（历史） |
