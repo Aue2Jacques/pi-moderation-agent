@@ -18,3 +18,9 @@ def test_every_shared_case():
 def test_version_matches_the_cases():
     from eval.model_view import VERSION
     assert VERSION == CASES["version"]
+
+
+def test_idempotent():
+    for c in CASES["cases"]:
+        once = model_view(eval_clean(c["in"]) if c.get("eval") else c["in"])
+        assert model_view(once) == once, (c["in"], once, model_view(once))

@@ -9,4 +9,7 @@ const CASES = JSON.parse(readFileSync(join(import.meta.dirname, "..", "..", "rul
 describe("model view (E5)", () => {
   it("version matches the shared cases", () => expect(MODEL_VIEW_VERSION).toBe(CASES.version));
   for (const c of CASES.cases.filter((x) => !x.eval)) it(`${c.in} -> ${c.out}`, () => expect(modelView(c.in)).toBe(c.out));
+  it("applying it twice changes nothing (eval texts are already in the view when they reach the runtime)", () => {
+    for (const c of CASES.cases.filter((x) => !x.eval)) expect(modelView(modelView(c.in))).toBe(modelView(c.in));
+  });
 });

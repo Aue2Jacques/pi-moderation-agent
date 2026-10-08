@@ -7,7 +7,7 @@ unicode emoji) and is applied before model_view when building the eval set; the 
 import html
 import re
 
-VERSION = "mv-1"
+VERSION = "mv-2"
 
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _URL = re.compile(r"(?:https?://|www\.)[^\s一-鿿]+|(?<![A-Za-z0-9.@-])[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.(?:com|cn|net|org|top|xyz|cc|io|me|info)\b(?:/[^\s一-鿿]*)?", re.I)
@@ -15,7 +15,7 @@ _PHONE = re.compile(r"(?<!\d)1[3-9]\d(?:[- ]?\d{4}){2}(?!\d)")
 _LANDLINE = re.compile(r"(?<!\d)0\d{2,3}-\d{7,8}(?!\d)")
 _QQ = re.compile(r"((?:QQ|qq|扣扣|企鹅)号?[\s:：]*)\d{5,11}(?!\d)")
 _WECHAT = re.compile(r"((?:微信|v信|V信|vx|VX|wx|WX|威信|薇信)号?[\s:：]*)[A-Za-z][-_A-Za-z0-9]{5,19}(?![-_A-Za-z0-9])")
-_MENTION = re.compile(r"(?<![A-Za-z0-9._-])@[^\s@:：，。！？,.!?]{1,20}(?=[:：\s]|$)")
+_MENTION = re.compile(r"(?<![A-Za-z0-9._\[-])@[^\s@:：，。！？,.!?\[\]]{1,20}(?=[:：\s]|$)")   # not after "[": a placeholder is not re-replaced
 _HASHTAG = re.compile(r"#([^#\n]{1,30})#")
 _WS = re.compile(r"\s+")
 
