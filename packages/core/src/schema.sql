@@ -180,7 +180,7 @@ CREATE TABLE IF NOT EXISTS judge_answer (
   judge_call_id TEXT NOT NULL REFERENCES judge_call(judge_call_id),
   question_sha  TEXT NOT NULL,
   rule_id       TEXT,
-  question_kind TEXT NOT NULL CHECK(question_kind IN ('rule','exception','image_check')),
+  question_kind TEXT NOT NULL CHECK(question_kind IN ('rule','exception','image_check','guard')),
   choice        TEXT NOT NULL,
   raw_probs     TEXT NOT NULL, calibrated_probs TEXT, temperature REAL,
   PRIMARY KEY(judge_call_id, question_sha)

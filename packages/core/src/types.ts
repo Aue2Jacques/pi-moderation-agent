@@ -57,7 +57,7 @@ export type JudgeCallRow = {
 
 export type JudgeAnswerRow = {
   judge_call_id: string; question_sha: string; rule_id: string | null;
-  question_kind: "rule" | "exception" | "image_check";
+  question_kind: "rule" | "exception" | "image_check" | "guard";
   choice: string; raw_probs: string; calibrated_probs: string | null; temperature: number | null;
 };
 
@@ -75,7 +75,7 @@ export type Question = {
   sha: string;                       // question_sha
   /** readable name sent to judges instead of the sha (e.g. ABUSE-001, ABUSE-001.EX-QUOTE, image_check); answers are mapped back to sha */
   key?: string;
-  kind: "rule" | "exception" | "image_check";
+  kind: "rule" | "exception" | "image_check" | "guard";   // guard: the fast-path injection check (dev plan §2.2)
   /** question text sent to judges (the sha covers these) */
   instructions: string;
   criteria: Record<string, string>;
@@ -106,6 +106,9 @@ export type SceneConfig = {
   humanSlaMs: number;
   defaultSeverity: number;
   imageCheck: { thresholds: { block: number; pass: number }; question: Question };
+  /** Fast-path injection guard (dev plan 2026-10-08 §2.2, owner choice): asked with the rule questions; at or above
+   *  `threshold` the fast path neither passes nor blocks — the item goes to the agent as injection_suspected. Optional. */
+  injectionGuard?: { threshold: number; question: Question };
 };
 
 export type PolicyBundle = {
@@ -121,11 +124,26 @@ export function rulesFor(bundle: PolicyBundle, scene: Scene): Rule[] {
 /** Readable, stable name of a question: its `key`, else derived as the rule loader derives it (ABUSE-001,
  *  ABUSE-001.EX-QUOTE, image_check). Used for calibration buckets. */
 export function questionKey(q: Pick<Question, "key" | "kind" | "ruleId" | "exceptionId">): string {
-  return q.key ?? (q.kind === "image_check" ? "image_check" : q.exceptionId ? `${q.ruleId}.${q.exceptionId}` : (q.ruleId ?? q.kind));
+  return q.key ?? (q.kind === "image_check" ? "image_check" : q.kind === "guard" ? "injection_guard" : q.exceptionId ? `${q.ruleId}.${q.exceptionId}` : (q.ruleId ?? q.kind));
 }
 
 export function ruleAllowed(rule: Rule): readonly Action[] {
   return ["pass", rule.defaultAction];
+}
+
+/** Every question the bundle can ask (rules, exceptions, scene image checks and injection guards) by sha. One place,
+ *  so a new question kind cannot be missing from one lookup and present in another (§2.2 guard). */
+export function allQuestions(bundle: PolicyBundle): Map<string, Question> {
+  const m = new Map<string, Question>();
+  for (const r of bundle.rules) {
+    m.set(r.question.sha, r.question);
+    for (const x of r.exceptions) m.set(x.question.sha, x.question);
+  }
+  for (const sc of Object.values(bundle.scenes)) {
+    m.set(sc.imageCheck.question.sha, sc.imageCheck.question);
+    if (sc.injectionGuard) m.set(sc.injectionGuard.question.sha, sc.injectionGuard.question);
+  }
+  return m;
 }
 
 export function questionsOf(bundle: PolicyBundle): Set<string> {
@@ -134,7 +152,10 @@ export function questionsOf(bundle: PolicyBundle): Set<string> {
     s.add(r.question.sha);
     for (const x of r.exceptions) s.add(x.question.sha);
   }
-  for (const sc of Object.values(bundle.scenes)) s.add(sc.imageCheck.question.sha);
+  for (const sc of Object.values(bundle.scenes)) {
+    s.add(sc.imageCheck.question.sha);
+    if (sc.injectionGuard) s.add(sc.injectionGuard.question.sha);
+  }
   return s;
 }
 

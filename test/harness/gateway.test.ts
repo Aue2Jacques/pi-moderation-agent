@@ -13,6 +13,7 @@ const withVariant = (answers: ReturnType<typeof uniform>): JudgeResponse => ({ s
 const byText = (req: JudgeRequest): JudgeResponse => {
   const t = req.text ?? "";
   if (t.includes("TIMEOUT")) return { status: "timeout", model: "jev-recorded", latencyMs: 20_000 };
+  if (t.includes("INJECT")) return withVariant({ ...uniform(req.questions.filter((q) => q.kind === "guard"), 0.95), ...uniform(req.questions.filter((q) => q.kind !== "guard"), 0.01) });
   if (t.includes("BOTH")) return withVariant({ ...uniform(req.questions.filter((q) => q.kind === "rule"), 0.99), ...uniform(req.questions.filter((q) => q.kind !== "rule"), 0.01) });
   if (t.includes("ABUSE")) return withVariant({ ...uniform(req.questions.filter((q) => q.kind === "rule" && q.ruleId === "ABUSE-001"), 0.99), ...uniform(req.questions.filter((q) => q.kind !== "rule" || q.ruleId !== "ABUSE-001"), 0.01) });
   if (t.includes("MAYBE")) return withVariant({ ...uniform(req.questions.filter((q) => q.kind === "rule" && q.ruleId === "ABUSE-001"), 0.5), ...uniform(req.questions.filter((q) => q.kind !== "rule" || q.ruleId !== "ABUSE-001"), 0.01) });
@@ -240,6 +241,21 @@ describe("R7 human work on a review pinned to an older rules version (dev plan 2
     } finally {
       server.close();
     }
+  });
+});
+
+describe("§2.2 fast-path injection guard (dev plan 2026-10-08)", () => {
+  it("the guard is asked and recorded; flagged -> agent review (injection_suspected); clear -> pass as before", async () => {
+    const db = freshDb();
+    seedContent(db, "inj1", "comment", { text: "INJECT plain text" });
+    seedContent(db, "ok1", "comment", { text: "normal text" });
+    const guardQ = { ...BUNDLE.scenes.comment.imageCheck.question, sha: core.questionSha({ kind: "guard", instructions: "guard?", criteria: { violate: "y", none: "n", unknown: "u" } }), key: "injection_guard", kind: "guard" as const, instructions: "guard?" };
+    const bundle: core.PolicyBundle = { ...BUNDLE, rulesVer: "rules@guard", scenes: { ...BUNDLE.scenes, comment: { ...BUNDLE.scenes.comment, injectionGuard: { threshold: 0.5, question: guardQ } } } };
+    const out = await makeGateway(db, {}, () => Date.now(), bundle).processIntakeOnce();
+    const byId = Object.fromEntries(out.map((o) => [o.contentId, o]));
+    expect(byId["inj1"]).toMatchObject({ decision: "suspicious" });
+    expect(byId["ok1"]).toMatchObject({ decision: "pass" });
+    expect((db.prepare("SELECT COUNT(*) AS n FROM judge_answer a JOIN judge_call c ON c.judge_call_id=a.judge_call_id WHERE c.content_id='inj1' AND a.question_kind='guard'").get() as { n: number }).n).toBe(2);   // primary + confirm copy
   });
 });
 

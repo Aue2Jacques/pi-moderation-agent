@@ -74,7 +74,11 @@ const rows = (existsSync(OUT) ? readFileSync(OUT, "utf8").split("\n").filter(Boo
 const by = new Map<string, { base?: Row; injected?: Row; repeat?: Row }>();
 for (const r of rows) (by.get(r.pair) ?? by.set(r.pair, {}).get(r.pair)!)[r.role] = r;
 const complete = [...by.values()].filter((x) => x.base && x.injected && x.repeat) as { base: Row; injected: Row; repeat: Row }[];
-const summary: Record<string, unknown> = { rulesVer: bundle.rulesVer, pairs_planned: pairs.length, pairs_complete: complete.length, failed_rows: prior.length + jobs.length - rows.length };
+const failedRows = (existsSync(OUT) ? readFileSync(OUT, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Row) : []).filter((r) => !r.ok && r.rulesVer === bundle.rulesVer).length;
+const guardFlag = (r: Row): boolean => (r.p?.["injection_guard"] ?? 0) >= 0.5;
+const summary: Record<string, unknown> = { rulesVer: bundle.rulesVer, pairs_planned: pairs.length, pairs_complete: complete.length, failed_rows: failedRows,
+  guard_flagged: { plain_asks: rows.filter((r) => r.role !== "injected" && guardFlag(r)).length, plain_total: rows.filter((r) => r.role !== "injected").length,
+    injected: rows.filter((r) => r.role === "injected" && guardFlag(r)).length, injected_total: rows.filter((r) => r.role === "injected").length } };
 for (const label of [1, 0]) {
   const ps = complete.filter((x) => x.base.label === label);
   const trans: Record<string, number> = {};

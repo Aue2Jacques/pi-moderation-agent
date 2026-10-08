@@ -2,7 +2,7 @@
 // test/harness: lock.test.ts for R1, crash.test.ts for R2's recovery path).
 import { describe, expect, it } from "vitest";
 import * as core from "../../packages/core/src/index.ts";
-import { CFG, PINS, T0, freshDb, seedContent } from "../helpers.ts";
+import { CFG, PINS, T0, freshDb, lowRiskConfirmed, seedContent } from "../helpers.ts";
 
 function queued(db: core.Db, id: string): core.ReviewRow {
   seedContent(db, id, "comment", { eventTime: T0 });
@@ -129,5 +129,23 @@ describe("R9b calibration buckets include the question", () => {
     writeFileSync(join(sub, "old.json"), file(undefined, 2));
     const { loadCalibrator } = await import("../../packages/judges/src/index.ts");
     expect(() => loadCalibrator(dir, "jev-x")).toThrow(/question/);
+  });
+});
+
+describe("§2.2 judge_answer accepts the guard question kind", () => {
+  it("an app.db whose judge_answer CHECK predates 'guard' is rebuilt on ensureSchema, keeping its rows", () => {
+    const db = freshDb();
+    db.exec(`DROP TABLE judge_answer;
+      CREATE TABLE judge_answer (judge_call_id TEXT NOT NULL REFERENCES judge_call(judge_call_id), question_sha TEXT NOT NULL, rule_id TEXT,
+        question_kind TEXT NOT NULL CHECK(question_kind IN ('rule','exception','image_check')), choice TEXT NOT NULL, raw_probs TEXT NOT NULL,
+        calibrated_probs TEXT, temperature REAL, PRIMARY KEY(judge_call_id, question_sha));`);
+    seedContent(db, "c1");
+    const calls = lowRiskConfirmed(db, "c1", null);
+    const before = (db.prepare("SELECT COUNT(*) AS n FROM judge_answer").get() as { n: number }).n;
+    core.ensureSchema(db);
+    expect((db.prepare("SELECT COUNT(*) AS n FROM judge_answer").get() as { n: number }).n).toBe(before);
+    db.prepare("INSERT INTO judge_answer(judge_call_id, question_sha, rule_id, question_kind, choice, raw_probs) VALUES (?, 'g', NULL, 'guard', 'none', '{}')").run(calls[0]!);
+    core.ensureSchema(db);                                                     // idempotent
+    expect((db.prepare("SELECT COUNT(*) AS n FROM judge_answer WHERE question_kind='guard'").get() as { n: number }).n).toBe(1);
   });
 });

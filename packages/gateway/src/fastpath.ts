@@ -53,7 +53,8 @@ export async function runFastpath(deps: FastpathDeps, contentId: string): Promis
   }
   // one judge call: every applicable rule question + its exceptions
   const rules = core.rulesFor(deps.bundle, scene);
-  const questions = rules.flatMap((r) => [r.question, ...r.exceptions.map((x) => x.question)]);
+  const guard = deps.bundle.scenes[scene].injectionGuard;
+  const questions = [...rules.flatMap((r) => [r.question, ...r.exceptions.map((x) => x.question)]), ...(guard ? [guard.question] : [])];
   const request = { contentId, text: content.text, scene, evidence: [], questions };
   const requestSha = core.requestDigest(deps.judge, request);
   const res = await deps.judge.classify(request);

@@ -311,7 +311,7 @@ export type JudgeCallInput = {
   requestSha?: string;
   pins: Pins; status: "ok" | "timeout" | "error" | "abstain"; shuffleSeed?: number; confirmsCallId?: string; massCovered?: number;
   latencyMs?: number; inputTokens?: number; outputTokens?: number; costMicro?: number; costStatus: "settled" | "estimated" | "unknown";
-  answers: readonly { questionSha: string; ruleId: string | null; kind: "rule" | "exception" | "image_check"; choice: string; rawProbs: Record<string, number>; calibratedProbs: Record<string, number> | null; temperature?: number }[];
+  answers: readonly { questionSha: string; ruleId: string | null; kind: "rule" | "exception" | "image_check" | "guard"; choice: string; rawProbs: Record<string, number>; calibratedProbs: Record<string, number> | null; temperature?: number }[];
 };
 
 export function recordJudgeCall(db: Db, c: JudgeCallInput, at: number): void {

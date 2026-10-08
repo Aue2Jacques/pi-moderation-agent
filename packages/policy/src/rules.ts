@@ -20,6 +20,7 @@ export type ScenesYaml = Record<Scene, {
   required_categories: string[]; allowed_actions: Action[]; pending_visibility: "visible" | "self_only" | "hidden";
   deadline_ms: number; human_sla_ms: number; default_severity: number;
   image_check: { thresholds: { block: number; pass: number }; question: QuestionYaml };
+  injection_guard?: { threshold: number; question: QuestionYaml };
 }>;
 
 /**
@@ -41,7 +42,7 @@ function toQuestion(kind: Question["kind"], q: QuestionYaml, ruleId?: string, ex
   const instructions = composeInstructions(q, definition);
   return {
     sha: questionSha({ kind, ...(ruleId ? { rule_id: ruleId } : {}), ...(exceptionId ? { exception_id: exceptionId } : {}), instructions, criteria: q.options }),
-    key: kind === "image_check" ? "image_check" : exceptionId ? `${ruleId}.${exceptionId}` : ruleId!,
+    key: kind === "image_check" ? "image_check" : kind === "guard" ? "injection_guard" : exceptionId ? `${ruleId}.${exceptionId}` : ruleId!,
     kind,
     instructions,
     criteria: q.options,
@@ -69,6 +70,7 @@ export function sceneFromYaml(y: ScenesYaml[Scene]): SceneConfig {
     requiredCategories: y.required_categories, allowedActions: y.allowed_actions, pendingVisibility: y.pending_visibility,
     deadlineMs: y.deadline_ms, humanSlaMs: y.human_sla_ms, defaultSeverity: y.default_severity,
     imageCheck: { thresholds: y.image_check.thresholds, question: toQuestion("image_check", y.image_check.question) },
+    ...(y.injection_guard ? { injectionGuard: { threshold: y.injection_guard.threshold, question: toQuestion("guard", y.injection_guard.question) } } : {}),
   };
 }
 

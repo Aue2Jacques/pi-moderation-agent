@@ -51,6 +51,21 @@ function migrate(db: Db): void {
   const content = new Set((db.prepare("PRAGMA table_info(content)").all() as { name: string }[]).map((c) => c.name));
   if (!content.has("reply_to")) db.exec("ALTER TABLE content ADD COLUMN reply_to TEXT; ALTER TABLE content ADD COLUMN mentions TEXT;");   // R8b
   db.exec("CREATE INDEX IF NOT EXISTS content_reply ON content(reply_to, event_time)");
+  const ja = (db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='judge_answer'").get() as { sql: string } | undefined)?.sql ?? "";
+  if (ja && !ja.includes("'guard'")) {
+    // §2.2 injection guard: question_kind gains 'guard'; SQLite cannot alter a CHECK, so rebuild the table
+    db.exec(`BEGIN;
+      CREATE TABLE judge_answer_g (
+        judge_call_id TEXT NOT NULL REFERENCES judge_call(judge_call_id), question_sha TEXT NOT NULL, rule_id TEXT,
+        question_kind TEXT NOT NULL CHECK(question_kind IN ('rule','exception','image_check','guard')),
+        choice TEXT NOT NULL, raw_probs TEXT NOT NULL, calibrated_probs TEXT, temperature REAL,
+        PRIMARY KEY(judge_call_id, question_sha));
+      INSERT INTO judge_answer_g SELECT judge_call_id, question_sha, rule_id, question_kind, choice, raw_probs, calibrated_probs, temperature FROM judge_answer;
+      DROP TABLE judge_answer;
+      ALTER TABLE judge_answer_g RENAME TO judge_answer;
+      CREATE INDEX IF NOT EXISTS judge_answer_q ON judge_answer(question_sha);
+      COMMIT;`);
+  }
   const mc = new Set((db.prepare("PRAGMA table_info(model_call)").all() as { name: string }[]).map((c) => c.name));
   if (!mc.has("response_key")) {
     // R5a: model_call was one row per generation task (first response only); rebuild with the per-response key.

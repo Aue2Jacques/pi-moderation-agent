@@ -42,8 +42,10 @@ export function sentence(e: RefEntry): string {
 export const questionKey = (q: Question): string => [q.ruleId ?? "scene", q.kind, q.exceptionId].filter(Boolean).join("/");
 
 /** Exactly the questions the fast path asks for this scene. */
+/** Exactly what the fast path asks in a scene: rule and exception questions, plus the injection guard when configured. */
 export function sceneQuestions(bundle: PolicyBundle, scene: Scene): Question[] {
-  return core.rulesFor(bundle, scene).flatMap((r) => [r.question, ...r.exceptions.map((x) => x.question)]);
+  const guard = bundle.scenes[scene].injectionGuard;
+  return [...core.rulesFor(bundle, scene).flatMap((r) => [r.question, ...r.exceptions.map((x) => x.question)]), ...(guard ? [guard.question] : [])];
 }
 
 export function readFixture(ref: string): Fixture | undefined {

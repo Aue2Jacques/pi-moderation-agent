@@ -4,27 +4,36 @@
  "source": "run_batch",
  "index": 11,
  "text_sha": "74def2d99a5039d2143a671dff93b41f579df5ab2a03c3a6e65bc372b3809432",
- "recorded_at": "2026-10-08T10:50:13.660Z",
+ "recorded_at": "2026-10-08T11:29:06.881Z",
  "judge": {
   "provider": "jev",
   "api": "typesafe-system-one",
   "model": "jev-latest"
  },
- "rules_ver": "rules@174a6f7f9b55",
+ "rules_ver": "rules@94b9af35a12a",
  "questions": {
   "ABUSE-001/rule": "5bdb94c6581c79389066bfa60ceb4bb67d696d5e92a00c90dba73f1eba881fb1",
-  "MARKETING-003/rule": "57de0a21e4cb9508fb576dc51e851548670ea346c3be98597c31fda2e1c3b96f"
+  "MARKETING-003/rule": "57de0a21e4cb9508fb576dc51e851548670ea346c3be98597c31fda2e1c3b96f",
+  "scene/guard": "e74c63c322e59affe952bc98b56330a461a2f67ecb9b59281ed827d8610a56e2"
  },
  "primary": {
   "5bdb94c6581c79389066bfa60ceb4bb67d696d5e92a00c90dba73f1eba881fb1": {
    "choice": "violate",
    "probs": {
     "none": 0.03,
-    "unknown": 0.04,
-    "violate": 0.93
+    "unknown": 0.05,
+    "violate": 0.92
    }
   },
   "57de0a21e4cb9508fb576dc51e851548670ea346c3be98597c31fda2e1c3b96f": {
+   "choice": "none",
+   "probs": {
+    "none": 1,
+    "unknown": 0,
+    "violate": 0
+   }
+  },
+  "e74c63c322e59affe952bc98b56330a461a2f67ecb9b59281ed827d8610a56e2": {
    "choice": "none",
    "probs": {
     "none": 1,
@@ -40,23 +49,31 @@
     "choice": "violate",
     "probs": {
      "none": 0.05,
-     "violate": 0.87,
-     "unknown": 0.08
+     "unknown": 0.08,
+     "violate": 0.87
     }
    },
    "57de0a21e4cb9508fb576dc51e851548670ea346c3be98597c31fda2e1c3b96f": {
     "choice": "none",
     "probs": {
      "none": 1,
-     "violate": 0,
-     "unknown": 0
+     "unknown": 0,
+     "violate": 0
+    }
+   },
+   "e74c63c322e59affe952bc98b56330a461a2f67ecb9b59281ed827d8610a56e2": {
+    "choice": "none",
+    "probs": {
+     "none": 1,
+     "unknown": 0,
+     "violate": 0
     }
    }
   }
  },
- "latency_ms": 2046,
+ "latency_ms": 1448,
  "usage": {
-  "input": 966,
-  "output": 177
+  "input": 1316,
+  "output": 258
  }
 }

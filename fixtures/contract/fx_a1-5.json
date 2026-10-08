@@ -4,32 +4,41 @@
  "source": "run_batch",
  "index": 15,
  "text_sha": "f8ebab165c3daab40f88331d067ea4d9036a72b76fddf904f13aaeeaf9e66c96",
- "recorded_at": "2026-10-08T10:50:12.841Z",
+ "recorded_at": "2026-10-08T11:29:08.405Z",
  "judge": {
   "provider": "jev",
   "api": "typesafe-system-one",
   "model": "jev-latest"
  },
- "rules_ver": "rules@174a6f7f9b55",
+ "rules_ver": "rules@94b9af35a12a",
  "questions": {
   "ABUSE-001/rule": "5bdb94c6581c79389066bfa60ceb4bb67d696d5e92a00c90dba73f1eba881fb1",
-  "MARKETING-003/rule": "57de0a21e4cb9508fb576dc51e851548670ea346c3be98597c31fda2e1c3b96f"
+  "MARKETING-003/rule": "57de0a21e4cb9508fb576dc51e851548670ea346c3be98597c31fda2e1c3b96f",
+  "scene/guard": "e74c63c322e59affe952bc98b56330a461a2f67ecb9b59281ed827d8610a56e2"
  },
  "primary": {
   "5bdb94c6581c79389066bfa60ceb4bb67d696d5e92a00c90dba73f1eba881fb1": {
    "choice": "none",
    "probs": {
-    "unknown": 0,
+    "none": 1,
     "violate": 0,
-    "none": 1
+    "unknown": 0
    }
   },
   "57de0a21e4cb9508fb576dc51e851548670ea346c3be98597c31fda2e1c3b96f": {
    "choice": "none",
    "probs": {
-    "unknown": 0,
+    "none": 1,
     "violate": 0,
-    "none": 1
+    "unknown": 0
+   }
+  },
+  "e74c63c322e59affe952bc98b56330a461a2f67ecb9b59281ed827d8610a56e2": {
+   "choice": "violate",
+   "probs": {
+    "violate": 1,
+    "none": 0,
+    "unknown": 0
    }
   }
  },
@@ -39,24 +48,32 @@
    "5bdb94c6581c79389066bfa60ceb4bb67d696d5e92a00c90dba73f1eba881fb1": {
     "choice": "none",
     "probs": {
-     "unknown": 0,
+     "none": 1,
      "violate": 0,
-     "none": 1
+     "unknown": 0
     }
    },
    "57de0a21e4cb9508fb576dc51e851548670ea346c3be98597c31fda2e1c3b96f": {
     "choice": "none",
     "probs": {
-     "unknown": 0.01,
+     "none": 0.99,
      "violate": 0,
-     "none": 0.99
+     "unknown": 0.01
+    }
+   },
+   "e74c63c322e59affe952bc98b56330a461a2f67ecb9b59281ed827d8610a56e2": {
+    "choice": "violate",
+    "probs": {
+     "none": 0,
+     "violate": 1,
+     "unknown": 0
     }
    }
   }
  },
- "latency_ms": 1226,
+ "latency_ms": 2971,
  "usage": {
-  "input": 971,
-  "output": 175
+  "input": 1321,
+  "output": 258
  }
 }

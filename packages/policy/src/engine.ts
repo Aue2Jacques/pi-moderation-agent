@@ -1,5 +1,5 @@
 // Policy engine: judge answers → three states. Shares thresholds and ruleAllowed with core.allowedActions (docs §9.3).
-import { allowedActions, ruleAllowed, type AnswerRecord, type PolicyBundle, type Scene } from "@mod/core";
+import { allowedActions, effectiveAnswer, ruleAllowed, type AnswerRecord, type PolicyBundle, type Scene } from "@mod/core";
 
 export type Decision = { state: "pass" | "block" | "suspicious"; action: "pass" | "limit" | "takedown" | null; hits: string[]; reason: string };
 
@@ -14,6 +14,23 @@ export type EngineInput = {
 };
 
 export function decide(i: EngineInput): Decision {
+  const d = decideRules(i);
+  // dev plan §2.2 (owner choice 2026-10-08): the fast-path injection guard. When the scene asks it, an automatic
+  // decision (pass or block) needs a consistent answer below the threshold; a flagged or missing guard answer sends the
+  // item to the agent instead. It never makes anything a violation by itself.
+  const guard = i.bundle.scenes[i.scene].injectionGuard;
+  if (guard && (d.state === "pass" || d.state === "block")) {
+    const e = effectiveAnswer(i.answers.filter((a) => a.questionSha === guard.question.sha));
+    const clear = e.kind === "group" && !e.inconsistent && e.answers.every((a) => a.p !== null) && e.p < guard.threshold;
+    if (!clear) {
+      const flagged = e.kind === "group" && e.answers.some((a) => a.p !== null) && e.p >= guard.threshold;
+      return { state: "suspicious", action: null, hits: d.hits, reason: flagged ? "injection_suspected" : "uncovered:injection_guard" };
+    }
+  }
+  return d;
+}
+
+function decideRules(i: EngineInput): Decision {
   if (!i.judgeOk) return { state: "suspicious", action: null, hits: [], reason: "judge_unavailable" };
   const r = allowedActions({ bundle: i.bundle, scene: i.scene, hasImages: i.hasImages, imageDelivered: i.imageDelivered ?? false, answers: i.answers });
   const blocking = r.rules.filter((v) => v.blockSupport);

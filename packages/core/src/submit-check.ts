@@ -8,7 +8,7 @@ import { canonical, outboxEventId, sha256 } from "./ids.ts";
 import { usedToolSlots } from "./budget.ts";
 import { appendRejectAudit, insertReview, readContent, readReview, readRuling, upsertContentState, visibilityFor } from "./review.ts";
 import { assertTransition } from "./states.ts";
-import { CONTENT_BEARING_EVIDENCE, questionsOf, rulesFor, ruleAllowed, type Action, type Actor, type EvidenceRow, type JudgeAnswerRow, type JudgeCallRow, type Pins, type PolicyBundle, type ReviewRow, type RulingRow } from "./types.ts";
+import { CONTENT_BEARING_EVIDENCE, allQuestions, questionsOf, rulesFor, ruleAllowed, type Action, type Actor, type EvidenceRow, type JudgeAnswerRow, type JudgeCallRow, type Pins, type PolicyBundle, type ReviewRow, type RulingRow } from "./types.ts";
 
 export type SubmitRulingInput = {
   reviewId: string;
@@ -50,11 +50,7 @@ export function trustedAnswers(db: Db, review: ReviewRow, bundle: PolicyBundle, 
   if (!content) throw new CoreError("E_REVIEW_NOT_FOUND", `content ${review.content_id}`);
   const known = questionsOf(bundle);
   const violationOf = new Map<string, string>();
-  for (const r of bundle.rules) {
-    violationOf.set(r.question.sha, r.question.violationOption);
-    for (const x of r.exceptions) violationOf.set(x.question.sha, x.question.violationOption);
-  }
-  for (const sc of Object.values(bundle.scenes)) violationOf.set(sc.imageCheck.question.sha, sc.imageCheck.question.violationOption);
+  for (const [sha, q] of allQuestions(bundle)) violationOf.set(sha, q.violationOption);
   const ownEvidence = new Set((db.prepare("SELECT body_sha FROM evidence WHERE review_id=? AND kind IN ('account_history','thread_context','image_check','similar')").all(review.review_id) as { body_sha: string }[]).map((e) => e.body_sha));
   const calls: JudgeCallRow[] = [];
   const answers: AnswerRecord[] = [];
@@ -225,8 +221,7 @@ export function fastDispose(db: Db, bundle: PolicyBundle, i: FastDisposeInput, a
 export function trustedAnswersFromCalls(db: Db, contentId: string, judgeCallIds: readonly string[], bundle: PolicyBundle, inputSha: string): AnswerRecord[] {
   const known = questionsOf(bundle);
   const violationOf = new Map<string, string>();
-  for (const r of bundle.rules) { violationOf.set(r.question.sha, r.question.violationOption); for (const x of r.exceptions) violationOf.set(x.question.sha, x.question.violationOption); }
-  for (const sc of Object.values(bundle.scenes)) violationOf.set(sc.imageCheck.question.sha, sc.imageCheck.question.violationOption);
+  for (const [sha, q] of allQuestions(bundle)) violationOf.set(sha, q.violationOption);
   const out: AnswerRecord[] = [];
   for (const id of judgeCallIds) {
     const call = db.prepare("SELECT * FROM judge_call WHERE judge_call_id=?").get(id) as JudgeCallRow | undefined;

@@ -21,6 +21,9 @@ const ans = (sha: string, id: string, p: number, choice: string, confirms?: stri
   judgeCallId: id, questionSha: sha, choice, p, evidenceSet: [], inputSha: "in", model: "m", calibVer: "c", confirmsCallId: confirms ?? null, createdAt: at,
 });
 const pair = (sha: string, prefix: string, p = 0.02): AnswerRecord[] => [ans(sha, `${prefix}a`, p, "none"), ans(sha, `${prefix}b`, p, "none", `${prefix}a`, 1)];
+// the comment scene asks the fast-path injection guard (§2.2); an automatic decision needs a clear guard answer
+const guardQ = B.scenes.comment.injectionGuard!.question;
+const G = pair(guardQ.sha, "g");
 
 describe("U-07 rules YAML", () => {
   it("loads the bundle, derives question shas, versions rules+scenes together", () => {
@@ -46,7 +49,7 @@ describe("U-01 engine", () => {
     expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m")], judgeOk: false }).state).toBe("suspicious");
   });
   it("confirmed low risk on all required → pass; single unconfirmed → suspicious (uncovered)", () => {
-    expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m")], judgeOk: true }).state).toBe("pass");
+    expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m"), ...G], judgeOk: true }).state).toBe("pass");
     const d = policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [ans(abuse.question.sha, "x", 0.02, "none"), ...pair(mkt.question.sha, "m")], judgeOk: true });
     expect(d.state).toBe("suspicious");
     expect(d.reason).toBe("uncovered:ABUSE");
@@ -54,21 +57,21 @@ describe("U-01 engine", () => {
   it("rule with exception: block only when the exception was asked and is not_applies", () => {
     const hi = ans(abuseX.question.sha, "h", 0.99, "violate");
     expect(policy.decide({ bundle: BX, scene: "comment", hasImages: false, answers: [hi], judgeOk: true }).state).toBe("suspicious");
-    const d = policy.decide({ bundle: BX, scene: "comment", hasImages: false, answers: [hi, ans(abuseX.exceptions[0]!.question.sha, "h", 0.01, "not_applies")], judgeOk: true });
+    const d = policy.decide({ bundle: BX, scene: "comment", hasImages: false, answers: [hi, ans(abuseX.exceptions[0]!.question.sha, "h", 0.01, "not_applies"), ...G], judgeOk: true });
     expect(d).toMatchObject({ state: "block", action: "takedown", hits: ["ABUSE-001"] });
     const applies = policy.decide({ bundle: BX, scene: "comment", hasImages: false, answers: [hi, ans(abuseX.exceptions[0]!.question.sha, "h", 0.9, "applies")], judgeOk: true });
     expect(applies.state).toBe("suspicious");
   });
   it("ABUSE-001 without an exception: a high abuse answer alone blocks (§2.2)", () => {
-    const d = policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [ans(abuse.question.sha, "h", 0.99, "violate")], judgeOk: true });
+    const d = policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [ans(abuse.question.sha, "h", 0.99, "violate"), ...G], judgeOk: true });
     expect(d).toMatchObject({ state: "block", action: "takedown", hits: ["ABUSE-001"] });
   });
   it("marketing block → limit; images without image_check → suspicious", () => {
-    const d = policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [ans(mkt.question.sha, "m", 0.95, "violate")], judgeOk: true });
+    const d = policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [ans(mkt.question.sha, "m", 0.95, "violate"), ...G], judgeOk: true });
     expect(d).toMatchObject({ state: "block", action: "limit" });
     const img = policy.decide({ bundle: B, scene: "comment", hasImages: true, answers: [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m")], judgeOk: true });
     expect(img.reason).toBe("uncovered:image_check");
-    const imgAnswers = [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m"), ...pair(B.scenes.comment.imageCheck.question.sha, "i")];
+    const imgAnswers = [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m"), ...pair(B.scenes.comment.imageCheck.question.sha, "i"), ...G];
     // round-9 item 6: an image_check answer without a delivered image never passes
     expect(policy.decide({ bundle: B, scene: "comment", hasImages: true, answers: imgAnswers, judgeOk: true }).state).toBe("suspicious");
     const ok = policy.decide({ bundle: B, scene: "comment", hasImages: true, imageDelivered: true, answers: imgAnswers, judgeOk: true });
@@ -76,11 +79,11 @@ describe("U-01 engine", () => {
   });
   it("contract runner: required fixture missing = fail, optional = skip", () => {
     const rec = new Map<string, policy.Recorded>([
-      ["fx/a1-1", { scene: "comment", hasImages: false, judgeOk: true, answers: [ans(abuse.question.sha, "1", 0.99, "violate"), ...pair(mkt.question.sha, "m")] }],
-      ["fx/a1-3", { scene: "comment", hasImages: false, judgeOk: true, answers: [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m")] }],
-      ["fx/a1-5", { scene: "comment", hasImages: false, judgeOk: true, answers: [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m")] }],   // c5 now expects pass (§2.2)
-      ["fx/m3-1", { scene: "comment", hasImages: false, judgeOk: true, answers: [ans(mkt.question.sha, "1", 0.95, "violate")] }],
-      ["fx/m3-3", { scene: "comment", hasImages: false, judgeOk: true, answers: [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m")] }],
+      ["fx/a1-1", { scene: "comment", hasImages: false, judgeOk: true, answers: [ans(abuse.question.sha, "1", 0.99, "violate"), ...pair(mkt.question.sha, "m"), ...G] }],
+      ["fx/a1-3", { scene: "comment", hasImages: false, judgeOk: true, answers: [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m"), ...G] }],
+      ["fx/a1-5", { scene: "comment", hasImages: false, judgeOk: true, answers: [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m"), ans(guardQ.sha, "ga", 0.95, "violate"), ans(guardQ.sha, "gb", 0.9, "violate", "ga", 1)] }],   // c5: injection-like, guard flags it -> agent (§2.2)
+      ["fx/m3-1", { scene: "comment", hasImages: false, judgeOk: true, answers: [ans(mkt.question.sha, "1", 0.95, "violate"), ...G] }],
+      ["fx/m3-3", { scene: "comment", hasImages: false, judgeOk: true, answers: [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m"), ...G] }],
     ]);
     const r = policy.runContract(B, loaded.contractTests, (ref) => rec.get(ref));
     expect(r.planned).toBe(7);
@@ -88,6 +91,17 @@ describe("U-01 engine", () => {
     expect(r.failed).toEqual([{ id: "ABUSE-001/c2", expected: "block", got: "fixture_missing" }]);
     expect(r.passed).toBe(5);
     expect(policy.contractPassed(r)).toBe(false);
+  });
+  it("injection guard (§2.2): flagged or missing turns an automatic pass or block into suspicious; never a violation by itself", () => {
+    const passShape = [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m")];
+    const flagged = [ans(guardQ.sha, "ga", 0.92, "violate"), ans(guardQ.sha, "gb", 0.88, "violate", "ga", 1)];
+    expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [...passShape, ...flagged], judgeOk: true })).toMatchObject({ state: "suspicious", reason: "injection_suspected" });
+    const blockShape = [ans(abuse.question.sha, "h", 0.99, "violate")];
+    expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [...blockShape, ...flagged], judgeOk: true })).toMatchObject({ state: "suspicious", reason: "injection_suspected", hits: ["ABUSE-001"] });
+    expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: passShape, judgeOk: true })).toMatchObject({ state: "suspicious", reason: "uncovered:injection_guard" });
+    expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [...passShape, ...G], judgeOk: true }).state).toBe("pass");
+    // a flagged guard on content that is already suspicious changes nothing
+    expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: [ans(abuse.question.sha, "x", 0.5, "violate"), ...flagged], judgeOk: true }).reason).not.toBe("injection_suspected");
   });
 });
 
