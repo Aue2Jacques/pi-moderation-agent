@@ -27,7 +27,7 @@ export type GatewayDeps = { db: Db; bundle: PolicyBundle; ruleTexts?: Record<str
  * - release_pct: share of ALL content judged in the window whose review ended in human hands, from either process:
  *   G direct releases (judge_down / backpressure / preprocess_error / image_unsupported / fastpath_error) and W releases (evidence_gap / timeout / budget_* / model_release / revoked).
  *   release_by_reason breaks that down; release_fast_pct and release_agent_pct split by source.
- * - cost_micro_per_1k: total cost of the content stream in the window (fast-path judge calls + every review's used_micro) ÷ content judged in the window × 1000.
+ * - cost_micro_per_1k: total cost of the content stream in the window (fast-path judge calls, i.e. judge_call.attempt IS NULL, + every review's used_micro) ÷ content judged in the window × 1000.
  *   Reviews whose cost is still 'estimated' are included and counted in cost_estimated_reviews.
  */
 export type Metrics = {
@@ -152,8 +152,10 @@ export class Gateway {
     const relFast = Object.entries(byReason).filter(([k]) => fastReasons.has(k)).reduce((a, [, n]) => a + n, 0);
     const relAgent = Object.entries(byReason).filter(([k]) => !fastReasons.has(k)).reduce((a, [, n]) => a + n, 0);
     const share = (n: number): number => (judged ? Math.round((100 * n) / judged) : 0);
-    // cost: fast-path judge calls (review_id NULL) + every review's used_micro, both inside the window
-    const fastCost = (db.prepare("SELECT COALESCE(SUM(cost_micro),0) AS n FROM judge_call WHERE review_id IS NULL AND created_at > ?").get(now - W) as { n: number }).n;
+    // cost: fast-path judge calls + every review's used_micro, both inside the window. Fast-path calls are the ones
+    // with attempt NULL: they get a review_id once the ruling is written, so "review_id IS NULL" missed them all
+    // (dev plan R5b). Agent-side judge calls carry an attempt and are already in the review's used_micro.
+    const fastCost = (db.prepare("SELECT COALESCE(SUM(cost_micro),0) AS n FROM judge_call WHERE attempt IS NULL AND created_at > ?").get(now - W) as { n: number }).n;
     const revCost = db.prepare("SELECT COALESCE(SUM(used_micro),0) AS s, SUM(CASE WHEN cost_status='estimated' THEN 1 ELSE 0 END) AS est FROM review WHERE used_micro IS NOT NULL AND updated_at > ?").get(now - W) as { s: number; est: number | null };
     const abst = db.prepare("SELECT SUM(CASE WHEN status<>'ok' THEN 1 ELSE 0 END) AS a, COUNT(*) AS n FROM judge_call WHERE created_at > ?").get(now - W) as { a: number | null; n: number };
     const bp = this.backpressure();

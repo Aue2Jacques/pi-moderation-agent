@@ -189,3 +189,30 @@ describe("R4 multi-rule block and bounded fast-path retries (dev plan 2026-10-08
   });
 });
 
+describe("R5b fast-path judge cost on the dashboard (dev plan 2026-10-08)", () => {
+  it("one fast-path item: cost_micro_window = its judge requests priced by hand (usage x unit price)", async () => {
+    const db = freshDb();
+    seedContent(db, "ok1", "comment", { text: "normal text" });
+    const g = makeGateway(db);
+    const [o] = await g.processIntakeOnce();
+    expect(o).toMatchObject({ decision: "pass" });
+    // byText answers every request with usage { input: 950, output: 568 }; PRICES: jev-recorded = 1 micro per input token, 0 per output
+    const requests = (db.prepare("SELECT COUNT(*) AS n FROM judge_call WHERE content_id='ok1' AND confirms_call_id IS NULL").get() as { n: number }).n;
+    expect(requests).toBe(1);
+    const m = g.metrics();
+    expect(m.cost_micro_window).toBe(requests * 950);
+    expect(m.cost_micro_per_1k).toBe(requests * 950 * 1000);   // one item judged in the window
+  });
+
+  it("a suspicious item's fast-path call (bound to the new agent review) is counted once", async () => {
+    const db = freshDb();
+    seedContent(db, "ok1", "comment", { text: "normal text" });
+    seedContent(db, "mid1", "comment", { text: "MAYBE text" });
+    const g = makeGateway(db);
+    const outs = await g.processIntakeOnce();
+    expect(outs.map((o) => o.decision).sort()).toEqual(["pass", "suspicious"]);
+    expect((db.prepare("SELECT review_id FROM judge_call WHERE content_id='mid1' AND confirms_call_id IS NULL").get() as { review_id: string | null }).review_id).not.toBeNull();
+    const m = g.metrics();
+    expect(m.cost_micro_window).toBe(2 * 950);   // two fast-path requests; the agent review has no cost yet
+  });
+});

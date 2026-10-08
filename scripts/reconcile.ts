@@ -50,7 +50,8 @@ console.log(JSON.stringify({
   judge_calls: q("SELECT status, COUNT(*) n, ROUND(AVG(latency_ms)) avg_ms FROM judge_call GROUP BY status"),
   calib: q("SELECT calib_ver, COUNT(*) n FROM review GROUP BY calib_ver"),
   cost: {
-    fast_judge_micro: (db.prepare("SELECT COALESCE(SUM(cost_micro),0) n FROM judge_call WHERE review_id IS NULL").get() as { n: number }).n,
+    // fast-path judge calls have attempt NULL (they get a review_id when the ruling is written; dev plan R5b)
+    fast_judge_micro: (db.prepare("SELECT COALESCE(SUM(cost_micro),0) n FROM judge_call WHERE attempt IS NULL").get() as { n: number }).n,
     reviews: db.prepare("SELECT cost_status, COUNT(*) n, COALESCE(SUM(used_micro),0) micro FROM review WHERE used_micro IS NOT NULL GROUP BY cost_status").all(),
     reviews_without_cost: (db.prepare("SELECT COUNT(*) n FROM review WHERE trigger<>'fast' AND state IN ('disposed','human_queue','human_disposed') AND used_micro IS NULL AND conversation_id IS NOT NULL").get() as { n: number }).n,
   },

@@ -170,7 +170,11 @@ describe("R9-08 metrics count releases from both processes over the same denomin
     expect(m.release_agent_pct).toBe(25);
     expect(m.release_fast_pct).toBe(25);
     expect(m.release_pct).toBe(50);
-    const fastCost = (db.prepare("SELECT SUM(cost_micro) AS n FROM judge_call WHERE review_id IS NULL").get() as { n: number }).n;
+    // expected fast-path cost built independently (dev plan R5b: this used to repeat the dashboard's own query, so
+    // it expected 0 together with the bug): requests made x usage { input: 950 } x 1 micro per input token
+    const requests = (db.prepare("SELECT COUNT(*) AS n FROM judge_call WHERE confirms_call_id IS NULL").get() as { n: number }).n;
+    expect(requests).toBe(3);                                                 // ok1, ok2, m1 (the image item never reaches the judge)
+    const fastCost = requests * 950;
     expect(m.cost_micro_window).toBe(fastCost + 700);
     expect(m.cost_micro_per_1k).toBe(Math.round(((fastCost + 700) / 4) * 1000));
     expect(m.calib_ver).toBe("calib@t1");
