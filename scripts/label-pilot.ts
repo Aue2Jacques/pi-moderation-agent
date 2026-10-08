@@ -11,13 +11,17 @@
 //                                                "main" is the untagged run; no label with a majority -> uncertain);
 //                                                by group: two-model agreement on the voted labels; with runsB, also
 //                                                whether each model's voted label is the same across the two run sets
+//   adjudicate <std> <ids.txt>                  frozen procedure (FROZEN_ABUSE): each model's majority over main,rep2,rep3;
+//                                                the two labeling models agree -> consensus; else the tie-break model's
+//                                                majority decides if it sides with one; else owner. Writes the ids still
+//                                                needing a tie-break vote and data/eval/labels-<std>.jsonl (no text)
 //   sample <group> <n> <out.txt> [exclude.txt…]  fresh dev-split ids of one group, none from the exclude files, by a
 //                                                fixed hash order (no text read) — a holdout for a reworded standard
 // Labeling models: deepseek-v4.1-flash and qwen3.8-flash (owner decision); deepseek's channel does not take a
 // temperature, so none is sent.
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { STANDARDS, followUpFor, majority, readAnswers, type Answer, type Label } from "./lib/labeling.ts";
+import { FROZEN_ABUSE, STANDARDS, finalLabel, followUpFor, majority, readAnswers, type Answer, type Label } from "./lib/labeling.ts";
 
 for (const line of (() => { try { return readFileSync(".env", "utf8").split("\n"); } catch { return []; } })()) {
   const m = /^([A-Z_]+)=(.*)$/.exec(line.trim());
@@ -137,6 +141,48 @@ if (phase === "vote") {
   }
   process.exit(0);
 }
+if (phase === "adjudicate") {
+  const [, sId, idsFile] = process.argv.slice(2);
+  if (sId !== FROZEN_ABUSE.standard || STANDARDS[sId]!.promptSha !== FROZEN_ABUSE.promptSha || !idsFile) throw new Error(`adjudicate runs only the frozen standard ${FROZEN_ABUSE.standard} (${FROZEN_ABUSE.promptSha})`);
+  const want = new Set(readFileSync(idsFile, "utf8").split("\n").filter(Boolean));
+  const tags = ["main", "rep2", "rep3"].slice(0, FROZEN_ABUSE.votesPerModel);
+  const answers = new Map<string, Label[]>();   // id|model -> labels across runs, in tag order
+  tags.forEach((tag, ti) => {
+    const f = `data/eval/label-pilot-${sId}${tag === "main" ? "" : `.${tag}`}.jsonl`;
+    for (const l of (existsSync(f) ? readFileSync(f, "utf8") : "").split("\n").filter(Boolean)) {
+      const r = JSON.parse(l) as { id: string; model: string; ok: boolean; promptSha: string; label: Label };
+      if (!r.ok || r.promptSha !== FROZEN_ABUSE.promptSha || !want.has(r.id)) continue;
+      const k = `${r.id}|${r.model}`, a = answers.get(k) ?? answers.set(k, []).get(k)!;
+      a[ti] = r.label;
+    }
+  });
+  const vote = (id: string, model: string): Label | undefined => {
+    const a = answers.get(`${id}|${model}`);
+    return a && tags.every((_, i) => a[i] !== undefined) ? majority(a) : undefined;
+  };
+  const counts = new Map<string, Record<string, number>>(), needTie: string[] = [], rows: string[] = [];
+  let incomplete = 0;
+  for (const l of readFileSync("data/eval/eval20k.jsonl", "utf8").split("\n").filter(Boolean)) {
+    const it = JSON.parse(l) as { id: string; group: string };
+    if (!want.has(it.id)) continue;
+    const [a, b] = FROZEN_ABUSE.models.map((m) => vote(it.id, m));
+    if (!a || !b) { incomplete++; continue; }
+    const f = finalLabel(a, b, a === b ? undefined : vote(it.id, FROZEN_ABUSE.tiebreak));
+    if (f.source === "needs_tiebreak") needTie.push(it.id);
+    else rows.push(JSON.stringify({ id: it.id, standard: sId, promptSha: FROZEN_ABUSE.promptSha, label: f.label, source: f.source, votes: { ds: a, qw: b, ...(a === b ? {} : { tie: vote(it.id, FROZEN_ABUSE.tiebreak) }) } }));
+    for (const g of [it.group, "ALL"]) {
+      const c = counts.get(g) ?? counts.set(g, { n: 0 }).get(g)!;
+      c.n!++;
+      const k = f.source === "consensus" || f.source === "tiebreak" ? `${f.source}:${f.label}` : f.source;
+      c[k] = (c[k] ?? 0) + 1;
+    }
+  }
+  writeFileSync(`data/eval/labels-${sId}-needs-tiebreak.txt`, needTie.join("\n") + (needTie.length ? "\n" : ""));
+  writeFileSync(`data/eval/labels-${sId}.jsonl`, rows.join("\n") + (rows.length ? "\n" : ""));
+  console.log(JSON.stringify({ standard: sId, items: want.size, incomplete, needsTiebreak: needTie.length, labeled: rows.length }));
+  for (const [g, c] of [...counts].sort()) console.log(g.padEnd(14), JSON.stringify(c));
+  process.exit(0);
+}
 if (phase === "sample") {
   const [, group, n, out, ...excl] = process.argv.slice(2);
   const skip = new Set(excl.flatMap((f) => readFileSync(f, "utf8").split("\n").filter(Boolean)));
@@ -149,7 +195,9 @@ if (phase === "sample") {
 }
 const std = STANDARDS[stdId ?? ""];
 if (!std || !idsPath) throw new Error("usage: label-pilot.ts run|score|sample <abuse-v4|abuse-v4.1|abuse-v4.2|marketing-v1|guard-v1> <ids.txt> [concurrency]");
+// LABEL_PILOT_MODELS=gemini-3.8-flash runs only the tie-break model (run phase); score always pairs the two labelers
 const MODELS = ["deepseek-v4.1-flash", "qwen3.8-flash"];
+const RUN_MODELS = process.env.LABEL_PILOT_MODELS?.split(",") ?? MODELS;
 // LABEL_PILOT_TAG=rep2 writes / reads a separate repeat run (same prompt, same models) to measure run-to-run stability
 const OUT = `data/eval/label-pilot-${std.id}${process.env.LABEL_PILOT_TAG ? `.${process.env.LABEL_PILOT_TAG}` : ""}.jsonl`;
 type Item = { id: string; text: string; group: string; slice: string; label_bin: number };
@@ -161,13 +209,14 @@ const rowsNow = (): Row[] => (existsSync(OUT) ? readFileSync(OUT, "utf8").split(
 function knobs(model: string): Record<string, unknown> {
   if (model.startsWith("deepseek")) return { max_tokens: 393216, thinking: { type: "disabled" } };
   if (model.startsWith("qwen")) return { max_tokens: 131072, enable_thinking: false };
+  if (model.startsWith("gemini")) return { max_tokens: 65536 };
   return { max_tokens: 131072 };
 }
 
 if (phase === "run") {
   const base = env("RELAY_BASE_URL").replace(/\/+$/, ""), key = env("RELAY_API_KEY");
   const done = new Set(rowsNow().map((r) => `${r.id}|${r.model}`));
-  const jobs = items.flatMap((it) => MODELS.map((model) => ({ it, model }))).filter((j) => !done.has(`${j.it.id}|${j.model}`));
+  const jobs = items.flatMap((it) => RUN_MODELS.map((model) => ({ it, model }))).filter((j) => !done.has(`${j.it.id}|${j.model}`));
   let next = 0, ok = 0, failed = 0;
   await Promise.all(Array.from({ length: Number(conc ?? 48) }, async () => {
     while (next < jobs.length) {

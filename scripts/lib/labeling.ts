@@ -92,3 +92,22 @@ export function majority(labels: readonly Label[]): Label {
   const top = [...c].sort((a, b) => b[1] - a[1])[0];
   return top && top[1] * 2 > labels.length ? top[0] : "uncertain";
 }
+
+/** Frozen labeling setup (owner, 2026-10-08): ABUSE-001 is labeled with abuse-v4.2; each of the two labeling models
+ *  answers 3 times and keeps its majority; where the two disagree, gemini-3.8-flash (also 3 answers, majority) casts a
+ *  third vote; what is still split goes to the owner. Changing the prompt makes a new version, never this one. */
+export const FROZEN_ABUSE = {
+  standard: "abuse-v4.2", promptSha: "64910d875ddd", votesPerModel: 3,
+  models: ["deepseek-v4.1-flash", "qwen3.8-flash"], tiebreak: "gemini-3.8-flash",
+} as const;
+
+export type Final = { label?: Label; source: "consensus" | "tiebreak" | "owner" | "needs_tiebreak" };
+
+/** Final label from the two models' voted labels and, when they differ, the tie-break model's voted label:
+ *  same label -> consensus; tie-break equal to one side -> that label; otherwise the owner decides (uncertain until then). */
+export function finalLabel(a: Label, b: Label, tie?: Label): Final {
+  if (a === b) return { label: a, source: "consensus" };
+  if (tie === undefined) return { source: "needs_tiebreak" };
+  if (tie === a || tie === b) return { label: tie, source: "tiebreak" };
+  return { label: "uncertain", source: "owner" };
+}
