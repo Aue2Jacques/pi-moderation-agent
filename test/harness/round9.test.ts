@@ -242,3 +242,22 @@ describe("R9-14 the reconcile CLI is a gate: non-zero exit while anything accept
     expect(JSON.parse(withW.stdout).durable_status).toMatch(/^W unreachable/);
   }, 30_000);
 });
+
+describe("R9d intake-cli never echoes input text (dev plan 2026-10-08)", () => {
+  it("a malformed line is reported by line number and error type only; the good lines are still ingested", async () => {
+    const { spawnSync } = await import("node:child_process");
+    const { writeFileSync } = await import("node:fs");
+    const dir = mkdtempSync(join(tmpdir(), "intake-"));
+    const jsonl = join(dir, "in.jsonl");
+    writeFileSync(jsonl, [
+      JSON.stringify({ contentId: "ok1", scene: "comment", text: "fine", eventTime: 1 }),
+      "SECRET-PERSONAL-TEXT pasted where a JSON object belongs",   // Node's JSON.parse error quotes the start of such a line
+      JSON.stringify({ contentId: "ok2", scene: "comment", text: "fine too", eventTime: 2 }),
+    ].join("\n") + "\n");
+    const r = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", join(import.meta.dirname, "..", "..", "packages", "core", "src", "intake-cli.ts"), "--db", join(dir, "app.db"), "--jsonl", jsonl], { encoding: "utf8" });
+    expect(r.stderr + r.stdout).not.toContain("SECRET");
+    expect(r.stderr).toContain("line 2");
+    expect(JSON.parse(r.stdout.trim())).toMatchObject({ read: 3, inserted: 2, bad: 1 });
+    expect(r.status).toBe(1);   // a bad line is not silently accepted
+  });
+});
