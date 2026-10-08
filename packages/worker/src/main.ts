@@ -71,6 +71,7 @@ async function main(): Promise<void> {
     try {
       if (url.pathname === "/health") return json(200, { worker_id: workerId, grants: worker.grants.count(), active: worker.grants.count("active"), resumed_at: worker.resumedAt });
       if (url.pathname === "/sessions") return json(200, await worker.sessions());
+      if (url.pathname === "/usage") return json(200, await worker.usageReconcile());   // ledger vs Pi's pi.usage
       if (url.pathname === "/abort" && req.method === "POST") { const n = await worker.pollCommands(); return json(200, { polled: n }); }
       json(404, { code: "NOT_FOUND" });
     } catch (e) { json(500, { code: "INTERNAL", message: core.redact(String(e)) }); }

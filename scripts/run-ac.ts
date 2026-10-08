@@ -194,7 +194,8 @@ if (phase === "prepare") {
   core.outbox.drain(db, (ev) => void core.consumer.apply(db, ev, now()), now());
   const rows = rowsOf(db);
   const m = manifest({ phase, arm, instructions: INSTR[arm], deadlineMode: `queued reviews re-based to run start + ${DEADLINE_MS} ms (${rebased} rows)`, started: new Date(t0).toISOString(), ended: new Date().toISOString(), wallMs: now() - t0,
-    reconcile: core.reconcile.final(db).filter((v) => v.check !== "outbox_not_drained").map((v) => v.check) });
+    reconcile: core.reconcile.final(db).filter((v) => v.check !== "outbox_not_drained").map((v) => v.check),
+    usageReconcile: await (async () => { const u = await worker.usageReconcile(); return { conversations: u.conversations, notInStore: u.notInStore, diffs: u.diffs, ledger: u.ledger }; })() });
   const out = JSON.stringify({ manifest: m, rows }, null, 1);
   writeFileSync(join(outDir, `${arm}.json`), out);
   console.log(JSON.stringify({ arm, cases: rows.length, outputSha: sha(out), outcomes: rows.reduce((a: Record<string, number>, r) => { a[r.outcome] = (a[r.outcome] ?? 0) + 1; return a; }, {}) }));

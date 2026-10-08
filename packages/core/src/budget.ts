@@ -98,3 +98,38 @@ export function recordModelCall(db: Db, generationTaskId: string, responseKey: s
     "INSERT OR IGNORE INTO model_call(generation_task_id, response_key, review_id, attempt, conversation_id, model, usage, stop_reason, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
   ).run(generationTaskId, responseKey, reviewId, attempt, conversationId, model, JSON.stringify(usage), stopReason, at).changes === 1);
 }
+
+export type UsageTotals = Record<string, { input: number; output: number; cacheRead: number; responses?: number }>;
+/** Ledger side of the usage reconcile (stage-① known gap): model_call rows (one per physical response) summed per bare
+ *  model id; optionally only the given conversations (the ones a W instance owns). */
+export function ledgerUsageByModel(db: Db, conversationIds?: readonly string[]): UsageTotals {
+  const rows = db.prepare("SELECT conversation_id, model, usage FROM model_call").all() as { conversation_id: string; model: string; usage: string | null }[];
+  const keep = conversationIds ? new Set(conversationIds) : undefined;
+  const out: UsageTotals = {};
+  for (const r of rows) {
+    if (keep && !keep.has(r.conversation_id)) continue;
+    const u = (r.usage ? JSON.parse(r.usage) : {}) as Partial<Usage>;
+    const k = r.model.split("/").pop()!;
+    const t = (out[k] ??= { input: 0, output: 0, cacheRead: 0, responses: 0 });
+    t.input += u.input ?? 0; t.output += u.output ?? 0; t.cacheRead += u.cacheRead ?? 0; t.responses! += 1;
+  }
+  return out;
+}
+
+/** Compare Pi's pi.usage (keyed provider/model) with the ledger (keyed by bare model): every counter must match. */
+export function compareUsage(pi: Readonly<Record<string, Partial<Usage>>>, ledger: UsageTotals): { model: string; counter: string; pi: number; ledger: number }[] {
+  const piBare: UsageTotals = {};
+  for (const [k, u] of Object.entries(pi)) {
+    const b = k.split("/").pop()!;
+    const t = (piBare[b] ??= { input: 0, output: 0, cacheRead: 0 });
+    t.input += u.input ?? 0; t.output += u.output ?? 0; t.cacheRead += u.cacheRead ?? 0;
+  }
+  const diffs: { model: string; counter: string; pi: number; ledger: number }[] = [];
+  for (const m of new Set([...Object.keys(piBare), ...Object.keys(ledger)])) {
+    for (const c of ["input", "output", "cacheRead"] as const) {
+      const a = piBare[m]?.[c] ?? 0, b = ledger[m]?.[c] ?? 0;
+      if (a !== b) diffs.push({ model: m, counter: c, pi: a, ledger: b });
+    }
+  }
+  return diffs;
+}

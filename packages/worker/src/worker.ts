@@ -7,6 +7,7 @@ import * as core from "@mod/core";
 import type { Db, ReviewRow } from "@mod/core";
 import { buildModerationExtension, type ExtensionDeps } from "./extension.ts";
 import { crashAt } from "./crash.ts";
+import { UsageDoc } from "@earendil-works/pi-durable";
 import { Grants, type Grant } from "./grants.ts";
 import { taskBrief } from "./brief.ts";
 import { HostLoop } from "./host-loop.ts";
@@ -320,6 +321,29 @@ export class Worker {
       out.push({ conversationId: conv, reviewId: g.reviewId, mode: g.mode, liveTasks: live.get(conv) ?? 0, submission });
     }
     return out;
+  }
+
+  /**
+   * Stage-① known gap: reconcile the cost ledger with Pi's own usage record. For every conversation the ledger has model
+   * calls for, Pi's pi.usage document (read-only snapshot, no scheduling) is summed per model and compared with the
+   * ledger's model_call rows of the same conversations. Conversations this store does not hold are counted, not compared.
+   */
+  async usageReconcile(): Promise<{ conversations: number; notInStore: number; pi: core.UsageTotals; ledger: core.UsageTotals; diffs: ReturnType<typeof core.compareUsage> }> {
+    const convs = (this.#o.db.prepare("SELECT DISTINCT conversation_id FROM model_call").all() as { conversation_id: string }[]).map((r) => r.conversation_id);
+    const pi: Record<string, core.Usage> = {};
+    const held: string[] = [];
+    for (const c of convs) {
+      const u = await this.harness.snapshot(UsageDoc, convId(c), ctx);
+      if (!u) continue;
+      held.push(c);
+      for (const [k, x] of Object.entries(u.models as Record<string, core.Usage>)) {
+        const t = (pi[k] ??= { input: 0, output: 0, cacheRead: 0 });
+        t.input += x.input ?? 0; t.output += x.output ?? 0; t.cacheRead = (t.cacheRead ?? 0) + (x.cacheRead ?? 0);
+      }
+    }
+    const ledger = core.ledgerUsageByModel(this.#o.db, held);
+    const piTotals: core.UsageTotals = Object.fromEntries(Object.entries(pi).map(([k, x]) => [k, { input: x.input, output: x.output, cacheRead: x.cacheRead ?? 0 }]));
+    return { conversations: held.length, notInStore: convs.length - held.length, pi: piTotals, ledger, diffs: core.compareUsage(pi, ledger) };
   }
 
   #timers: NodeJS.Timeout[] = [];

@@ -31,7 +31,12 @@ if (wUrl) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const sessions = (await res.json()) as core.reconcile.SessionLike[];
     durable = core.reconcile.durable(db, sessions, Date.now());
-    durableStatus = `checked ${sessions.length} sessions`;
+    // stage-① gap: the cost ledger against Pi's own pi.usage, per model
+    const u = await fetch(`${wUrl}/usage`, { signal: AbortSignal.timeout(30_000) });
+    if (!u.ok) throw new Error(`usage HTTP ${u.status}`);
+    const usage = (await u.json()) as { conversations: number; diffs: { model: string; counter: string; pi: number; ledger: number }[] };
+    for (const d of usage.diffs) durable.push({ check: "usage_mismatch", ref: `${d.model}.${d.counter}`, detail: { pi: d.pi, ledger: d.ledger } });
+    durableStatus = `checked ${sessions.length} sessions; usage of ${usage.conversations} conversations`;
   } catch (e) {
     durableStatus = `W unreachable: ${(e as Error).message}`;
     durableFailed = true;
