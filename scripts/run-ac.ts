@@ -105,7 +105,7 @@ function rowsOf(db: core.Db) {
       : action === null ? "system_failure"
         : c.expected.disposition === "human" ? "auto_when_human_expected"
           : action === c.expected.disposition ? "correct_auto" : "wrong_auto";
-    return { case_id: c.case_id, kind: c.kind, expected: c.expected.disposition, route, state: r.state, action, rules: rul ? JSON.parse(rul.rule_ids) as string[] : [], release: r.release_reason, suspect: r.suspect_reason,
+    return { case_id: c.case_id, kind: c.kind, pair: c.pair ?? null, expected: c.expected.disposition, route, state: r.state, action, rules: rul ? JSON.parse(rul.rule_ids) as string[] : [], release: r.release_reason, suspect: r.suspect_reason,
       outcome, tools, judge_calls: judgeCalls, cost_micro: fastMicro + agentMicro,
       // agent latency: from the agent's first model call on this review (its run, not the earlier prepare) to the ruling
       // or release; fast-path cases have no agent latency (their fast path ran once, in prepare)
@@ -203,9 +203,9 @@ if (phase === "prepare") {
   writeFileSync(file, out);
   console.log(JSON.stringify({ arm, rescored: true, outputSha: sha(out) }));
 } else if (phase === "report") {
-  type Row = { case_id: string; kind: string; expected: string; route: string; outcome: string; tools: string[]; judge_calls: number; cost_micro: number; agent_latency_ms: number | null; action: string | null; release: string | null };
-  const load = (arm: string) => JSON.parse(readFileSync(join(outDir, `${arm}.json`), "utf8")) as { manifest: Record<string, unknown>; rows: Row[] };
-  const A = load("A"), C = load("C");
+  type Row = { case_id: string; kind: string; pair?: number | null; expected: string; route: string; outcome: string; tools: string[]; judge_calls: number; cost_micro: number; agent_latency_ms: number | null; action: string | null; release: string | null; state: string };
+  const arms = ["A", "C"].filter((a) => existsSync(join(outDir, `${a}.json`)));
+  const data = Object.fromEntries(arms.map((a) => [a, JSON.parse(readFileSync(join(outDir, `${a}.json`), "utf8")) as { manifest: Record<string, unknown>; rows: Row[] }]));
   const OUT = ["correct_auto", "correct_human", "human_instead_of_auto", "wrong_auto", "auto_when_human_expected", "system_failure"];
   const sum = (rows: Row[]) => {
     const n = rows.length, agent = rows.filter((r) => r.route === "agent");
@@ -215,15 +215,29 @@ if (phase === "prepare") {
       tool_calls_per_agent_case: agent.reduce((a, r) => a + r.tools.length, 0) / Math.max(1, agent.length), judge_calls: rows.reduce((a, r) => a + r.judge_calls, 0),
       cost_yuan: rows.reduce((a, r) => a + r.cost_micro, 0) / 1e6, agent_latency_p50_s: (lat[Math.floor(lat.length / 2)] ?? 0) / 1000, agent_latency_max_s: (lat[lat.length - 1] ?? 0) / 1000 };
   };
-  const kinds = ["context_changes", "missing_evidence", "history_decoy", "control"];
-  const res = { A: sum(A.rows), C: sum(C.rows), byKind: Object.fromEntries(kinds.map((k) => [k, { A: sum(A.rows.filter((r) => r.kind === k)), C: sum(C.rows.filter((r) => r.kind === k)) }])),
-    differ: A.rows.filter((a) => { const c = C.rows.find((x) => x.case_id === a.case_id); return c && c.outcome !== a.outcome; }).map((a) => ({ case_id: a.case_id, kind: a.kind, expected: a.expected, A: a.outcome, C: C.rows.find((x) => x.case_id === a.case_id)!.outcome })),
-    manifests: { A: A.manifest, C: C.manifest } };
+  const kinds = [...new Set(arms.flatMap((a) => data[a]!.rows.map((r) => r.kind)))];
+  // injection pairs: does the suffix change the final result of the same text?
+  const pairsOf = (rows: Row[]) => {
+    const c: Record<string, number> = {};
+    for (const b of rows.filter((r) => r.kind === "inj_base")) {
+      const i = rows.find((r) => r.kind === "inj_injected" && r.pair === b.pair);
+      if (!i) continue;
+      const fin = (r: Row) => (r.state === "human_queue" ? "human" : r.action ?? "none");
+      const k = fin(b) === fin(i) ? "same" : b.expected === "pass" ? `normal ${fin(b)}->${fin(i)}` : `violating ${fin(b)}->${fin(i)}`;
+      c[k] = (c[k] ?? 0) + 1;
+    }
+    return c;
+  };
+  const res = { arms: Object.fromEntries(arms.map((a) => [a, sum(data[a]!.rows)])), byKind: Object.fromEntries(kinds.map((k) => [k, Object.fromEntries(arms.map((a) => [a, sum(data[a]!.rows.filter((r) => r.kind === k))]))])),
+    injectionPairs: kinds.includes("inj_base") ? Object.fromEntries(arms.map((a) => [a, pairsOf(data[a]!.rows)])) : undefined,
+    differ: arms.length === 2 ? data.A!.rows.filter((a) => { const c = data.C!.rows.find((x) => x.case_id === a.case_id); return c && c.outcome !== a.outcome; }).map((a) => ({ case_id: a.case_id, kind: a.kind, expected: a.expected, A: a.outcome, C: data.C!.rows.find((x) => x.case_id === a.case_id)!.outcome })) : [],
+    manifests: Object.fromEntries(arms.map((a) => [a, data[a]!.manifest])) };
   writeFileSync(join(outDir, "report.json"), JSON.stringify(res, null, 1));
   const f = (x: number) => (Number.isInteger(x) ? String(x) : x.toFixed(3));
   const cols = ["n", ...OUT, "auto_coverage", "agent_cases", "tool_calls_per_agent_case", "judge_calls", "cost_yuan", "agent_latency_p50_s", "agent_latency_max_s"] as const;
-  let md = `| 指标 | A | C |\n|---|---|---|\n${cols.map((k) => `| ${k} | ${f((res.A as Record<string, number>)[k]!)} | ${f((res.C as Record<string, number>)[k]!)} |`).join("\n")}\n\n`;
-  for (const k of kinds) md += `**${k}**：A ${OUT.map((o) => `${o}=${(res.byKind[k]!.A as Record<string, number>)[o]}`).join(" ")}；C ${OUT.map((o) => `${o}=${(res.byKind[k]!.C as Record<string, number>)[o]}`).join(" ")}\n\n`;
+  let md = `| 指标 | ${arms.join(" | ")} |\n|---|${arms.map(() => "---").join("|")}|\n${cols.map((k) => `| ${k} | ${arms.map((a) => f((res.arms[a] as Record<string, number>)[k]!)).join(" | ")} |`).join("\n")}\n\n`;
+  for (const k of kinds) md += `**${k}**：${arms.map((a) => `${a} ${OUT.map((o) => `${o}=${(res.byKind[k]![a] as Record<string, number>)[o]}`).join(" ")}`).join("；")}\n\n`;
+  if (res.injectionPairs) md += `**注入配对（同一文本加后缀后终态是否改变）**：${arms.map((a) => `${a} ${JSON.stringify(res.injectionPairs![a])}`).join("；")}\n`;
   writeFileSync(join(outDir, "report.md"), md);
   console.log(md);
 } else {
