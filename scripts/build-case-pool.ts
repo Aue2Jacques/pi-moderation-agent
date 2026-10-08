@@ -119,7 +119,7 @@ if (phase === "pick") {
   // review document (with text; dev box only)
   const zh: Record<string, string> = { violate: "违规", allow: "允许", uncertain: "不确定" };
   const lab = (l: Lab | null) => (l ? `${zh[l.label] ?? l.label}（${l.source}）` : "—");
-  let doc = `# 案例池 v1 审阅稿（${cases.length} 条，含原文，只放开发机，不提交）\n\n每条：内容与上下文、账号历史、证据边界、可能改变结论的事实、预期处置与理由、标签来源。"只看本条"的平台标签是用冻结标注流程只看目标文本得到的，用来对照上下文的作用。\n\n`;
+  let doc = `# 案例池 v1 审阅稿（${cases.length} 条，含原文，只放开发机，不提交）\n\n每条：内容与上下文、账号历史、证据边界、可能改变结论的事实、预期处置与理由、标签来源。"只看本条"的平台标签：用冻结标注流程、只看目标文本得到，用来对照上下文的作用。\n\n`;
   for (const c of cases) {
     const t = c.target as { text: string; account: string; mentions: string[]; images: string[] };
     const e = c.expected as { disposition: string; rules: string[]; why: string; source: string };
