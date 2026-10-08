@@ -14,7 +14,9 @@
 //   adjudicate <std> <ids.txt>                  frozen procedure (FROZEN_ABUSE): each model's majority over main,rep2,rep3;
 //                                                the two labeling models agree -> consensus; else the tie-break model's
 //                                                majority decides if it sides with one; else owner. Writes the ids still
-//                                                needing a tie-break vote and data/eval/labels-<std>.jsonl (no text)
+//                                                needing a tie-break vote and data/eval/labels-<std>.jsonl (no text);
+//                                                rulings in data/eval/adjudication-<std>.jsonl ({id, label, by}) replace
+//                                                "owner" rows and keep who ruled (the owner, or someone the owner named)
 //   sample <group> <n> <out.txt> [exclude.txt…]  fresh dev-split ids of one group, none from the exclude files, by a
 //                                                fixed hash order (no text read) — a holdout for a reworded standard
 // Labeling models: deepseek-v4.1-flash and qwen3.8-flash (owner decision); deepseek's channel does not take a
@@ -160,6 +162,9 @@ if (phase === "adjudicate") {
     const a = answers.get(`${id}|${model}`);
     return a && tags.every((_, i) => a[i] !== undefined) ? majority(a) : undefined;
   };
+  const rulingsFile = `data/eval/adjudication-${sId}.jsonl`;
+  const rulings = new Map((existsSync(rulingsFile) ? readFileSync(rulingsFile, "utf8") : "").split("\n").filter(Boolean)
+    .map((l) => JSON.parse(l) as { id: string; label: Label; by: string }).map((r) => [r.id, r] as const));
   const counts = new Map<string, Record<string, number>>(), needTie: string[] = [], rows: string[] = [];
   let incomplete = 0;
   for (const l of readFileSync("data/eval/eval20k.jsonl", "utf8").split("\n").filter(Boolean)) {
@@ -167,13 +172,15 @@ if (phase === "adjudicate") {
     if (!want.has(it.id)) continue;
     const [a, b] = FROZEN_ABUSE.models.map((m) => vote(it.id, m));
     if (!a || !b) { incomplete++; continue; }
-    const f = finalLabel(a, b, a === b ? undefined : vote(it.id, FROZEN_ABUSE.tiebreak));
+    const f: { label?: Label; source: string; by?: string } = finalLabel(a, b, a === b ? undefined : vote(it.id, FROZEN_ABUSE.tiebreak));
+    const ruling = f.source === "owner" ? rulings.get(it.id) : undefined;
+    if (ruling) Object.assign(f, { label: ruling.label, source: "adjudicated", by: ruling.by });
     if (f.source === "needs_tiebreak") needTie.push(it.id);
-    else rows.push(JSON.stringify({ id: it.id, standard: sId, promptSha: FROZEN_ABUSE.promptSha, label: f.label, source: f.source, votes: { ds: a, qw: b, ...(a === b ? {} : { tie: vote(it.id, FROZEN_ABUSE.tiebreak) }) } }));
+    else rows.push(JSON.stringify({ id: it.id, standard: sId, promptSha: FROZEN_ABUSE.promptSha, label: f.label, source: f.source, ...(f.by ? { by: f.by } : {}), votes: { ds: a, qw: b, ...(a === b ? {} : { tie: vote(it.id, FROZEN_ABUSE.tiebreak) }) } }));
     for (const g of [it.group, "ALL"]) {
       const c = counts.get(g) ?? counts.set(g, { n: 0 }).get(g)!;
       c.n!++;
-      const k = f.source === "consensus" || f.source === "tiebreak" ? `${f.source}:${f.label}` : f.source;
+      const k = f.source === "consensus" || f.source === "tiebreak" || f.source === "adjudicated" ? `${f.source}:${f.label}` : f.source;
       c[k] = (c[k] ?? 0) + 1;
     }
   }
