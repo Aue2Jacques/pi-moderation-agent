@@ -141,3 +141,22 @@ describe("U-09 allowedActions", () => {
     expect(run(c).allowed.has("pass")).toBe(false);
   });
 });
+
+describe("case-pool writers (dev plan §3)", () => {
+  it("contextInsert stores content without an intake row; synthEventInsert is idempotent and takes an ingest seq", async () => {
+    const { freshDb } = await import("../helpers.ts");
+    const core = await import("../../packages/core/src/index.ts");
+    const db = freshDb();
+    expect(core.contextInsert(db, { contentId: "p1", scene: "comment", text: "parent", threadId: "t", accountId: "a", eventTime: 1 }, 2)).toEqual({ inserted: true });
+    expect(core.contextInsert(db, { contentId: "p1", scene: "comment", text: "parent", eventTime: 1 }, 2)).toEqual({ inserted: false });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM intake WHERE content_id='p1'").get()).toEqual({ n: 0 });
+    expect((db.prepare("SELECT text FROM content WHERE content_id='p1'").get() as { text: string }).text).toBe("parent");
+    const e = { eventId: "e1", accountId: "a", kind: "prior_ruling" as const, payload: { action: "takedown", rule_ids: ["ABUSE-001"] }, eventTime: 5 };
+    expect(core.synthEventInsert(db, e)).toEqual({ inserted: true });
+    expect(core.synthEventInsert(db, e)).toEqual({ inserted: false });
+    const row = db.prepare("SELECT kind, payload, ingest_seq FROM synth_event WHERE event_id='e1'").get() as { kind: string; payload: string; ingest_seq: number };
+    expect(row.kind).toBe("prior_ruling");
+    expect(JSON.parse(row.payload)).toEqual({ action: "takedown", rule_ids: ["ABUSE-001"] });
+    expect(row.ingest_seq).toBeGreaterThan(0);
+  });
+});

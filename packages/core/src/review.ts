@@ -102,6 +102,30 @@ export function intakeInsert(db: Db, c: NewContent, at: number): { inserted: boo
   });
 }
 
+/** Context-only content: posts that existed before the period under study (e.g. the parent a case replies to). Stored
+ *  as content with an ingest seq but no intake row, so the fast path never picks it up; the thread-context tool sees it. */
+export function contextInsert(db: Db, c: NewContent, at: number): { inserted: boolean } {
+  return tx(db, () => {
+    if (db.prepare("SELECT 1 FROM content WHERE content_id=?").get(c.contentId)) return { inserted: false };
+    const text = c.text ?? null;
+    db.prepare("INSERT INTO content(content_id, scene, text_sha, text, image_refs, account_id, thread_id, reply_to, mentions, event_time, ingest_seq, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
+      .run(c.contentId, c.scene, text === null ? null : sha256(text), text, c.imageRefs ? JSON.stringify(c.imageRefs) : null, c.accountId ?? null, c.threadId ?? null,
+        c.replyTo ?? null, c.mentions?.length ? JSON.stringify(c.mentions) : null, c.eventTime, nextSeq(db), at);
+    return { inserted: true };
+  });
+}
+
+export type SynthEvent = { eventId: string; accountId: string; kind: "prior_ruling" | "appeal" | "post" | "warning"; payload: unknown; eventTime: number };
+/** Account-history events imported from outside the system (stage-1 known gap: no writer existed). prior_ruling payload:
+ *  {"action": ..., "rule_ids": [...]}. Idempotent by event id. */
+export function synthEventInsert(db: Db, e: SynthEvent): { inserted: boolean } {
+  return tx(db, () => {
+    if (db.prepare("SELECT 1 FROM synth_event WHERE event_id=?").get(e.eventId)) return { inserted: false };
+    db.prepare("INSERT INTO synth_event(event_id, account_id, kind, payload, event_time, ingest_seq) VALUES (?,?,?,?,?,?)").run(e.eventId, e.accountId, e.kind, JSON.stringify(e.payload), e.eventTime, nextSeq(db));
+    return { inserted: true };
+  });
+}
+
 // ---------- review creation (shared by T2/T2'/T9) ----------
 
 export type ReviewCreate = {
