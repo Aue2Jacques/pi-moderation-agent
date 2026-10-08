@@ -130,7 +130,11 @@ if (phase === "prepare") {
     core.intakeInsert(db, { contentId: c.case_id, scene: "comment", text: c.target.text, threadId: thread, accountId: c.target.account, eventTime: at,
       ...(replyTo ? { replyTo } : {}), ...(c.target.mentions.length ? { mentions: c.target.mentions } : {}), ...(c.target.images.length ? { imageRefs: c.target.images } : {}) }, at);
   }
-  const gw = new Gateway({ db, bundle, ruleTexts: texts, judge: judgeFor(), prices, calibrator, evidenceVer: "evidence@ac", judgeModel: JEV, cfg: DEFAULT_GATEWAY_CONFIG, now: () => Date.now(), gatewayId: "g-ac" });
+  // prepare runs only the fast path and nothing drains the queues until the arms run, so the queue limits (backpressure:
+  // agent queue full -> straight to human) are lifted here; otherwise items past the limit never reach the agent (found in
+  // the first injection run: 28 of 100 went to human as "backpressure"). Recorded in the manifest.
+  const PREP_CFG = { ...DEFAULT_GATEWAY_CONFIG, queueAgentMax: 1_000_000, queueHumanMax: 1_000_000, outstandingMax: 1_000_000 };
+  const gw = new Gateway({ db, bundle, ruleTexts: texts, judge: judgeFor(), prices, calibrator, evidenceVer: "evidence@ac", judgeModel: JEV, cfg: PREP_CFG, now: () => Date.now(), gatewayId: "g-ac" });
   const outcomes: unknown[] = [];
   for (let round = 0; round < 50; round++) {
     const left = (db.prepare("SELECT COUNT(*) AS n FROM intake WHERE status<>'judged'").get() as { n: number }).n;
@@ -141,7 +145,7 @@ if (phase === "prepare") {
   const byDecision: Record<string, number> = {};
   for (const o of outcomes as { decision: string }[]) byDecision[o.decision] = (byDecision[o.decision] ?? 0) + 1;
   db.close();
-  const m = manifest({ phase, cases: cases.length, fastpath: byDecision, started: new Date(t0).toISOString(), ended: new Date().toISOString(), baseDbSha: sha(readFileSync(dbPath)) });
+  const m = manifest({ phase, cases: cases.length, fastpath: byDecision, queueLimits: "lifted in prepare (queueAgentMax/queueHumanMax/outstandingMax = 1e6)", started: new Date(t0).toISOString(), ended: new Date().toISOString(), baseDbSha: sha(readFileSync(dbPath)) });
   writeFileSync(join(outDir, "prepare.json"), JSON.stringify({ manifest: m, outcomes }, null, 1));
   console.log(JSON.stringify(m));
 } else if (phase === "run") {
