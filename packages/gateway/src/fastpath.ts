@@ -88,7 +88,7 @@ export async function runFastpath(deps: FastpathDeps, contentId: string): Promis
 
   // policy: answers → three states (blacklist hits and rate limiting force suspicious; they are deterministic signals for the agent, not rulings)
   const answers = core.trustedAnswersFromCalls(deps.db, contentId, judgeCallIds, deps.bundle, inputSha);
-  let d = decide({ bundle: deps.bundle, scene, hasImages, answers, judgeOk: true });   // hasImages is false here (gated above)
+  let d = decide({ bundle: deps.bundle, scene, hasImages, answers, judgeOk: true, hasContext: !!(content.reply_to || content.mentions) });   // hasImages is false here (gated above)
   if ((pre.blacklistHits.length > 0 || pre.rateLimited) && d.state === "pass") d = { state: "suspicious", action: null, hits: [], reason: pre.blacklistHits.length ? "blacklist_hit" : "rate_limited", route: "agent" };
 
   // §2.2: a system cause (missing calibration, an unanswered required question) goes straight to a human — the agent

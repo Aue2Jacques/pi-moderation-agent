@@ -21,7 +21,7 @@ export type ScenesYaml = Record<Scene, {
   deadline_ms: number; human_sla_ms: number; default_severity: number;
   image_check: { thresholds: { block: number; pass: number }; question: QuestionYaml };
   injection_guard?: { threshold: number; question: QuestionYaml };
-  confirm_pass?: boolean;
+  confirm_pass?: boolean; context_route?: "pass" | "all";
 }>;
 
 /**
@@ -73,6 +73,7 @@ export function sceneFromYaml(y: ScenesYaml[Scene]): SceneConfig {
     imageCheck: { thresholds: y.image_check.thresholds, question: toQuestion("image_check", y.image_check.question) },
     ...(y.injection_guard ? { injectionGuard: { threshold: y.injection_guard.threshold, question: toQuestion("guard", y.injection_guard.question) } } : {}),
     ...(y.confirm_pass === false ? { confirmPass: false } : {}),
+    ...(y.context_route === "pass" || y.context_route === "all" ? { contextRoute: y.context_route } : {}),
   };
 }
 

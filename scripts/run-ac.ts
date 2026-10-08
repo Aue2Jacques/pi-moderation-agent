@@ -46,7 +46,9 @@ const loaded = loadBundle("rules", "config/scenes.yaml");
 // CONFIRM_PASS=off: the confirmation switch (§2.2, owner 2026-10-07: run the case pool with it on and off) turned off for
 // every scene, in memory; rulesVer stays the file's (so the calibration buckets still apply) and the manifest records it
 const CONFIRM_OFF = env("CONFIRM_PASS", "on") === "off";
-const bundle: core.PolicyBundle = CONFIRM_OFF ? { ...loaded.bundle, scenes: Object.fromEntries(Object.entries(loaded.bundle.scenes).map(([k, v]) => [k, { ...v, confirmPass: false }])) as core.PolicyBundle["scenes"] } : loaded.bundle;
+// CONTEXT_ROUTE=pass|all: the scene switch context_route (replies / mentions not decided by the fast path), in memory
+const CONTEXT_ROUTE = env("CONTEXT_ROUTE", "") as "" | "pass" | "all";
+const bundle: core.PolicyBundle = (CONFIRM_OFF || CONTEXT_ROUTE) ? { ...loaded.bundle, scenes: Object.fromEntries(Object.entries(loaded.bundle.scenes).map(([k, v]) => [k, { ...v, ...(CONFIRM_OFF ? { confirmPass: false } : {}), ...(CONTEXT_ROUTE ? { contextRoute: CONTEXT_ROUTE } : {}) }])) as core.PolicyBundle["scenes"] } : loaded.bundle;
 const texts = loaded.texts;
 const pricesRaw = readFileSync("config/prices.yaml", "utf8");
 const prices: core.PriceTable = { pricesVer: `prices@${core.sha256(pricesRaw).slice(0, 12)}`, perMillion: (parse(pricesRaw) as { models: core.PriceTable["perMillion"] }).models };
@@ -78,7 +80,7 @@ const manifest = (extra: Record<string, unknown>) => ({
   gitHead: (() => { try { return execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim(); } catch { return "unknown"; } })(),
   codeSha: codeSha(),
   rulesVer: bundle.rulesVer, calibVer: calibrator.calibVer, calibDir: CALIB || "identity", pricesVer: prices.pricesVer, judge: JEV, agent: AGENT,
-  casePool: CASES, casePoolSha: sha(readFileSync(CASES)), modelView: core.MODEL_VIEW_VERSION, confirmPass: CONFIRM_OFF ? "off" : "on", admitMax: ADMIT, deadlineMs: DEADLINE_MS,
+  casePool: CASES, casePoolSha: sha(readFileSync(CASES)), modelView: core.MODEL_VIEW_VERSION, confirmPass: CONFIRM_OFF ? "off" : "on", contextRoute: CONTEXT_ROUTE || "off", admitMax: ADMIT, deadlineMs: DEADLINE_MS,
   budgetTools: DEFAULT_GATEWAY_CONFIG.budgetTools, budgetMicro: DEFAULT_GATEWAY_CONFIG.budgetMicro, ...extra,
 });
 mkdirSync(outDir, { recursive: true });

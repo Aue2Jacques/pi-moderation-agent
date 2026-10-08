@@ -13,6 +13,8 @@ export type EngineInput = {
   answers: readonly AnswerRecord[];
   /** false when the judge timed out / errored / abstained → never pass */
   judgeOk: boolean;
+  /** the content replies to someone or @-mentions someone (scene switch context_route) */
+  hasContext?: boolean;
 };
 
 export function decide(i: EngineInput): Decision {
@@ -31,6 +33,10 @@ export function decide(i: EngineInput): Decision {
     const clear = e.kind === "group" && !e.inconsistent && e.answers.every((a) => a.p !== null) && e.p < guard.threshold;
     if (!clear) return { state: "suspicious", action: null, hits: d.hits, reason: "injection_suspected", route: "agent" };
   }
+  // stage ② finding: the fast path decides on the text alone; with the scene's context_route on, a reply / mention is
+  // not decided automatically ("pass": not auto-passed; "all": not auto-passed or auto-blocked) but looked at with context
+  const cr = i.bundle.scenes[i.scene].contextRoute;
+  if (cr && i.hasContext && (d.state === "pass" || (cr === "all" && d.state === "block"))) return { state: "suspicious", action: null, hits: d.hits, reason: "needs_context", route: "agent" };
   if (d.state !== "suspicious") return d;
   // §2.2: why is it suspicious? A required question with no answer, or no calibrated answer, is a system cause the
   // agent cannot fix (its own judge calls would be just as uncalibrated); anything else needs a closer look.

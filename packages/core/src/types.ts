@@ -116,6 +116,10 @@ export type SceneConfig = {
   /** An automatic pass needs a second, confirming answer (shuffled options). Default true. Dev plan §2.2: a policy
    *  switch so both settings can be measured (owner 2026-10-07). */
   confirmPass?: boolean;
+  /** stage ② finding (fast path cannot see context): content that replies to someone or @-mentions someone is not
+   *  decided automatically by the fast path — "pass": not auto-passed; "all": neither auto-passed nor auto-blocked —
+   *  it goes to the agent as needs_context. Default off (unset): behaviour unchanged. */
+  contextRoute?: "pass" | "all";
 };
 
 export type PolicyBundle = {

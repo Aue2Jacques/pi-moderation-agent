@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
-import type { AnswerRecord, Rule } from "../../packages/core/src/index.ts";
+import type { AnswerRecord, PolicyBundle, Rule } from "../../packages/core/src/index.ts";
 import * as policy from "../../packages/policy/src/index.ts";
 import * as judges from "../../packages/judges/src/index.ts";
 
@@ -208,5 +208,23 @@ describe("§2.2 confirmation is a per-scene switch (dev plan 2026-10-08)", () =>
     expect(policy.decide({ bundle: off, scene: "comment", hasImages: false, answers: [ans(abuse.question.sha, "h", 0.99, "violate"), ans(guardQ.sha, "z", 0.02, "none")], judgeOk: true }).state).toBe("block");
     expect(policy.sceneFromYaml({ required_categories: [], allowed_actions: ["pass"], pending_visibility: "hidden", deadline_ms: 1, human_sla_ms: 1, default_severity: 1,
       image_check: { thresholds: { block: 0.9, pass: 0.1 }, question: { id: "i", instructions: "i", options: { violate: "v", none: "n", unknown: "u" }, violation_option: "violate", pass_choices: ["none"] } }, confirm_pass: false } as never).confirmPass).toBe(false);
+  });
+});
+
+describe("context_route scene switch (stage ② finding: the fast path cannot see context)", () => {
+  const withRoute = (v: "pass" | "all" | undefined): PolicyBundle => ({ ...B, scenes: { ...B.scenes, comment: { ...B.scenes.comment, ...(v ? { contextRoute: v } : {}) } } });
+  const low = [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m"), ...G];
+  const high = [ans(abuse.question.sha, "h", 0.99, "violate"), ...G];
+  it("off (default): a reply is decided like any content", () => {
+    expect(policy.decide({ bundle: withRoute(undefined), scene: "comment", hasImages: false, answers: low, judgeOk: true, hasContext: true }).state).toBe("pass");
+  });
+  it("pass: a reply is not auto-passed (needs_context, agent) but a clear block still blocks; no context -> unchanged", () => {
+    expect(policy.decide({ bundle: withRoute("pass"), scene: "comment", hasImages: false, answers: low, judgeOk: true, hasContext: true })).toMatchObject({ state: "suspicious", reason: "needs_context", route: "agent" });
+    expect(policy.decide({ bundle: withRoute("pass"), scene: "comment", hasImages: false, answers: high, judgeOk: true, hasContext: true })).toMatchObject({ state: "block", action: "takedown" });
+    expect(policy.decide({ bundle: withRoute("pass"), scene: "comment", hasImages: false, answers: low, judgeOk: true, hasContext: false }).state).toBe("pass");
+  });
+  it("all: neither auto-passed nor auto-blocked; system causes still win (judge down -> human)", () => {
+    expect(policy.decide({ bundle: withRoute("all"), scene: "comment", hasImages: false, answers: high, judgeOk: true, hasContext: true })).toMatchObject({ state: "suspicious", reason: "needs_context", route: "agent" });
+    expect(policy.decide({ bundle: withRoute("all"), scene: "comment", hasImages: false, answers: low, judgeOk: false, hasContext: true })).toMatchObject({ reason: "judge_unavailable", route: "human" });
   });
 });
