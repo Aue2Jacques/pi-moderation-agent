@@ -29,7 +29,7 @@ export const ABUSE_V4: Standard = {
 };
 
 /** ABUSE-001 v4.1: same questions and label table as v4; q4 / q5 / q6 reworded to surface tests and "不确定" limited to
- *  two readings or unreadable slang, after the v4 pilot's disagreements (docs/policy/labeling-standard-v4.md §6). */
+ *  two readings or unreadable slang, after the v4 pilot's disagreements (docs/policy/labeling-standard-v4.md §5). */
 export const ABUSE_V41: Standard = { ...ABUSE_V4, id: "abuse-v4.1", ...load("label-abuse-v4.1.txt") };
 
 /** MARKETING-003 (label-marketing-v1): contact / off-platform lead (m1) or black-market / fraud (m3) -> violate;
