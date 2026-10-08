@@ -1,7 +1,7 @@
 // Label tables of the platform labeling standards (scripts/lib/labeling.ts): the label is computed from the fact
 // answers, "不确定" is kept as uncertain, and the abuse exemption needs every hit to be a quotation or negation.
 import { describe, expect, it } from "vitest";
-import { ABUSE_V4, ABUSE_V41, ABUSE_V42, ABUSE_V43, GUARD_V1, MARKETING_V1, FROZEN_ABUSE, finalLabel, followUpFor, majority, parseAnswers, readAnswers, type Answer } from "../../scripts/lib/labeling.ts";
+import { ABUSE_V4, ABUSE_V41, ABUSE_V42, ABUSE_V43, GUARD_V1, MARKETING_V1, FROZEN, FROZEN_ABUSE, STANDARDS, finalLabel, followUpFor, majority, parseAnswers, readAnswers, type Answer } from "../../scripts/lib/labeling.ts";
 
 const abuse = (over: Partial<Record<string, Answer>>) => ABUSE_V4.label({ q1: "否", q2: "否", q3: "否", q4: "否", q5: "否", q6: "否", q7: "否", ...over } as Record<string, Answer>);
 const mkt = (over: Partial<Record<string, Answer>>) => MARKETING_V1.label({ m1: "否", m2: "否", m3: "否", m4: "否", ...over } as Record<string, Answer>);
@@ -90,5 +90,11 @@ describe("frozen abuse labeling", () => {
     expect(finalLabel("violate", "allow", "allow")).toEqual({ label: "allow", source: "tiebreak" });
     expect(finalLabel("violate", "allow", "uncertain")).toEqual({ label: "uncertain", source: "owner" });
     expect(finalLabel("allow", "uncertain", "uncertain")).toEqual({ label: "uncertain", source: "tiebreak" });
+  });
+});
+
+describe("frozen setups", () => {
+  it("every frozen standard exists and its prompt sha matches (edit a prompt -> make a new version)", () => {
+    for (const f of FROZEN) expect(STANDARDS[f.standard]?.promptSha, f.standard).toBe(f.promptSha);
   });
 });

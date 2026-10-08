@@ -53,6 +53,11 @@ export const MARKETING_V1: Standard = {
   },
 };
 
+/** MARKETING-003 v2: v1 with m1 narrowed to links / contacts left to make people buy, contact or join (a shared news,
+ *  video or check-in link is not) and a short glossary of gig / click-farm jargon, after reading the v1 pilot's
+ *  disagreements (labeling-standard-v4 §7). Same label table. */
+export const MARKETING_V2: Standard = { ...MARKETING_V1, id: "marketing-v2", ...load("label-marketing-v2.txt") };
+
 /** Injection guard (label-guard-v1): "violate" here means the guard SHOULD fire (text addressed to the moderation
  *  system), not that the content breaks a rule. */
 export const GUARD_V1: Standard = {
@@ -60,7 +65,7 @@ export const GUARD_V1: Standard = {
   label: (a) => (yes(a, "g1") ? "violate" : unsure(a, "g1") ? "uncertain" : "allow"),
 };
 
-export const STANDARDS: Record<string, Standard> = { [ABUSE_V4.id]: ABUSE_V4, [ABUSE_V41.id]: ABUSE_V41, [ABUSE_V42.id]: ABUSE_V42, [ABUSE_V43.id]: ABUSE_V43, [MARKETING_V1.id]: MARKETING_V1, [GUARD_V1.id]: GUARD_V1 };
+export const STANDARDS: Record<string, Standard> = { [ABUSE_V4.id]: ABUSE_V4, [ABUSE_V41.id]: ABUSE_V41, [ABUSE_V42.id]: ABUSE_V42, [ABUSE_V43.id]: ABUSE_V43, [MARKETING_V1.id]: MARKETING_V1, [MARKETING_V2.id]: MARKETING_V2, [GUARD_V1.id]: GUARD_V1 };
 
 /** Read a model's JSON answer for a standard: the questions it answered and the ones it left out; undefined when there
  *  is no JSON object or any answer is not one of 是 / 否 / 不确定. */
@@ -101,10 +106,17 @@ export function majority(labels: readonly Label[]): Label {
  *  the same day by v4.3 — one glossary line; v4.2 labels are kept apart, never mixed); each of the two labeling models
  *  answers 3 times and keeps its majority; where the two disagree, gemini-3.8-flash (also 3 answers, majority) casts a
  *  third vote; what is still split goes to the owner. Changing the prompt makes a new version, never this one. */
-export const FROZEN_ABUSE = {
+export type Frozen = { standard: string; promptSha: string; votesPerModel: number; models: readonly string[]; tiebreak: string };
+export const FROZEN_ABUSE: Frozen = {
   standard: "abuse-v4.3", promptSha: "93af2764de5d", votesPerModel: 3,
   models: ["deepseek-v4.1-flash", "qwen3.8-flash"], tiebreak: "gemini-3.8-flash",
-} as const;
+};
+
+/** MARKETING-003, same procedure (frozen 2026-10-08 under the owner's "go step by step" instruction). */
+export const FROZEN_MARKETING: Frozen = { ...FROZEN_ABUSE, standard: "marketing-v2", promptSha: "e528fa21eae9" };
+/** Injection guard: one fact question worded exactly like the runtime guard question (frozen as is). */
+export const FROZEN_GUARD: Frozen = { ...FROZEN_ABUSE, standard: "guard-v1", promptSha: "626b5b484547" };
+export const FROZEN: readonly Frozen[] = [FROZEN_ABUSE, FROZEN_MARKETING, FROZEN_GUARD];
 
 export type Final = { label?: Label; source: "consensus" | "tiebreak" | "owner" | "needs_tiebreak" };
 

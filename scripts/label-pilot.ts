@@ -11,7 +11,7 @@
 //                                                "main" is the untagged run; no label with a majority -> uncertain);
 //                                                by group: two-model agreement on the voted labels; with runsB, also
 //                                                whether each model's voted label is the same across the two run sets
-//   adjudicate <std> <ids.txt>                  frozen procedure (FROZEN_ABUSE): each model's majority over main,rep2,rep3;
+//   adjudicate <std> <ids.txt>                  frozen procedure (FROZEN in lib/labeling.ts): each model's majority over main,rep2,rep3;
 //                                                the two labeling models agree -> consensus; else the tie-break model's
 //                                                majority decides if it sides with one; else owner. Writes the ids still
 //                                                needing a tie-break vote and data/eval/labels-<std>.jsonl (no text);
@@ -34,7 +34,7 @@ const shasOf = () => (shaCache ??= new Map(readFileSync("data/eval/eval20k.jsonl
   return [r.id, { cur: textSha(r.text), legacy: textSha(r.text_strip ?? r.text) }] as const;
 })));
 const freshText = (r: { id: string; textSha?: string }): boolean => { const s = shasOf().get(r.id); return !!s && (r.textSha ?? s.legacy) === s.cur; };
-import { FROZEN_ABUSE, STANDARDS, finalLabel, followUpFor, majority, readAnswers, type Answer, type Label } from "./lib/labeling.ts";
+import { FROZEN, STANDARDS, finalLabel, followUpFor, majority, readAnswers, type Answer, type Label } from "./lib/labeling.ts";
 
 for (const line of (() => { try { return readFileSync(".env", "utf8").split("\n"); } catch { return []; } })()) {
   const m = /^([A-Z_]+)=(.*)$/.exec(line.trim());
@@ -156,15 +156,16 @@ if (phase === "vote") {
 }
 if (phase === "adjudicate") {
   const [, sId, idsFile] = process.argv.slice(2);
-  if (sId !== FROZEN_ABUSE.standard || STANDARDS[sId]!.promptSha !== FROZEN_ABUSE.promptSha || !idsFile) throw new Error(`adjudicate runs only the frozen standard ${FROZEN_ABUSE.standard} (${FROZEN_ABUSE.promptSha})`);
+  const FZ = FROZEN.find((f) => f.standard === sId);   // the frozen setup of this standard
+  if (!FZ || STANDARDS[sId!]?.promptSha !== FZ.promptSha || !idsFile) throw new Error(`adjudicate runs only frozen standards: ${FROZEN.map((f) => `${f.standard} (${f.promptSha})`).join(", ")}`);
   const want = new Set(readFileSync(idsFile, "utf8").split("\n").filter(Boolean));
-  const tags = ["main", "rep2", "rep3"].slice(0, FROZEN_ABUSE.votesPerModel);
+  const tags = ["main", "rep2", "rep3"].slice(0, FZ.votesPerModel);
   const answers = new Map<string, Label[]>();   // id|model -> labels across runs, in tag order
   tags.forEach((tag, ti) => {
     const f = `data/eval/label-pilot-${sId}${tag === "main" ? "" : `.${tag}`}.jsonl`;
     for (const l of (existsSync(f) ? readFileSync(f, "utf8") : "").split("\n").filter(Boolean)) {
       const r = JSON.parse(l) as { id: string; model: string; ok: boolean; promptSha: string; label: Label };
-      if (!r.ok || r.promptSha !== FROZEN_ABUSE.promptSha || !want.has(r.id) || !freshText(r)) continue;
+      if (!r.ok || r.promptSha !== FZ.promptSha || !want.has(r.id) || !freshText(r)) continue;
       const k = `${r.id}|${r.model}`, a = answers.get(k) ?? answers.set(k, []).get(k)!;
       a[ti] = r.label;
     }
@@ -181,13 +182,13 @@ if (phase === "adjudicate") {
   for (const l of readFileSync("data/eval/eval20k.jsonl", "utf8").split("\n").filter(Boolean)) {
     const it = JSON.parse(l) as { id: string; group: string };
     if (!want.has(it.id)) continue;
-    const [a, b] = FROZEN_ABUSE.models.map((m) => vote(it.id, m));
+    const [a, b] = FZ.models.map((m) => vote(it.id, m));
     if (!a || !b) { incomplete++; continue; }
-    const f: { label?: Label; source: string; by?: string } = finalLabel(a, b, a === b ? undefined : vote(it.id, FROZEN_ABUSE.tiebreak));
+    const f: { label?: Label; source: string; by?: string } = finalLabel(a, b, a === b ? undefined : vote(it.id, FZ.tiebreak));
     const ruling = f.source === "owner" ? rulings.get(it.id) : undefined;
     if (ruling) Object.assign(f, { label: ruling.label, source: "adjudicated", by: ruling.by });
     if (f.source === "needs_tiebreak") needTie.push(it.id);
-    else rows.push(JSON.stringify({ id: it.id, standard: sId, promptSha: FROZEN_ABUSE.promptSha, label: f.label, source: f.source, ...(f.by ? { by: f.by } : {}), votes: { ds: a, qw: b, ...(a === b ? {} : { tie: vote(it.id, FROZEN_ABUSE.tiebreak) }) } }));
+    else rows.push(JSON.stringify({ id: it.id, standard: sId, promptSha: FZ.promptSha, label: f.label, source: f.source, ...(f.by ? { by: f.by } : {}), votes: { ds: a, qw: b, ...(a === b ? {} : { tie: vote(it.id, FZ.tiebreak) }) } }));
     for (const g of [it.group, "ALL"]) {
       const c = counts.get(g) ?? counts.set(g, { n: 0 }).get(g)!;
       c.n!++;
@@ -212,7 +213,7 @@ if (phase === "sample") {
   process.exit(0);
 }
 const std = STANDARDS[stdId ?? ""];
-if (!std || !idsPath) throw new Error("usage: label-pilot.ts run|score|sample <abuse-v4|abuse-v4.1|abuse-v4.2|abuse-v4.3|marketing-v1|guard-v1> <ids.txt> [concurrency]");
+if (!std || !idsPath) throw new Error("usage: label-pilot.ts run|score|sample <abuse-v4|abuse-v4.1|abuse-v4.2|abuse-v4.3|marketing-v1|marketing-v2|guard-v1> <ids.txt> [concurrency]");
 // LABEL_PILOT_MODELS=gemini-3.8-flash runs only the tie-break model (run phase); score always pairs the two labelers
 const MODELS = ["deepseek-v4.1-flash", "qwen3.8-flash"];
 const RUN_MODELS = process.env.LABEL_PILOT_MODELS?.split(",") ?? MODELS;
