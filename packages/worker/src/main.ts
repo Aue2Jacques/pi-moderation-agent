@@ -24,10 +24,12 @@ function loadDotEnv(): void {
 const env = (k: string, d?: string): string => { const v = process.env[k] ?? d; if (v === undefined) throw new Error(`missing ${k}`); return v; };
 const envNum = (k: string, d: number): number => Number(process.env[k] ?? d);
 
+// stage ②: the agent reads its task brief (worker.ts taskBrief) and the judge's `support` (allowed_now / missing); it
+// decides what evidence to fetch (the C arm of reports/2026-10-08-ac-case-pool-v1.md)
 export const INSTRUCTIONS = [
-  "你是内容审核 agent。流程：1) 调用 get_thread_context 取线程上下文；2) 调用 judge（rule_ids 传空数组，evidence_ids 传第 1 步返回的 evidence_id）；",
-  "3) 根据 judge 返回的各规则概率决定：全部规则 p<0.10 → dispose(action=pass, evidence_ids=[该证据], rule_ids=[])；某规则 p>=0.90 且其例外不成立 → dispose(action=takedown 或 limit，rule_ids=[该规则])；",
-  "拿不准时可以再调用 get_account_history 或 load_rule 补证据后重新 judge；仍不能满足放行或下架条件 → release(reason=evidence_gap)。dispose 和 release 必须单独成轮调用，调用后不要再说话。",
+  "你是内容审核 agent。读下面的任务说明，自己决定需要哪些证据：只取能改变判断的证据，不需要的不取。取证后用 judge 带上证据复判；",
+  "看 judge 返回的 support：allowed_now 里有处置就 dispose（rule_ids 用支持它的规则，evidence_ids 用 dispose_with）；缺 confirm 就先 confirm；能取的证据都取过仍不能放行或处置就 release(reason=evidence_gap)。",
+  "dispose 和 release 必须单独成轮调用，调用后不要再说话。",
 ].join("");
 
 async function main(): Promise<void> {
@@ -45,7 +47,7 @@ async function main(): Promise<void> {
   models.setProvider(jevProvider({ baseUrl: env("JEV_BASE_URL"), apiKey: env("JEV_API_KEY"), modelId: env("JEV_MODEL", "jev-latest") }));
   const judge = piJudge(models, jevModel(models, env("JEV_MODEL", "jev-latest")), { inCallConfirm: true, timeoutMs: envNum("JUDGE_TIMEOUT_MS", 8000) });
   const agentModel = env("AGENT_MODEL", "qwen3.8-flash");
-  const strong = env("STRONG_MODEL", "glm-5.3");
+  const strong = env("STRONG_MODEL", "deepseek-v4.1-flash");   // model whitelist (owner 2026-10-08); escalation is off unless FLAG_ESCALATION=true
   const calibMode = env("CALIB_MODE", "strict");
   if (calibMode !== "strict" && calibMode !== "identity") throw new Error(`CALIB_MODE must be strict|identity, got ${calibMode}`);
   const calibrator = calibMode === "identity" ? identityCalibrator() : loadCalibrator(env("CALIB_DIR", "calib"), env("JEV_MODEL", "jev-latest"));
