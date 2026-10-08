@@ -28,6 +28,10 @@ export const ABUSE_V4: Standard = {
   },
 };
 
+/** ABUSE-001 v4.1: same questions and label table as v4; q4 / q5 / q6 reworded to surface tests and "不确定" limited to
+ *  two readings or unreadable slang, after the v4 pilot's disagreements (docs/policy/labeling-standard-v4.md §6). */
+export const ABUSE_V41: Standard = { ...ABUSE_V4, id: "abuse-v4.1", ...load("label-abuse-v4.1.txt") };
+
 /** MARKETING-003 (label-marketing-v1): contact / off-platform lead (m1) or black-market / fraud (m3) -> violate;
  *  selling or soliciting (m2) -> violate unless it is also called a natural recommendation (m4), which contradicts it
  *  -> uncertain; otherwise any "不确定" on m1–m3 -> uncertain; else allow. */
@@ -47,7 +51,7 @@ export const GUARD_V1: Standard = {
   label: (a) => (yes(a, "g1") ? "violate" : unsure(a, "g1") ? "uncertain" : "allow"),
 };
 
-export const STANDARDS: Record<string, Standard> = { [ABUSE_V4.id]: ABUSE_V4, [MARKETING_V1.id]: MARKETING_V1, [GUARD_V1.id]: GUARD_V1 };
+export const STANDARDS: Record<string, Standard> = { [ABUSE_V4.id]: ABUSE_V4, [ABUSE_V41.id]: ABUSE_V41, [MARKETING_V1.id]: MARKETING_V1, [GUARD_V1.id]: GUARD_V1 };
 
 /** Parse a model's JSON answer for a standard; undefined when any question is missing or not one of 是 / 否 / 不确定. */
 export function parseAnswers(std: Standard, raw: string): Record<string, Answer> | undefined {

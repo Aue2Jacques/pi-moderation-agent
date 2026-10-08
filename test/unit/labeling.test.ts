@@ -1,7 +1,7 @@
 // Label tables of the platform labeling standards (scripts/lib/labeling.ts): the label is computed from the fact
 // answers, "不确定" is kept as uncertain, and the abuse exemption needs every hit to be a quotation or negation.
 import { describe, expect, it } from "vitest";
-import { ABUSE_V4, GUARD_V1, MARKETING_V1, parseAnswers, type Answer } from "../../scripts/lib/labeling.ts";
+import { ABUSE_V4, ABUSE_V41, GUARD_V1, MARKETING_V1, parseAnswers, type Answer } from "../../scripts/lib/labeling.ts";
 
 const abuse = (over: Partial<Record<string, Answer>>) => ABUSE_V4.label({ q1: "否", q2: "否", q3: "否", q4: "否", q5: "否", q6: "否", q7: "否", ...over } as Record<string, Answer>);
 const mkt = (over: Partial<Record<string, Answer>>) => MARKETING_V1.label({ m1: "否", m2: "否", m3: "否", m4: "否", ...over } as Record<string, Answer>);
@@ -43,9 +43,16 @@ describe("parseAnswers", () => {
 
 describe("prompts", () => {
   it("every standard's prompt has the text slot and names each question", () => {
-    for (const s of [ABUSE_V4, MARKETING_V1, GUARD_V1]) {
+    for (const s of [ABUSE_V4, ABUSE_V41, MARKETING_V1, GUARD_V1]) {
       expect(s.prompt).toContain("{{TEXT}}");
       for (const q of s.questions) expect(s.prompt).toContain(q);
     }
+  });
+});
+
+describe("abuse-v4.1", () => {
+  it("is a new prompt version with the v4 label table", () => {
+    expect(ABUSE_V41.promptSha).not.toBe(ABUSE_V4.promptSha);
+    expect(ABUSE_V41.label({ q1: "是", q2: "否", q3: "否", q4: "否", q5: "否", q6: "否", q7: "不确定" })).toBe("uncertain");
   });
 });

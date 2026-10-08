@@ -4,9 +4,12 @@
 //                                                under another prompt version is never reused (identity = prompt sha)
 //   score <standard> <ids.txt>                  per group: two-model agreement on the 3-way label and on violate vs
 //                                                not, uncertain share, per-question agreement
+//   sample <group> <n> <out.txt> [exclude.txt…]  fresh dev-split ids of one group, none from the exclude files, by a
+//                                                fixed hash order (no text read) — a holdout for a reworded standard
 // Labeling models: deepseek-v4.1-flash and qwen3.8-flash (owner decision); deepseek's channel does not take a
 // temperature, so none is sent.
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { STANDARDS, parseAnswers, type Answer, type Label } from "./lib/labeling.ts";
 
 for (const line of (() => { try { return readFileSync(".env", "utf8").split("\n"); } catch { return []; } })()) {
@@ -15,8 +18,18 @@ for (const line of (() => { try { return readFileSync(".env", "utf8").split("\n"
 }
 const env = (k: string, d?: string): string => { const v = process.env[k] ?? d; if (v === undefined) throw new Error(`missing ${k}`); return v; };
 const [phase, stdId, idsPath, conc] = process.argv.slice(2);
+if (phase === "sample") {
+  const [, group, n, out, ...excl] = process.argv.slice(2);
+  const skip = new Set(excl.flatMap((f) => readFileSync(f, "utf8").split("\n").filter(Boolean)));
+  const h = (id: string) => createHash("sha256").update(`label-pilot-holdout|${id}`).digest("hex");
+  const pick = readFileSync("data/eval/eval20k.jsonl", "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { id: string; group: string; split: string })
+    .filter((x) => x.group === group && x.split === "dev" && !skip.has(x.id)).map((x) => x.id).sort((a, b) => h(a).localeCompare(h(b))).slice(0, Number(n));
+  writeFileSync(out!, pick.join("\n") + "\n");
+  console.log(JSON.stringify({ group, picked: pick.length, out }));
+  process.exit(0);
+}
 const std = STANDARDS[stdId ?? ""];
-if (!std || !idsPath) throw new Error("usage: label-pilot.ts run|score <abuse-v4|marketing-v1|guard-v1> <ids.txt> [concurrency]");
+if (!std || !idsPath) throw new Error("usage: label-pilot.ts run|score|sample <abuse-v4|abuse-v4.1|marketing-v1|guard-v1> <ids.txt> [concurrency]");
 const MODELS = ["deepseek-v4.1-flash", "qwen3.8-flash"];
 const OUT = `data/eval/label-pilot-${std.id}.jsonl`;
 type Item = { id: string; text: string; group: string; slice: string; label_bin: number };
