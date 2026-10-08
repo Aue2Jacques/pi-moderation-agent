@@ -12,7 +12,7 @@
 // pool sha, parameters, start / end, output sha) next to its results.
 // usage: node --experimental-strip-types scripts/run-ac.ts prepare|run|report ...   (RELAY_* / JEV_* / CALIB_DIR from env or .env)
 import { execSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { parse } from "yaml";
@@ -58,8 +58,19 @@ type Case = {
   reply_to: string | null; history: { kind: "prior_ruling" | "post"; payload: unknown; offset_days: number }[];
   expected: { disposition: "pass" | "limit" | "takedown" | "human"; rules: string[] };
 };
+/** sha over the code and policy actually on disk (each package src dir, scripts, rules, config, calib): the dev box is synced
+ *  by copying files, so its git HEAD does not say which code ran */
+function codeSha(): string {
+  const files: string[] = [];
+  const walk = (d: string) => { for (const e of readdirSync(d, { withFileTypes: true })) { const p = join(d, e.name); if (e.isDirectory()) { if (e.name !== "node_modules" && e.name !== "dist" && e.name !== "dist-types" && e.name !== "__pycache__") walk(p); } else files.push(p); } };
+  for (const d of [...readdirSync("packages").map((x) => join("packages", x, "src")), "scripts", "rules", "config", "calib"]) if (existsSync(d)) walk(d);
+  const h = createHash("sha256");
+  for (const f of files.sort()) h.update(`${f}\n`).update(readFileSync(f));
+  return h.digest("hex").slice(0, 16);
+}
 const manifest = (extra: Record<string, unknown>) => ({
-  commit: (() => { try { return execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim(); } catch { return "unknown"; } })(),
+  gitHead: (() => { try { return execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim(); } catch { return "unknown"; } })(),
+  codeSha: codeSha(),
   rulesVer: bundle.rulesVer, calibVer: calibrator.calibVer, calibDir: CALIB || "identity", pricesVer: prices.pricesVer, judge: JEV, agent: AGENT,
   casePool: CASES, casePoolSha: sha(readFileSync(CASES)), modelView: core.MODEL_VIEW_VERSION, admitMax: ADMIT, deadlineMs: DEADLINE_MS,
   budgetTools: DEFAULT_GATEWAY_CONFIG.budgetTools, budgetMicro: DEFAULT_GATEWAY_CONFIG.budgetMicro, ...extra,
