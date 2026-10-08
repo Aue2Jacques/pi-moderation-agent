@@ -31,32 +31,60 @@ export function openAppDb(path: string, role: Role): Db {
   return db;
 }
 
+/**
+ * Create the schema and bring an older app.db up to date, as ONE transaction taken with the write lock first
+ * (stage-1 review fix 1): a second process (G and W both call this at startup) waits for the lock and then sees the
+ * finished structure; a kill or an error part-way rolls everything back, so the next start repairs from a consistent
+ * file. Every step checks its own complete target (each column, each backfill), never "the first column exists".
+ */
 export function ensureSchema(db: Db): void {
   const here = dirname(fileURLToPath(import.meta.url));
   const sql = readFileSync(join(here, "schema.sql"), "utf8");
-  db.exec(sql);
-  migrate(db);
+  beginImmediateWithRetry(db, 60_000);
+  try {
+    db.exec(sql);
+    migrate(db);
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
 }
 
-/** Additive, idempotent upgrades for app.db files created before a column existed (CREATE TABLE IF NOT EXISTS
- *  does not add columns to an existing table). */
-function migrate(db: Db): void {
-  const cols = new Set((db.prepare("PRAGMA table_info(review)").all() as { name: string }[]).map((c) => c.name));
-  if (!cols.has("suspect_reason")) db.exec("ALTER TABLE review ADD COLUMN suspect_reason TEXT");   // §2.2
-  if (!cols.has("submission_attempt")) {
-    // R2: before this column, only generation 1 could ever bind a submission (the bind required submission_id IS NULL)
-    db.exec("ALTER TABLE review ADD COLUMN submission_attempt INTEGER; UPDATE review SET submission_attempt=1 WHERE submission_id IS NOT NULL;");
+/** BEGIN IMMEDIATE, retried while another process holds the write lock (a long migration can outlast busy_timeout). */
+function beginImmediateWithRetry(db: Db, maxWaitMs: number): void {
+  const deadline = Date.now() + maxWaitMs;
+  for (;;) {
+    try {
+      db.exec("BEGIN IMMEDIATE");
+      return;
+    } catch (e) {
+      if (!/locked|busy/i.test(String((e as Error).message)) || Date.now() > deadline) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);   // synchronous 100 ms back-off
+    }
   }
-  const jc = new Set((db.prepare("PRAGMA table_info(judge_call)").all() as { name: string }[]).map((c) => c.name));
-  if (!jc.has("request_sha")) db.exec("ALTER TABLE judge_call ADD COLUMN request_sha TEXT");   // R9a; old rows stay NULL
-  const content = new Set((db.prepare("PRAGMA table_info(content)").all() as { name: string }[]).map((c) => c.name));
-  if (!content.has("reply_to")) db.exec("ALTER TABLE content ADD COLUMN reply_to TEXT; ALTER TABLE content ADD COLUMN mentions TEXT;");   // R8b
+}
+
+const columnsOf = (db: Db, table: string): Set<string> => new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name));
+const addColumn = (db: Db, table: string, column: string, type: string): void => {
+  if (!columnsOf(db, table).has(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+};
+
+/** Additive, idempotent upgrades for app.db files created before a column existed (CREATE TABLE IF NOT EXISTS does
+ *  not add columns to an existing table). Runs inside ensureSchema's transaction; no BEGIN/COMMIT of its own. */
+function migrate(db: Db): void {
+  addColumn(db, "review", "suspect_reason", "TEXT");                     // §2.2
+  addColumn(db, "review", "submission_attempt", "INTEGER");              // R2
+  // R2 backfill: before the column, only generation 1 could bind a submission. Safe to repeat: only rows still lacking it.
+  db.exec("UPDATE review SET submission_attempt=1 WHERE submission_id IS NOT NULL AND submission_attempt IS NULL");
+  addColumn(db, "judge_call", "request_sha", "TEXT");                    // R9a; old rows stay NULL
+  addColumn(db, "content", "reply_to", "TEXT");                          // R8b
+  addColumn(db, "content", "mentions", "TEXT");                          // R8b
   db.exec("CREATE INDEX IF NOT EXISTS content_reply ON content(reply_to, event_time)");
   const ja = (db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='judge_answer'").get() as { sql: string } | undefined)?.sql ?? "";
   if (ja && !ja.includes("'guard'")) {
     // §2.2 injection guard: question_kind gains 'guard'; SQLite cannot alter a CHECK, so rebuild the table
-    db.exec(`BEGIN;
-      CREATE TABLE judge_answer_g (
+    db.exec(`CREATE TABLE judge_answer_g (
         judge_call_id TEXT NOT NULL REFERENCES judge_call(judge_call_id), question_sha TEXT NOT NULL, rule_id TEXT,
         question_kind TEXT NOT NULL CHECK(question_kind IN ('rule','exception','image_check','guard')),
         choice TEXT NOT NULL, raw_probs TEXT NOT NULL, calibrated_probs TEXT, temperature REAL,
@@ -64,15 +92,12 @@ function migrate(db: Db): void {
       INSERT INTO judge_answer_g SELECT judge_call_id, question_sha, rule_id, question_kind, choice, raw_probs, calibrated_probs, temperature FROM judge_answer;
       DROP TABLE judge_answer;
       ALTER TABLE judge_answer_g RENAME TO judge_answer;
-      CREATE INDEX IF NOT EXISTS judge_answer_q ON judge_answer(question_sha);
-      COMMIT;`);
+      CREATE INDEX IF NOT EXISTS judge_answer_q ON judge_answer(question_sha);`);
   }
-  const mc = new Set((db.prepare("PRAGMA table_info(model_call)").all() as { name: string }[]).map((c) => c.name));
-  if (!mc.has("response_key")) {
+  if (!columnsOf(db, "model_call").has("response_key")) {
     // R5a: model_call was one row per generation task (first response only); rebuild with the per-response key.
     // Old rows keep their single response as response_key 'legacy'.
-    db.exec(`BEGIN;
-      CREATE TABLE model_call_r5a (
+    db.exec(`CREATE TABLE model_call_r5a (
         generation_task_id TEXT NOT NULL, response_key TEXT NOT NULL,
         review_id TEXT NOT NULL REFERENCES review(review_id), attempt INTEGER NOT NULL, conversation_id TEXT NOT NULL,
         model TEXT NOT NULL, usage TEXT, stop_reason TEXT, created_at INTEGER NOT NULL,
@@ -80,8 +105,7 @@ function migrate(db: Db): void {
       INSERT INTO model_call_r5a SELECT generation_task_id, 'legacy', review_id, attempt, conversation_id, model, first_usage, NULL, created_at FROM model_call;
       DROP TABLE model_call;
       ALTER TABLE model_call_r5a RENAME TO model_call;
-      CREATE INDEX IF NOT EXISTS model_call_review ON model_call(review_id);
-      COMMIT;`);
+      CREATE INDEX IF NOT EXISTS model_call_review ON model_call(review_id);`);
   }
 }
 

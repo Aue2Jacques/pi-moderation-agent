@@ -149,3 +149,32 @@ describe("§2.2 judge_answer accepts the guard question kind", () => {
     expect((db.prepare("SELECT COUNT(*) AS n FROM judge_answer WHERE question_kind='guard'").get() as { n: number }).n).toBe(1);
   });
 });
+
+describe("closeout fix 1: migrations survive interruption (stage-1 review)", () => {
+  it("a half-upgraded content table (reply_to added, mentions not) is completed; new content can be ingested", () => {
+    const db = freshDb();
+    db.exec("ALTER TABLE content DROP COLUMN mentions");                       // the state a kill between the two ALTERs left
+    core.ensureSchema(db);
+    expect((db.prepare("PRAGMA table_info(content)").all() as { name: string }[]).map((c) => c.name)).toContain("mentions");
+    expect(() => core.intakeInsert(db, { contentId: "n1", scene: "comment", text: "x", eventTime: T0, mentions: ["a"] }, T0)).not.toThrow();
+  });
+  it("a column added but not backfilled is backfilled on the next start", () => {
+    const db = freshDb();
+    const id = queued(db, "c1").review_id;
+    core.acquireLease(db, id, "w1", CFG, T0);
+    db.prepare("UPDATE review SET submission_id='legacy-sub', submission_attempt=NULL WHERE review_id=?").run(id);   // added, never backfilled
+    core.ensureSchema(db);
+    expect(core.requireReview(db, id).submission_attempt).toBe(1);
+  });
+  it("a migration that fails part-way leaves the file exactly as it was (one transaction)", () => {
+    const db = freshDb();
+    db.exec("ALTER TABLE content DROP COLUMN mentions");
+    db.exec("DROP TABLE judge_answer; CREATE TABLE judge_answer (judge_call_id TEXT NOT NULL, question_sha TEXT NOT NULL, rule_id TEXT, question_kind TEXT NOT NULL CHECK(question_kind IN ('rule','exception','image_check')), choice TEXT NOT NULL, raw_probs TEXT NOT NULL, calibrated_probs TEXT, temperature REAL, PRIMARY KEY(judge_call_id, question_sha))");
+    db.exec("CREATE TABLE judge_answer_g (x INTEGER)");                         // makes the judge_answer rebuild fail
+    expect(() => core.ensureSchema(db)).toThrow();
+    expect((db.prepare("PRAGMA table_info(content)").all() as { name: string }[]).map((c) => c.name)).not.toContain("mentions");   // rolled back
+    db.exec("DROP TABLE judge_answer_g");
+    core.ensureSchema(db);                                                      // and a later start completes it
+    expect((db.prepare("PRAGMA table_info(content)").all() as { name: string }[]).map((c) => c.name)).toContain("mentions");
+  });
+});
