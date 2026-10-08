@@ -1043,6 +1043,7 @@ B/B+ 的指标映射：pass/block = 自动完成，suspicious = 转人审；它�
    - **排队超时**（明确时限，`INTAKE_QUEUE_MAX_MS=60000`、`AGENT_QUEUE_MAX_MS=DEADLINE`）：`received/preprocessed AND created_at < now − INTAKE_QUEUE_MAX_MS` 或 `queued AND deadline_at < now − 2×SCAN_MS` 或 `investigating AND lease_until < now − 2×SCAN_MS` → 报"超时未处理"，这是队列与控制循环的问题，不是丢失。
    - **控制循环健康**：G 把每次 `control.tick` 的时刻写 `metrics_minute`（或 health 表）；`now − last_tick > 2×SCAN_MS` → 报"控制循环停摆"。
 4. durable 侧（两种模式）：**W 活着** → 调 `GET /sessions`：每个 active grant 的会话有活任务或 submission 状态 settled；没有 app.db 为 active 而 durable 既无活任务又无 settled submission 的审次。**W 已死** → reconcile **取得并持有 `w.lock` 直到关闭存储**，用 `openNodeSqliteStorage` 正常打开 session.sqlite（该函数没有只读选项【源码，storage/sqlite/node.ts】，打开会设置 WAL 等参数）+ `inspect()`，不 resume、不 submit；这是独占离线检查，不是只读读。不用 memo 判断终态。
+   - **2026-10-08 实现状态（R6）**：`scripts/reconcile.ts` 只实现了"W 活着"模式。指定 `--w` / `W_URL` 但取不到 `/sessions`（连不上、非 2xx、超时 10 s）时，对账**失败**（退出 1），不再当作跳过；不指定时只查 app.db，并在输出里写明。`reconcile.durable(db, sessions, now)` 新增两项：active grant 没有活任务（`active_grant_without_task`）；审次在调查中且租约未过期，但 W 没有报告它（`investigating_without_session`）。租约已过期的调查中审次（持有者已死，或 R3 重启时因超出准入上限而暂缓）不算违例。这是某一时刻的检查，刚取到租约的审次可能被报一次，处理前应重跑。"W 已死"模式（持锁离线检查）尚未实现。
 
 **排空后的最终一致**：
 5. `content_state.effective_seq` = ruling 的 max(seq)（对所有有 ruling 的内容，含快判路径）；`downstream_state.applied_seq` = 已 acked ruling 事件的 max(seq)；`downstream_human.pending=1` 的审次集合 = human_queue 未关闭集合。

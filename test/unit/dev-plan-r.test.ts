@@ -51,3 +51,28 @@ describe("R5a model_call holds one row per physical response", () => {
   });
 });
 
+describe("R6 durable(): reviews that should have a session on W", () => {
+  const S = (reviewId: string, o: Partial<core.reconcile.SessionLike> = {}): core.reconcile.SessionLike => ({ conversationId: "7", reviewId, mode: "active", liveTasks: 1, submission: null, ...o });
+  it("an investigating review with a live lease but no session on W is a violation", () => {
+    const db = freshDb();
+    const id = queued(db, "c1").review_id;
+    core.acquireLease(db, id, "w1", CFG, T0);
+    core.tx(db, () => db.prepare("UPDATE review SET conversation_id='7' WHERE review_id=?").run(id));
+    expect(core.reconcile.durable(db, [], T0 + 1).map((v) => v.check)).toEqual(["investigating_without_session"]);
+    expect(core.reconcile.durable(db, [S(id)], T0 + 1)).toEqual([]);
+  });
+  it("an investigating review whose lease has expired (dead holder, or deferred by R3 on restart) is not one", () => {
+    const db = freshDb();
+    const id = queued(db, "c1").review_id;
+    core.acquireLease(db, id, "w1", CFG, T0);
+    expect(core.reconcile.durable(db, [], T0 + CFG.leaseTtlMs + 1)).toEqual([]);
+  });
+  it("an active grant with no live task (a lease with no work, the R2 symptom) is a violation", () => {
+    const db = freshDb();
+    const id = queued(db, "c1").review_id;
+    core.acquireLease(db, id, "w1", CFG, T0);
+    core.tx(db, () => db.prepare("UPDATE review SET conversation_id='7' WHERE review_id=?").run(id));
+    expect(core.reconcile.durable(db, [S(id, { liveTasks: 0 })], T0 + 1).map((v) => v.check)).toEqual(["active_grant_without_task"]);
+  });
+});
+

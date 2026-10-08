@@ -235,5 +235,10 @@ describe("R9-14 the reconcile CLI is a gate: non-zero exit while anything accept
     const done = cli();
     expect(JSON.parse(done.stdout)).toMatchObject({ ok: true, incomplete: [] });
     expect(done.status).toBe(0);
+    // dev plan R6: asking for the durable side and not getting it is a failure, not a pass
+    const withW = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", join(import.meta.dirname, "..", "..", "scripts", "reconcile.ts"), path, "--w", "http://127.0.0.1:9"], { encoding: "utf8" });
+    expect(withW.status).toBe(1);
+    expect(JSON.parse(withW.stdout)).toMatchObject({ ok: false });
+    expect(JSON.parse(withW.stdout).durable_status).toMatch(/^W unreachable/);
   }, 30_000);
 });

@@ -90,7 +90,7 @@ describe("R9-14 zero violations is not completion", () => {
     seedContent(db, "c1");
     const r = core.createSuspiciousReview(db, { contentId: "c1", pins: PINS, judgeModel: "jev", judgeCallIds: [], pendingVisibility: "hidden", deadlineMs: CFG.deadlineMs, budgetTools: 12, budgetMicro: 50_000 }, T0).review;
     core.tx(db, () => db.prepare("UPDATE review SET conversation_id='7', state='human_queue' WHERE review_id=?").run(r.review_id));
-    const v = core.reconcile.durable(db, [{ conversationId: "7", reviewId: r.review_id, mode: "active", liveTasks: 2, submission: null }]);
+    const v = core.reconcile.durable(db, [{ conversationId: "7", reviewId: r.review_id, mode: "active", liveTasks: 2, submission: null }], T0);
     expect(v.map((x) => x.check).sort()).toEqual(["active_grant_not_investigating", "durable_live_after_terminal"]);
   });
 });

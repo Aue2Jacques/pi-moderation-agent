@@ -1,6 +1,7 @@
 // Reconcile CLI (docs §11.5, round-9 item 14). A gate, not just a report:
 //   instant + final checks on app.db, completion counts (what is still pending), and — when W is reachable — the
-//   durable-side checks from W's /sessions. Exit 0 only when there are no violations AND everything accepted has finished
+//   durable-side checks from W's /sessions (with --w / W_URL; an unreachable W then fails the gate). Exit 0 only when there
+//   are no violations AND everything accepted has finished
 //   (open human-queue items are allowed: they wait for a person by design; pass --require-human-closed to forbid them).
 // usage: node --experimental-strip-types scripts/reconcile.ts [app.db] [--w http://127.0.0.1:8081] [--require-human-closed] [--no-final]
 import * as core from "../packages/core/src/index.ts";
@@ -19,14 +20,18 @@ const final = flag("--no-final") ? [] : core.reconcile.final(db);
 const completion = core.reconcile.completion(db);
 
 let durable: core.reconcile.Violation[] = [];
-let durableStatus = "skipped (no --w / W_URL)";
+let durableStatus = "skipped (no --w / W_URL): app.db checks only";
+let durableFailed = false;   // dev plan R6: when the durable side was asked for, not getting it fails the gate
 if (wUrl) {
   try {
-    const sessions = (await (await fetch(`${wUrl}/sessions`)).json()) as core.reconcile.SessionLike[];
-    durable = core.reconcile.durable(db, sessions);
+    const res = await fetch(`${wUrl}/sessions`, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const sessions = (await res.json()) as core.reconcile.SessionLike[];
+    durable = core.reconcile.durable(db, sessions, Date.now());
     durableStatus = `checked ${sessions.length} sessions`;
   } catch (e) {
     durableStatus = `W unreachable: ${(e as Error).message}`;
+    durableFailed = true;
   }
 }
 
@@ -36,7 +41,7 @@ if (completion.intake_not_judged) incomplete.push(`intake_not_judged=${completio
 if (completion.reviews_open) incomplete.push(`reviews_open=${completion.reviews_open}`);
 if (completion.outbox_not_acked) incomplete.push(`outbox_not_acked=${completion.outbox_not_acked}`);
 if (flag("--require-human-closed") && completion.human_open) incomplete.push(`human_open=${completion.human_open}`);
-const ok = instant.length === 0 && final.length === 0 && durable.length === 0 && incomplete.length === 0;
+const ok = instant.length === 0 && final.length === 0 && durable.length === 0 && !durableFailed && incomplete.length === 0;
 
 console.log(JSON.stringify({
   ok,

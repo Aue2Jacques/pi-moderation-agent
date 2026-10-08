@@ -85,8 +85,12 @@ export function completion(db: Db): Completion {
 
 export type SessionLike = { conversationId: string; reviewId: string; mode: string; liveTasks: number; submission: string | null };
 
-/** Durable side (§11.5 checks 4 and 6) from W's /sessions: live tasks for a terminal review, or an active grant on a review that is not investigating. */
-export function durable(db: Db, sessions: readonly SessionLike[]): Violation[] {
+/** Durable side (§11.5 checks 4 and 6) from W's /sessions: live tasks for a terminal review, or an active grant on a
+ *  review that is not investigating. Dev plan R6 adds both directions of "lease without work": an active grant with no
+ *  live task, and an investigating review whose lease is still live but which W does not report at all. A lease that
+ *  has expired (dead holder, or a review deferred over the admission limit on restart, R3) is not a violation.
+ *  Point-in-time: a review leased a moment before W reports it can show up once; re-run before acting. */
+export function durable(db: Db, sessions: readonly SessionLike[], now: number): Violation[] {
   const v: Violation[] = [];
   for (const s of sessions) {
     const r = db.prepare("SELECT state, conversation_id FROM review WHERE review_id=?").get(s.reviewId) as { state: string; conversation_id: string | null } | undefined;
@@ -94,6 +98,11 @@ export function durable(db: Db, sessions: readonly SessionLike[]): Violation[] {
     if (r.conversation_id !== s.conversationId) v.push({ check: "session_conversation_mismatch", ref: s.reviewId, detail: { db: r.conversation_id, w: s.conversationId } });
     if ((r.state === "disposed" || r.state === "human_disposed" || r.state === "human_queue") && s.liveTasks > 0) v.push({ check: "durable_live_after_terminal", ref: s.reviewId, detail: { state: r.state, liveTasks: s.liveTasks } });
     if (s.mode === "active" && r.state !== "investigating") v.push({ check: "active_grant_not_investigating", ref: s.reviewId, detail: { state: r.state } });
+    if (s.mode === "active" && r.state === "investigating" && s.liveTasks === 0) v.push({ check: "active_grant_without_task", ref: s.reviewId, detail: { submission: s.submission } });
+  }
+  const reported = new Set(sessions.map((s) => s.reviewId));
+  for (const r of db.prepare("SELECT review_id, lease_owner FROM review WHERE state='investigating' AND lease_until >= ?").all(now) as { review_id: string; lease_owner: string }[]) {
+    if (!reported.has(r.review_id)) v.push({ check: "investigating_without_session", ref: r.review_id, detail: { lease_owner: r.lease_owner } });
   }
   return v;
 }
