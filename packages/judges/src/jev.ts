@@ -34,26 +34,42 @@ export function jevModel(models: Models, modelId = "jev-latest"): ClassifierMode
   return m as ClassifierModel<"typesafe-system-one">;
 }
 
-/** Deterministic option-order shuffle for the confirmation copy. */
+/**
+ * Deterministic option-order shuffle for the confirmation copy. Guaranteed to change the order when there are ≥ 2 options:
+ * a seeded Fisher–Yates can return the identity permutation (seed 17 did, for every 3-option question, until 2026-10-09),
+ * in which case the order is rotated by one.
+ */
 export function shuffleCriteria(criteria: Record<string, string>, seed: number): Record<string, string> {
-  const keys = Object.keys(criteria);
+  const orig = Object.keys(criteria);
+  const keys = [...orig];
   let s = seed >>> 0;
   for (let i = keys.length - 1; i > 0; i--) {
     s = (s * 1664525 + 1013904223) >>> 0;
     const j = s % (i + 1);
     [keys[i], keys[j]] = [keys[j]!, keys[i]!];
   }
+  if (keys.length > 1 && keys.every((k, i) => k === orig[i])) keys.push(keys.shift()!);
   return Object.fromEntries(keys.map((k) => [k, criteria[k]!]));
 }
 
 export const CONFIRM_SUFFIX = "#confirm";
 
-/** Build System One questions: `sha` and `sha#confirm` (shuffled) for each question when `inCallConfirm`. */
-export function buildQuestions(questions: readonly Question[], inCallConfirm: boolean, seed = 17): Record<string, ClassifierQuestion> {
+/** Wire name of a question: its readable key (ABUSE-001, ABUSE-001.EX-QUOTE, image_check), or the sha when it has none. */
+export const wireKey = (q: Question): string => q.key ?? q.sha;
+
+/**
+ * Build System One questions keyed by readable name: `key` and `key#confirm` (options shuffled) when `inCallConfirm`.
+ * `toSha` maps every wire key (without the confirm suffix) back to the question sha used everywhere else.
+ */
+export function buildQuestions(questions: readonly Question[], inCallConfirm: boolean, seed = 17): { questions: Record<string, ClassifierQuestion>; toSha: Record<string, string> } {
   const out: Record<string, ClassifierQuestion> = {};
+  const toSha: Record<string, string> = {};
   for (const q of questions) {
-    out[q.sha] = { type: "choice", instructions: q.instructions, criteria: q.criteria };
-    if (inCallConfirm) out[`${q.sha}${CONFIRM_SUFFIX}`] = { type: "choice", instructions: q.instructions, criteria: shuffleCriteria(q.criteria, seed) };
+    const k = wireKey(q);
+    if (toSha[k] && toSha[k] !== q.sha) throw new Error(`duplicate judge question key ${k}`);
+    toSha[k] = q.sha;
+    out[k] = { type: "choice", instructions: q.instructions, criteria: q.criteria };
+    if (inCallConfirm) out[`${k}${CONFIRM_SUFFIX}`] = { type: "choice", instructions: q.instructions, criteria: shuffleCriteria(q.criteria, seed) };
   }
-  return out;
+  return { questions: out, toSha };
 }

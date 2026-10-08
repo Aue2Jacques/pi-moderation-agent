@@ -117,6 +117,7 @@ describe("U-08 / U-10 logprob judge", () => {
     const s1 = judges.buildPrompt({ text: "x" }, q, 17);
     const s2 = judges.buildPrompt({ text: "x" }, q, 17);
     expect(s1.order).toEqual(s2.order);
+    expect(s1.order).not.toEqual(Object.keys(q.criteria));   // the confirmation copy must actually be reordered
     expect(judges.buildPrompt({}, { instructions: "", criteria: Object.fromEntries(Array.from({ length: 62 }, (_, i) => [`o${i}`, "x"])) }).labels["o61"]).toBe("9");
     expect(() => judges.buildPrompt({}, { instructions: "", criteria: Object.fromEntries(Array.from({ length: 63 }, (_, i) => [`o${i}`, "x"])) })).toThrow(/too many/);
   });
@@ -131,5 +132,30 @@ describe("U-08 / U-10 logprob judge", () => {
     expect(judges.parseTopLogprobs([{ token: "B", logprob: Math.log(0.9) }, { token: "A", logprob: Math.log(0.05) }], labels)).toEqual({ status: "abstain", reason: "missing_option" });
     expect(judges.parseTopLogprobs([{ token: "A", logprob: Math.log(0.1) }, { token: "B", logprob: Math.log(0.1) }, { token: "C", logprob: Math.log(0.1) }], labels)).toEqual({ status: "abstain", reason: "low_mass" });
     expect(judges.parseTopLogprobs([{ token: "好的", logprob: Math.log(0.9) }], labels)).toEqual({ status: "abstain", reason: "no_label" });
+  });
+});
+
+describe("confirmation copy is really reordered (seed 17 used to return the identity for every 3-option question)", () => {
+  it("shuffleCriteria and the logprob prompt change the order for every seed 0..299 and 2..6 options", () => {
+    for (let n = 2; n <= 6; n++) {
+      const crit = Object.fromEntries(Array.from({ length: n }, (_, i) => [`o${i}`, `t${i}`]));
+      for (let seed = 0; seed < 300; seed++) {
+        expect(Object.keys(judges.shuffleCriteria(crit, seed)), `n=${n} seed=${seed}`).not.toEqual(Object.keys(crit));
+        expect(judges.buildPrompt({}, { instructions: "", criteria: crit }, seed).order, `prompt n=${n} seed=${seed}`).not.toEqual(Object.keys(crit));
+      }
+    }
+    expect(judges.shuffleCriteria({ only: "x" }, 17)).toEqual({ only: "x" });
+  });
+  it("buildQuestions: readable wire keys, confirm copy reordered, every key maps back to its sha", () => {
+    const b = judges.buildQuestions([abuse.question, ...abuse.exceptions.map((x) => x.question), mkt.question], true, 17);
+    expect(Object.keys(b.questions)).toEqual(["ABUSE-001", "ABUSE-001#confirm", "ABUSE-001.EX-QUOTE", "ABUSE-001.EX-QUOTE#confirm", "MARKETING-003", "MARKETING-003#confirm"]);
+    expect(b.toSha).toEqual({ "ABUSE-001": abuse.question.sha, "ABUSE-001.EX-QUOTE": abuse.exceptions[0]!.question.sha, "MARKETING-003": mkt.question.sha });
+    expect(Object.keys(b.questions["ABUSE-001#confirm"]!.type === "choice" ? (b.questions["ABUSE-001#confirm"] as { criteria: Record<string, string> }).criteria : {})).not.toEqual(Object.keys(abuse.question.criteria));
+  });
+  it("the judge sees the rule definition (with its exclusions), and the exception sees both texts", () => {
+    expect(abuse.question.instructions).toContain("规则定义：");
+    expect(abuse.question.instructions).toContain("不包括");
+    expect(abuse.exceptions[0]!.question.instructions).toContain("例外定义：");
+    expect(abuse.exceptions[0]!.question.instructions).toContain("规则定义：");
   });
 });

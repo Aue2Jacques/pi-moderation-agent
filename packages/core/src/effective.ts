@@ -20,7 +20,10 @@ export type EffectiveGroup = {
   kind: "group";
   evidenceSet: readonly string[];
   inconsistent: boolean;
-  /** latest answer's p (only meaningful when !inconsistent) */
+  /**
+   * mean p of the group's answers (only meaningful when !inconsistent). Same input, same model: the judge's answers
+   * still differ by up to ~0.04 (50-run probe 2026-10-09), so a verdict must not depend on which copy happens to be latest.
+   */
   p: number;
   choice: string;
   answers: readonly AnswerRecord[];
@@ -49,7 +52,8 @@ export function effectiveAnswer(answers: readonly AnswerRecord[]): Effective {
   const sorted = [...g].sort((a, b) => a.createdAt - b.createdAt);
   const latest = sorted[sorted.length - 1]!;
   const inconsistent = sorted.some((a) => a.choice !== latest.choice);
-  return { kind: "group", evidenceSet: latest.evidenceSet, inconsistent, p: latest.p as number, choice: latest.choice, answers: sorted };
+  const mean = sorted.reduce((acc, a) => acc + (a.p as number), 0) / sorted.length;
+  return { kind: "group", evidenceSet: latest.evidenceSet, inconsistent, p: mean, choice: latest.choice, answers: sorted };
 }
 
 export type ActionCondition = (a: AnswerRecord) => boolean;

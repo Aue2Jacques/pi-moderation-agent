@@ -124,3 +124,12 @@ describe("R9-12 policy bundle versions are stored and retrievable", () => {
     expect(core.loadStoredBundle(db, "rules@unknown")).toBeUndefined();
   });
 });
+
+describe("group p is the mean of the group's answers, not whichever noisy copy is latest (2026-10-09 stability probe)", () => {
+  it("0.91 then 0.88 on the same evidence → p 0.895 (no block at 0.90); 0.89 then 0.91 → p 0.90 (block)", () => {
+    const g1 = core.effectiveAnswer([rec(ABUSE_Q, "a", 0.91, "violate", null, 1), rec(ABUSE_Q, "b", 0.88, "violate", "a", 2)]);
+    expect(g1.kind === "group" && g1.p).toBeCloseTo(0.895, 6);
+    const g2 = core.effectiveAnswer([rec(ABUSE_Q, "a", 0.89, "violate", null, 1), rec(ABUSE_Q, "b", 0.91, "violate", "a", 2)]);
+    expect(g2.kind === "group" && g2.p).toBeCloseTo(0.9, 6);
+  });
+});

@@ -33,7 +33,7 @@ await Promise.all(Array.from({ length: CONCURRENCY }, async () => {
     const { ref, i } = jobs[next++]!;
     const e = refs[ref]!;
     const qs = sceneQuestions(bundle, e.scene);
-    const q = qs.find((x) => x.kind === "rule" && x.ruleId === "ABUSE-001")!;
+    const q = qs.find((x) => x.kind === "rule" && x.ruleId === (process.env["RULE"] ?? (ref.startsWith("fx/m3") ? "MARKETING-003" : "ABUSE-001")))!;
     const res = await judge.classify({ contentId: `stab:${ref}:${i}`, text: sentence(e), scene: e.scene, evidence: [], questions: qs });
     if (res.status !== "ok") { out.push({ ref, i, status: res.status, latency: res.latencyMs }); continue; }
     const a = res.answers[q.sha]!;
@@ -51,12 +51,13 @@ const stats = (xs: number[]) => {
   for (const x of xs) { const k = x.toFixed(2); hist[k] = (hist[k] ?? 0) + 1; }
   return { n: xs.length, min: s[0], max: s[s.length - 1], mean: +mean.toFixed(4), sd: +sd.toFixed(4), distinct_raw: new Set(xs).size, hist };
 };
-const th = bundle.rules.find((r) => r.ruleId === "ABUSE-001")!.thresholds.block;
 for (const ref of refsWanted) {
+  const th = bundle.rules.find((r) => r.ruleId === (process.env["RULE"] ?? (ref.startsWith("fx/m3") ? "MARKETING-003" : "ABUSE-001")))!.thresholds.block;
   const ok = out.filter((r) => r.ref === ref && r.status === "ok");
   const p = ok.map((r) => r.primary!);
   const v = ok.filter((r) => r.variant !== undefined).map((r) => r.variant!);
-  const blocks = ok.filter((r) => (r.variant ?? r.primary!) >= th).length;   // block support uses the latest answer of the group (the confirmation copy)
+  // block support uses the group's mean p (primary + in-call copy), same as core.effectiveAnswer
+  const blocks = ok.filter((r) => (r.variant === undefined ? r.primary! : (r.primary! + r.variant) / 2) >= th - 1e-9).length;
   console.log(JSON.stringify({
     ref, ok: ok.length, failed: out.filter((r) => r.ref === ref && r.status !== "ok").length,
     models: [...new Set(ok.map((r) => r.model))],

@@ -14,9 +14,10 @@ export function piJudge(models: Models, model: ClassifierModel<ClassifierApi>, o
       const t0 = Date.now();
       // an explicit confirm call (req.shuffleSeed set) sends only the shuffled copy; a primary call sends original (+ in-call copy)
       const explicitConfirm = req.shuffleSeed !== undefined;
+      const built = buildQuestions(req.questions, explicitConfirm || o.inCallConfirm, explicitConfirm ? req.shuffleSeed : seed);
       const questions = explicitConfirm
-        ? Object.fromEntries(Object.entries(buildQuestions(req.questions, true, req.shuffleSeed)).filter(([k]) => k.endsWith(CONFIRM_SUFFIX)).map(([k, v]) => [k.slice(0, -CONFIRM_SUFFIX.length), v]))
-        : buildQuestions(req.questions, o.inCallConfirm, seed);
+        ? Object.fromEntries(Object.entries(built.questions).filter(([k]) => k.endsWith(CONFIRM_SUFFIX)).map(([k, v]) => [k.slice(0, -CONFIRM_SUFFIX.length), v]))
+        : built.questions;
       const state = JSON.parse(JSON.stringify({ content: { text: req.text, scene: req.scene }, evidence: req.evidence.map((e) => ({ evidence_id: e.evidenceId, kind: e.kind, untrusted: true, model_view: e.modelView })) })) as JsonObject;
       const result = await models.classify(model, { state, questions }, { ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}) });
       const latencyMs = Date.now() - t0;
@@ -28,8 +29,11 @@ export function piJudge(models: Models, model: ClassifierModel<ClassifierApi>, o
       const variant: typeof answers = {};
       for (const [key, a] of Object.entries(result.answers)) {
         if (a.type !== "choice") continue;
-        if (key.endsWith(CONFIRM_SUFFIX)) variant[key.slice(0, -CONFIRM_SUFFIX.length)] = { choice: a.choice, probs: a.probabilities };
-        else answers[key] = { choice: a.choice, probs: a.probabilities };
+        const isCopy = key.endsWith(CONFIRM_SUFFIX);
+        const sha = built.toSha[isCopy ? key.slice(0, -CONFIRM_SUFFIX.length) : key];
+        if (!sha) continue;   // an answer to a question we did not ask
+        if (isCopy) variant[sha] = { choice: a.choice, probs: a.probabilities };
+        else answers[sha] = { choice: a.choice, probs: a.probabilities };
       }
       const usage = { input: result.usage?.input ?? 0, output: result.usage?.output ?? 0 };
       const out: JudgeResponse = { status: "ok", model: result.model, answers, usage, latencyMs };

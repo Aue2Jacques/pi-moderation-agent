@@ -4,7 +4,7 @@
  "source": "run_batch",
  "index": 0,
  "text_sha": "a45d589170467df603436d45bb243809637c68e5bb7b5adf7b48ceee525d4265",
- "recorded_at": "2026-10-08T00:36:46.328Z",
+ "recorded_at": "2026-10-08T00:58:27.186Z",
  "judge": {
   "provider": "jev",
   "api": "typesafe-system-one",
@@ -12,32 +12,32 @@
  },
  "rules_ver": "rules@172fd34d27d6",
  "questions": {
-  "ABUSE-001/rule": "a4cbd15c8d1860e16a157cad4ac3cba5b31897e887b6e0ff6824f9aae3c798ee",
-  "ABUSE-001/exception/EX-QUOTE": "a7de223efe4d6ef78d938c8d167a675ab01b2792b9653f3c99ef9fcc80a4df65",
-  "MARKETING-003/rule": "02d11da041ce8632d9f76e039fc7dfd1585399aa6f16dbe8d49227041ac867be"
+  "ABUSE-001/rule": "03dac9ce57fce4101eefa508723d36d8cefe339156f1aeda2572538f4d87986f",
+  "ABUSE-001/exception/EX-QUOTE": "f600ec8c616015ed360fc01b7a351f31e1fe07f1ec9a59ba9ab796beb05e4374",
+  "MARKETING-003/rule": "57de0a21e4cb9508fb576dc51e851548670ea346c3be98597c31fda2e1c3b96f"
  },
  "primary": {
-  "a4cbd15c8d1860e16a157cad4ac3cba5b31897e887b6e0ff6824f9aae3c798ee": {
+  "03dac9ce57fce4101eefa508723d36d8cefe339156f1aeda2572538f4d87986f": {
    "choice": "none",
    "probs": {
-    "violate": 0,
     "none": 1,
+    "violate": 0,
     "unknown": 0
    }
   },
-  "a7de223efe4d6ef78d938c8d167a675ab01b2792b9653f3c99ef9fcc80a4df65": {
+  "f600ec8c616015ed360fc01b7a351f31e1fe07f1ec9a59ba9ab796beb05e4374": {
    "choice": "not_applies",
    "probs": {
-    "not_applies": 0.97,
-    "applies": 0,
-    "unknown": 0.03
+    "applies": 0.01,
+    "not_applies": 0.94,
+    "unknown": 0.05
    }
   },
-  "02d11da041ce8632d9f76e039fc7dfd1585399aa6f16dbe8d49227041ac867be": {
+  "57de0a21e4cb9508fb576dc51e851548670ea346c3be98597c31fda2e1c3b96f": {
    "choice": "none",
    "probs": {
-    "violate": 0,
     "none": 1,
+    "violate": 0,
     "unknown": 0
    }
   }
@@ -45,35 +45,35 @@
  "variant": {
   "seed": 17,
   "answers": {
-   "a4cbd15c8d1860e16a157cad4ac3cba5b31897e887b6e0ff6824f9aae3c798ee": {
+   "03dac9ce57fce4101eefa508723d36d8cefe339156f1aeda2572538f4d87986f": {
     "choice": "none",
     "probs": {
-     "violate": 0,
      "none": 1,
+     "violate": 0,
      "unknown": 0
     }
    },
-   "a7de223efe4d6ef78d938c8d167a675ab01b2792b9653f3c99ef9fcc80a4df65": {
+   "f600ec8c616015ed360fc01b7a351f31e1fe07f1ec9a59ba9ab796beb05e4374": {
     "choice": "not_applies",
     "probs": {
-     "not_applies": 0.97,
+     "not_applies": 0.93,
      "applies": 0,
-     "unknown": 0.03
+     "unknown": 0.07
     }
    },
-   "02d11da041ce8632d9f76e039fc7dfd1585399aa6f16dbe8d49227041ac867be": {
+   "57de0a21e4cb9508fb576dc51e851548670ea346c3be98597c31fda2e1c3b96f": {
     "choice": "none",
     "probs": {
-     "violate": 0,
      "none": 1,
+     "violate": 0,
      "unknown": 0
     }
    }
   }
  },
- "latency_ms": 3108,
+ "latency_ms": 1109,
  "usage": {
-  "input": 952,
-  "output": 568
+  "input": 1336,
+  "output": 282
  }
 }

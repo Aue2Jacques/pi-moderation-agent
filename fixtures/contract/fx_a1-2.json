@@ -4,7 +4,7 @@
  "source": "run_batch",
  "index": 9,
  "text_sha": "2a14308e046b4e2fdf56c6e062bdd9e49a41fc05527fd66a99a9e8ecba166bf5",
- "recorded_at": "2026-10-08T00:36:44.544Z",
+ "recorded_at": "2026-10-08T00:58:27.197Z",
  "judge": {
   "provider": "jev",
   "api": "typesafe-system-one",
@@ -12,28 +12,28 @@
  },
  "rules_ver": "rules@172fd34d27d6",
  "questions": {
-  "ABUSE-001/rule": "a4cbd15c8d1860e16a157cad4ac3cba5b31897e887b6e0ff6824f9aae3c798ee",
-  "ABUSE-001/exception/EX-QUOTE": "a7de223efe4d6ef78d938c8d167a675ab01b2792b9653f3c99ef9fcc80a4df65",
-  "MARKETING-003/rule": "02d11da041ce8632d9f76e039fc7dfd1585399aa6f16dbe8d49227041ac867be"
+  "ABUSE-001/rule": "03dac9ce57fce4101eefa508723d36d8cefe339156f1aeda2572538f4d87986f",
+  "ABUSE-001/exception/EX-QUOTE": "f600ec8c616015ed360fc01b7a351f31e1fe07f1ec9a59ba9ab796beb05e4374",
+  "MARKETING-003/rule": "57de0a21e4cb9508fb576dc51e851548670ea346c3be98597c31fda2e1c3b96f"
  },
  "primary": {
-  "a4cbd15c8d1860e16a157cad4ac3cba5b31897e887b6e0ff6824f9aae3c798ee": {
+  "03dac9ce57fce4101eefa508723d36d8cefe339156f1aeda2572538f4d87986f": {
    "choice": "violate",
    "probs": {
-    "none": 0.11,
+    "violate": 0.92,
     "unknown": 0,
-    "violate": 0.89
+    "none": 0.08
    }
   },
-  "a7de223efe4d6ef78d938c8d167a675ab01b2792b9653f3c99ef9fcc80a4df65": {
+  "f600ec8c616015ed360fc01b7a351f31e1fe07f1ec9a59ba9ab796beb05e4374": {
    "choice": "not_applies",
    "probs": {
-    "unknown": 0,
     "applies": 0,
+    "unknown": 0,
     "not_applies": 1
    }
   },
-  "02d11da041ce8632d9f76e039fc7dfd1585399aa6f16dbe8d49227041ac867be": {
+  "57de0a21e4cb9508fb576dc51e851548670ea346c3be98597c31fda2e1c3b96f": {
    "choice": "none",
    "probs": {
     "none": 1,
@@ -45,35 +45,35 @@
  "variant": {
   "seed": 17,
   "answers": {
-   "a4cbd15c8d1860e16a157cad4ac3cba5b31897e887b6e0ff6824f9aae3c798ee": {
+   "03dac9ce57fce4101eefa508723d36d8cefe339156f1aeda2572538f4d87986f": {
     "choice": "violate",
     "probs": {
-     "none": 0.11,
+     "violate": 0.9,
      "unknown": 0,
-     "violate": 0.89
+     "none": 0.1
     }
    },
-   "a7de223efe4d6ef78d938c8d167a675ab01b2792b9653f3c99ef9fcc80a4df65": {
+   "f600ec8c616015ed360fc01b7a351f31e1fe07f1ec9a59ba9ab796beb05e4374": {
     "choice": "not_applies",
     "probs": {
-     "unknown": 0,
      "applies": 0,
+     "unknown": 0,
      "not_applies": 1
     }
    },
-   "02d11da041ce8632d9f76e039fc7dfd1585399aa6f16dbe8d49227041ac867be": {
+   "57de0a21e4cb9508fb576dc51e851548670ea346c3be98597c31fda2e1c3b96f": {
     "choice": "none",
     "probs": {
-     "none": 1,
+     "violate": 0,
      "unknown": 0,
-     "violate": 0
+     "none": 1
     }
    }
   }
  },
- "latency_ms": 1324,
+ "latency_ms": 1121,
  "usage": {
-  "input": 953,
-  "output": 570
+  "input": 1337,
+  "output": 284
  }
 }

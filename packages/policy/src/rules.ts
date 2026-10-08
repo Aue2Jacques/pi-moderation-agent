@@ -22,13 +22,28 @@ export type ScenesYaml = Record<Scene, {
   image_check: { thresholds: { block: number; pass: number }; question: QuestionYaml };
 }>;
 
-function toQuestion(kind: Question["kind"], q: QuestionYaml, ruleId?: string, exceptionId?: string): Question {
+/**
+ * The text a judge sees = the YAML question + the definition it must apply (rule text with its exclusions; for an
+ * exception, the exception text and the rule it belongs to). Without the definition the judge only sees a one-line
+ * question and cannot know the rule's boundaries (round-9 follow-up, 2026-10-09). The sha covers the full text, so
+ * editing a rule's definition changes its question sha and invalidates recorded fixtures and calibration buckets.
+ */
+export function composeInstructions(q: QuestionYaml, definition?: { rule?: string; exception?: string }): string {
+  const parts = [q.instructions];
+  if (definition?.rule) parts.push(`规则定义：${definition.rule}`);
+  if (definition?.exception) parts.push(`例外定义：${definition.exception}`);
+  return parts.join("\n");
+}
+
+function toQuestion(kind: Question["kind"], q: QuestionYaml, ruleId?: string, exceptionId?: string, definition?: { rule?: string; exception?: string }): Question {
   if (q.pass_choices?.includes("unknown")) throw new Error(`question ${q.id}: unknown can never be a pass choice`);
   if (!(q.violation_option in q.options)) throw new Error(`question ${q.id}: violation_option not in options`);
+  const instructions = composeInstructions(q, definition);
   return {
-    sha: questionSha({ kind, ...(ruleId ? { rule_id: ruleId } : {}), ...(exceptionId ? { exception_id: exceptionId } : {}), instructions: q.instructions, criteria: q.options }),
+    sha: questionSha({ kind, ...(ruleId ? { rule_id: ruleId } : {}), ...(exceptionId ? { exception_id: exceptionId } : {}), instructions, criteria: q.options }),
+    key: kind === "image_check" ? "image_check" : exceptionId ? `${ruleId}.${exceptionId}` : ruleId!,
     kind,
-    instructions: q.instructions,
+    instructions,
     criteria: q.options,
     ...(ruleId ? { ruleId } : {}),
     ...(exceptionId ? { exceptionId } : {}),
@@ -44,8 +59,8 @@ export function ruleFromYaml(y: RuleYaml): Rule {
   return {
     ruleId: y.rule_id, category: y.category, scenes: y.scenes, severity: y.severity, defaultAction: y.default_action,
     thresholds: { block: y.thresholds.block, pass: y.thresholds.pass },
-    question: toQuestion("rule", y.question, y.rule_id),
-    exceptions: (y.exceptions ?? []).map((x) => ({ id: x.id, question: toQuestion("exception", x.question, y.rule_id, x.id) })),
+    question: toQuestion("rule", y.question, y.rule_id, undefined, { rule: y.text }),
+    exceptions: (y.exceptions ?? []).map((x) => ({ id: x.id, question: toQuestion("exception", x.question, y.rule_id, x.id, { rule: y.text, exception: x.text }) })),
   };
 }
 

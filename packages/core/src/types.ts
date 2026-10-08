@@ -72,6 +72,8 @@ export type EvidenceRow = {
 
 export type Question = {
   sha: string;                       // question_sha
+  /** readable name sent to judges instead of the sha (e.g. ABUSE-001, ABUSE-001.EX-QUOTE, image_check); answers are mapped back to sha */
+  key?: string;
   kind: "rule" | "exception" | "image_check";
   /** question text sent to judges (the sha covers these) */
   instructions: string;

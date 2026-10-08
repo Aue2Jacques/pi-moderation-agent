@@ -48,6 +48,7 @@ export function parseTopLogprobs(top: readonly TopLogprob[], labels: Record<stri
   return { status: "ok", probs, massCovered: mass };
 }
 
+/** Seeded Fisher–Yates that always changes the order for ≥ 2 items (an identity result is rotated by one; see jev.ts). */
 function shuffle(items: string[], seed: number): string[] {
   const a = [...items];
   let s = seed >>> 0;
@@ -56,5 +57,6 @@ function shuffle(items: string[], seed: number): string[] {
     const j = s % (i + 1);
     [a[i], a[j]] = [a[j]!, a[i]!];
   }
+  if (a.length > 1 && a.every((x, i) => x === items[i])) a.push(a.shift()!);
   return a;
 }
