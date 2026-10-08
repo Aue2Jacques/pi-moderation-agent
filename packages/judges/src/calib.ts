@@ -47,8 +47,8 @@ export function ece(samples: readonly Sample[], bins = 15): number {
   return e;
 }
 
-export type CalibFile = { T: number; n: number; ece_before: number; ece_after: number; fitted_at: number; bucket: { judge: string; rules_ver: string; scene: string; n_options: number } };
-export const calibKey = (b: CalibFile["bucket"]): string => `${b.judge}|${b.rules_ver}|${b.scene}|${b.n_options}`;
+export type CalibFile = { T: number; n: number; ece_before: number; ece_after: number; fitted_at: number; bucket: { judge: string; rules_ver: string; scene: string; n_options: number; question: string } };
+export const calibKey = (b: CalibFile["bucket"]): string => `${b.judge}|${b.rules_ver}|${b.scene}|${b.n_options}|${b.question}`;
 
 // ---------- runtime calibrators (round-9 item 5) ----------
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -56,7 +56,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import type { CalibBucket, Calibrator } from "@mod/core";
 
-const bucketKey = (b: CalibBucket): string => calibKey({ judge: b.judge, rules_ver: b.rulesVer, scene: b.scene, n_options: b.nOptions });
+const bucketKey = (b: CalibBucket): string => calibKey({ judge: b.judge, rules_ver: b.rulesVer, scene: b.scene, n_options: b.nOptions, question: b.question });
 
 /** Explicit smoke mode: raw probabilities copied through, pinned as calib@identity. Never the default. */
 export function identityCalibrator(): Calibrator {
@@ -74,6 +74,7 @@ export function noCalibrator(): Calibrator {
  */
 export function loadCalibrator(dir: string, judge: string): Calibrator {
   const files = new Map<string, CalibFile>();
+  const fromFile = new Map<string, string>();
   const h = createHash("sha256");
   const sub = join(dir, judge);
   let names: string[] = [];
@@ -83,7 +84,11 @@ export function loadCalibrator(dir: string, judge: string): Calibrator {
     h.update(`${f}\n${raw}\n`);
     const c = JSON.parse(raw) as CalibFile;
     if (typeof c.T !== "number" || !(c.T > 0) || !c.bucket) throw new Error(`bad calib file ${f}`);
-    files.set(calibKey(c.bucket), c);
+    if (typeof c.bucket.question !== "string" || !c.bucket.question) throw new Error(`calib file ${f} lacks bucket.question (refit it per question)`);
+    const key = calibKey(c.bucket);
+    if (files.has(key)) throw new Error(`duplicate calibration bucket ${key} in ${fromFile.get(key)} and ${f}`);   // R9b: never let one silently win
+    files.set(key, c);
+    fromFile.set(key, f);
   }
   if (files.size === 0) return noCalibrator();
   return {

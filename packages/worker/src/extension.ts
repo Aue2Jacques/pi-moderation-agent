@@ -170,7 +170,7 @@ async function runJudge(deps: ExtensionDeps, api: ToolExecutionApi, ctx: Context
   const toAnswers = (src: Record<string, { choice: string; probs: Record<string, number> }>) => questions.flatMap((q) => {
     const a = src[q.sha];
     if (!a) return [];
-    const cal = canCalibrate ? deps.calibrator.apply({ judge: review.judge_model, rulesVer: g.pins.rulesVer, scene: content.scene, nOptions: Object.keys(q.criteria).length }, a.probs) : null;
+    const cal = canCalibrate ? deps.calibrator.apply({ judge: review.judge_model, rulesVer: g.pins.rulesVer, scene: content.scene, nOptions: Object.keys(q.criteria).length, question: core.questionKey(q) }, a.probs) : null;
     return [{ questionSha: q.sha, ruleId: q.ruleId ?? null, kind: q.kind, choice: a.choice, rawProbs: a.probs, calibratedProbs: cal ? cal.probs : null, ...(cal ? { temperature: cal.temperature } : {}) }];
   });
   const answers = res.status === "ok" ? toAnswers(res.answers) : [];

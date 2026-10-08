@@ -89,3 +89,45 @@ describe("R9c database files are private (0600)", () => {
     db.close();
   });
 });
+
+describe("R9b calibration buckets include the question", () => {
+  const T0x = 0;
+  const file = (question: string | undefined, T: number) => JSON.stringify({ T, n: 200, ece_before: 0.1, ece_after: 0.03, fitted_at: T0x,
+    bucket: { judge: "jev-x", rules_ver: "rules@a", scene: "comment", n_options: 3, ...(question ? { question } : {}) } });
+  const raw = { violate: 0.08, none: 0.92 };
+  const at = async () => {
+    const { mkdtempSync, mkdirSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "calib-"));
+    mkdirSync(join(dir, "jev-x"));
+    return { dir, sub: join(dir, "jev-x"), join };
+  };
+  it("two questions in the same scene with the same option count keep separate temperatures", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const { dir, sub, join } = await at();
+    writeFileSync(join(sub, "abuse.json"), file("ABUSE-001", 2));
+    writeFileSync(join(sub, "mkt.json"), file("MARKETING-003", 4));
+    const { loadCalibrator } = await import("../../packages/judges/src/index.ts");
+    const c = loadCalibrator(dir, "jev-x");
+    const b = { judge: "jev-x", rulesVer: "rules@a", scene: "comment" as const, nOptions: 3 };
+    expect(c.apply({ ...b, question: "ABUSE-001" }, raw)?.temperature).toBe(2);
+    expect(c.apply({ ...b, question: "MARKETING-003" }, raw)?.temperature).toBe(4);
+    expect(c.apply({ ...b, question: "ABUSE-001.EX-QUOTE" }, raw)).toBeNull();   // not fitted: stays uncalibrated
+  });
+  it("two files for the same bucket fail to load instead of one silently replacing the other", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const { dir, sub, join } = await at();
+    writeFileSync(join(sub, "a.json"), file("ABUSE-001", 2));
+    writeFileSync(join(sub, "b.json"), file("ABUSE-001", 3));
+    const { loadCalibrator } = await import("../../packages/judges/src/index.ts");
+    expect(() => loadCalibrator(dir, "jev-x")).toThrow(/duplicate calibration bucket/);
+  });
+  it("a file without bucket.question is rejected (it cannot say which question it was fitted on)", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const { dir, sub, join } = await at();
+    writeFileSync(join(sub, "old.json"), file(undefined, 2));
+    const { loadCalibrator } = await import("../../packages/judges/src/index.ts");
+    expect(() => loadCalibrator(dir, "jev-x")).toThrow(/question/);
+  });
+});

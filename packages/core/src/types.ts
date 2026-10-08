@@ -118,6 +118,12 @@ export function rulesFor(bundle: PolicyBundle, scene: Scene): Rule[] {
   return bundle.rules.filter((r) => r.scenes.includes(scene));
 }
 
+/** Readable, stable name of a question: its `key`, else derived as the rule loader derives it (ABUSE-001,
+ *  ABUSE-001.EX-QUOTE, image_check). Used for calibration buckets. */
+export function questionKey(q: Pick<Question, "key" | "kind" | "ruleId" | "exceptionId">): string {
+  return q.key ?? (q.kind === "image_check" ? "image_check" : q.exceptionId ? `${q.ruleId}.${q.exceptionId}` : (q.ruleId ?? q.kind));
+}
+
 export function ruleAllowed(rule: Rule): readonly Action[] {
   return ["pass", rule.defaultAction];
 }
@@ -133,7 +139,9 @@ export function questionsOf(bundle: PolicyBundle): Set<string> {
 }
 
 /** Calibration bucket: the judge model × rules version × scene × option count (docs §9.2). */
-export type CalibBucket = { judge: string; rulesVer: string; scene: Scene; nOptions: number };
+/** `question` = questionKey() of the question being calibrated (dev plan R9b: without it, two questions with the same
+ *  scene and option count shared one bucket and their files silently replaced each other). */
+export type CalibBucket = { judge: string; rulesVer: string; scene: Scene; nOptions: number; question: string };
 
 /**
  * Runtime calibration contract (docs §9.2 / round-9 item 5). `apply` returns null when no fitted file covers the bucket:

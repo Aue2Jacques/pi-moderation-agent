@@ -55,7 +55,7 @@ pi-moderation-agent/
 │   ├── ops/                  # pi coding-agent 扩展：/shadow /rollout /status /calib（调 G 的 HTTP）
 │   └── inspect/              # 调试 CLI：脱敏打印审次、轨迹、账本
 ├── rules/                    # 规则 YAML（git 版本化）+ mapping.yaml
-├── calib/                    # calib/<judge>/<rule>@<ver>.json
+├── calib/                    # calib/<judge>/*.json，每个文件一个桶：judge × rules_ver × scene × 选项数 × 题目（2026-10-08 R9b 起含题目键，如 ABUSE-001、ABUSE-001.EX-QUOTE；同桶两份文件 → 加载失败）
 ├── config/                   # scenes.yaml（场景 → 必查类别、动作白名单、可见性、截止、严重度）、models.json、prices.yaml、reviewers.json
 ├── fixtures/                 # refs.yaml（公开数据集引用）+ benign/（自写无害文本）
 ├── python/{synth,eval,replay}/   # uv 项目：合成数据、评测运行器与统计、回放器（通过 core 的 intake-cli 写入，见 §13.6）

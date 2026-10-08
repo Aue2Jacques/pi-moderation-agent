@@ -35,7 +35,10 @@ describe("R9-05 calibration is applied on the main path, or nothing is auto-disp
   it("strict with a fitted file: the probability the permission gate sees is the file's output, traceable by temperature and calib_ver", async () => {
     const dir = mkdtempSync(join(tmpdir(), "calib-"));
     mkdirSync(join(dir, "jev-recorded"));
-    writeFileSync(join(dir, "jev-recorded", "comment-3.json"), JSON.stringify({ T: 0.5, n: 300, ece_before: 0.08, ece_after: 0.02, fitted_at: 0, bucket: { judge: "jev-recorded", rules_ver: BUNDLE.rulesVer, scene: "comment", n_options: 3 } }));
+    // one fitted file per question (dev plan R9b: buckets include the question)
+    for (const question of ["ABUSE-001", "ABUSE-001.EX-QUOTE", "MARKETING-003"]) {
+      writeFileSync(join(dir, "jev-recorded", `comment-${question}.json`), JSON.stringify({ T: 0.5, n: 300, ece_before: 0.08, ece_after: 0.02, fitted_at: 0, bucket: { judge: "jev-recorded", rules_ver: BUNDLE.rulesVer, scene: "comment", n_options: 3, question } }));
+    }
     const cal = loadCalibrator(dir, "jev-recorded");
     const db = freshDb();
     seedContent(db, "c1", "comment", { text: "plain text" });

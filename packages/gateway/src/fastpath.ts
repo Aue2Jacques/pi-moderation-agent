@@ -67,7 +67,7 @@ export async function runFastpath(deps: FastpathDeps, contentId: string): Promis
         const a = answers[q.sha];
         if (!a) return [];
         // calibration is a server-side step: no fitted bucket → calibrated_probs NULL → never an effective answer
-        const cal = deps.calibrator.apply({ judge: deps.judgeModel, rulesVer: deps.bundle.rulesVer, scene, nOptions: Object.keys(q.criteria).length }, a.probs);
+        const cal = deps.calibrator.apply({ judge: deps.judgeModel, rulesVer: deps.bundle.rulesVer, scene, nOptions: Object.keys(q.criteria).length, question: core.questionKey(q) }, a.probs);
         return [{ questionSha: q.sha, ruleId: q.ruleId ?? null, kind: q.kind, choice: a.choice, rawProbs: a.probs, calibratedProbs: cal ? cal.probs : null, ...(cal ? { temperature: cal.temperature } : {}) }];
       }),
     }, deps.now());

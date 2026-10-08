@@ -28,7 +28,7 @@ function recorded(ref: string): Recorded | undefined {
   const toRecords = (id: string, answers: FixtureAnswers, confirms: string | null, at: number): core.AnswerRecord[] => qs.flatMap((q) => {
     const a = answers[q.sha];
     if (!a) return [];
-    const c = cal.apply({ judge: f.judge.model, rulesVer: bundle.rulesVer, scene: e.scene, nOptions: Object.keys(q.criteria).length }, a.probs);
+    const c = cal.apply({ judge: f.judge.model, rulesVer: bundle.rulesVer, scene: e.scene, nOptions: Object.keys(q.criteria).length, question: core.questionKey(q) }, a.probs);
     return [{ judgeCallId: id, questionSha: q.sha, choice: a.choice, p: c ? (c.probs[q.violationOption] ?? 0) : null, evidenceSet: [], inputSha: f.text_sha, model: f.judge.model, calibVer: cal.calibVer, confirmsCallId: confirms, createdAt: at }];
   });
   const answers = [...toRecords("p", f.primary, null, 1), ...(f.variant ? toRecords("v", f.variant.answers, "p", 2) : [])];

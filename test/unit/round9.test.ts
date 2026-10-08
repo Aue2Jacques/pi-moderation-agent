@@ -39,7 +39,7 @@ describe("R9-15 a confirmed low-risk pair is revoked by a later doubtful answer 
 
 describe("R9-05 runtime calibration contract", () => {
   const raw = { violate: 0.08, none: 0.92 };
-  const bucket = { judge: "jev-x", rulesVer: "rules@a", scene: "comment" as const, nOptions: 3 };
+  const bucket = { judge: "jev-x", rulesVer: "rules@a", scene: "comment" as const, nOptions: 3, question: "ABUSE-001" };
   it("no calib dir → calib@none, strict, every answer uncalibrated (null)", () => {
     const c = judges.loadCalibrator(join(tmpdir(), "does-not-exist"), "jev-x");
     expect(c).toMatchObject({ calibVer: "calib@none", mode: "strict" });
@@ -48,7 +48,7 @@ describe("R9-05 runtime calibration contract", () => {
   it("fitted file → temperature applied for its bucket only; calibVer is the content hash; changing the file changes the pin", () => {
     const dir = mkdtempSync(join(tmpdir(), "calib-"));
     mkdirSync(join(dir, "jev-x"));
-    const file = (T: number): string => JSON.stringify({ T, n: 200, ece_before: 0.1, ece_after: 0.03, fitted_at: T0, bucket: { judge: "jev-x", rules_ver: "rules@a", scene: "comment", n_options: 3 } });
+    const file = (T: number): string => JSON.stringify({ T, n: 200, ece_before: 0.1, ece_after: 0.03, fitted_at: T0, bucket: { judge: "jev-x", rules_ver: "rules@a", scene: "comment", n_options: 3, question: "ABUSE-001" } });
     writeFileSync(join(dir, "jev-x", "comment.json"), file(2));
     const c = judges.loadCalibrator(dir, "jev-x");
     expect(c.mode).toBe("strict");
