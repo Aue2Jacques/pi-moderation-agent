@@ -156,9 +156,11 @@ async function runJudge(deps: ExtensionDeps, api: ToolExecutionApi, ctx: Context
   const reqNo = core.openToolRequest(deps.db, g.reviewId, api.callId, deps.now());
   crashAt("J");   // H-22: a replayed tool opens a second tool_request under the same tool_slot
   deps.onExternalCall?.(String(api.conversationId), confirms ? "confirm" : "judge");
+  const request = { contentId: g.contentId, text: content.text, scene: content.scene, evidence: cited.map((e) => ({ evidenceId: e.evidenceId, kind: e.kind, modelView: e.modelView })), questions, ...(confirms ? { shuffleSeed: confirms.seed } : {}) };
+  const requestSha = core.requestDigest(deps.judge, request);   // R9a: everything sent, rule texts included
   let res: Awaited<ReturnType<JudgeClient["classify"]>>;
   try {
-    res = await deps.judge.classify({ contentId: g.contentId, text: content.text, scene: content.scene, evidence: cited.map((e) => ({ evidenceId: e.evidenceId, kind: e.kind, modelView: e.modelView })), questions, ...(confirms ? { shuffleSeed: confirms.seed } : {}) });
+    res = await deps.judge.classify(request);
   } catch (e) {
     core.settleToolRequest(deps.db, g.reviewId, api.callId, reqNo, null, null, deps.now());
     throw e;
@@ -178,7 +180,7 @@ async function runJudge(deps: ExtensionDeps, api: ToolExecutionApi, ctx: Context
   const inputSha = core.inputFingerprint(content.text_sha, content.scene, evidenceSet, review.evidence_ver);
   core.recordJudgeCall(deps.db, {
     judgeCallId, reviewId: g.reviewId, contentId: g.contentId, attempt: g.attempt, provider: deps.judge.provider, model: res.model, api: deps.judge.api,
-    inputSha, evidenceSet, pins, status: res.status,
+    inputSha, requestSha, evidenceSet, pins, status: res.status,
     ...(confirms ? { confirmsCallId: confirms.callId, shuffleSeed: confirms.seed } : {}), latencyMs: res.latencyMs,
     ...(res.status === "ok" ? { inputTokens: res.usage.input, outputTokens: res.usage.output, costMicro: cost ?? 0 } : {}),
     costStatus: cost === null ? "unknown" : "settled", answers,
@@ -187,7 +189,7 @@ async function runJudge(deps: ExtensionDeps, api: ToolExecutionApi, ctx: Context
   if (res.status === "ok" && res.variant && !confirms) {
     core.recordJudgeCall(deps.db, {
       judgeCallId: core.uuid(), reviewId: g.reviewId, contentId: g.contentId, attempt: g.attempt, provider: deps.judge.provider, model: res.model, api: deps.judge.api,
-      inputSha, evidenceSet, pins, status: "ok", confirmsCallId: judgeCallId, shuffleSeed: res.variant.shuffleSeed, latencyMs: res.latencyMs,
+      inputSha, requestSha, evidenceSet, pins, status: "ok", confirmsCallId: judgeCallId, shuffleSeed: res.variant.shuffleSeed, latencyMs: res.latencyMs,
       inputTokens: 0, outputTokens: 0, costMicro: 0, costStatus: "settled", answers: toAnswers(res.variant.answers),
     }, deps.now() + 1);
   }

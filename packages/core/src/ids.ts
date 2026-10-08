@@ -43,6 +43,13 @@ export const uuid = (): string => randomUUID();
 
 export const sha256 = (s: string): string => createHash("sha256").update(s).digest("hex");
 
+/** Digest of a judge request as handed to the client (dev plan R9a): the client's identity plus everything in the
+ *  request — content, every cited evidence view (rule texts and summaries too), questions, shuffle seed. input_sha
+ *  stays the logical key (content-bearing evidence only) used to group and verify answers. */
+export function requestDigest(client: { provider: string; api: string }, request: unknown): string {
+  return sha256(canonical({ provider: client.provider, api: client.api, request }));
+}
+
 /** Deterministic JSON: sorted keys, no whitespace. */
 export function canonical(value: unknown): string {
   return JSON.stringify(sortKeys(value));

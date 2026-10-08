@@ -276,6 +276,7 @@ CREATE TABLE judge_call (                       -- 调用级
   review_id TEXT REFERENCES review(review_id), content_id TEXT NOT NULL, attempt INTEGER,
   provider TEXT NOT NULL, model TEXT NOT NULL, api TEXT NOT NULL,
   input_sha TEXT NOT NULL,                -- sha256(canonical state)：内容 + 所引证据
+  request_sha TEXT,                       -- 2026-10-08 R9a：实际发给判官的请求摘要（客户端标识 + 内容 + 全部所引证据视图，含规则文本与摘要 + 题目 + 打乱种子）；input_sha 只含内容类证据，仍用于答案分组和核对
   evidence_set TEXT NOT NULL,             -- JSON：所引 content-bearing 证据的 body_sha 排序列表（§5.4；不含 kind=rule）
   rules_ver TEXT NOT NULL, calib_ver TEXT NOT NULL, evidence_ver TEXT NOT NULL,
   status TEXT NOT NULL CHECK(status IN ('ok','timeout','error','abstain')),

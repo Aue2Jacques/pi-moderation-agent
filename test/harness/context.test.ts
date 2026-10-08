@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import * as core from "../../packages/core/src/index.ts";
 import { BUNDLE, CFG, PINS, freshDb, lowRiskConfirmed } from "../helpers.ts";
-import { makeWorker, queuedReview, runToIdle, scripted, setScript } from "./setup.ts";
+import { makeWorker, queuedReview, resolving, runToIdle, scripted, setScript } from "./setup.ts";
 
 const HISTORY_THEN_RELEASE = scripted([{ tool: "get_account_history", args: {} }, { tool: "release", args: { reason: "evidence_gap" } }, { text: "done" }]);
 
@@ -61,6 +61,31 @@ describe("R8b thread context follows reply and @ relations", () => {
     const ev = db.prepare("SELECT model_view FROM evidence WHERE review_id=? AND kind='thread_context'").get(r.review_id) as { model_view: string };
     const got = (JSON.parse(ev.model_view) as { neighbors: { content_id: string; relation: string }[] }).neighbors.map((n) => `${n.relation}:${n.content_id}`);
     expect(got).toEqual(["parent:parent", "ancestor:root", "reply:child", "mentioned:xpost", "before:b1", "before:b2", "before:b3", "after:a1", "after:a2", "after:a3"]);
+    await fx.close();
+  });
+});
+
+describe("R9a judge calls record a digest of the request actually sent", () => {
+  it("same content evidence, one call also sending the rule text: input_sha equal (logical), request_sha different", async () => {
+    const db = freshDb();
+    const r = queuedReview(db, "c1", { thread: "t1", at: Date.now() });
+    const fx = await makeWorker({ db, steps: [] });
+    setScript(fx, resolving(db, () => r.review_id, [
+      { tool: "get_thread_context", args: {} },                                        // $E1 (content-bearing)
+      { tool: "load_rule", args: { rule_id: "ABUSE-001" } },                            // $E2 (rule text: not content-bearing)
+      { tool: "judge", args: { rule_ids: [], evidence_ids: ["$E1"] } },
+      { tool: "judge", args: { rule_ids: [], evidence_ids: ["$E1", "$E2"] } },
+      { tool: "release", args: { reason: "evidence_gap" } },
+      { text: "done" },
+    ]));
+    await fx.worker.start();
+    await fx.worker.admitOnce();
+    await runToIdle(fx);
+    const calls = db.prepare("SELECT input_sha, request_sha FROM judge_call WHERE review_id=? AND confirms_call_id IS NULL ORDER BY created_at").all(r.review_id) as { input_sha: string; request_sha: string | null }[];
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.input_sha).toBe(calls[1]!.input_sha);
+    expect(calls[0]!.request_sha).toMatch(/^[0-9a-f]{64}$/);
+    expect(calls[1]!.request_sha).not.toBe(calls[0]!.request_sha);
     await fx.close();
   });
 });

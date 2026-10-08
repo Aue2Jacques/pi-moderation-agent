@@ -162,6 +162,7 @@ CREATE TABLE IF NOT EXISTS judge_call (
   review_id TEXT REFERENCES review(review_id), content_id TEXT NOT NULL, attempt INTEGER,
   provider TEXT NOT NULL, model TEXT NOT NULL, api TEXT NOT NULL,
   input_sha TEXT NOT NULL,
+  request_sha TEXT,            -- digest of the request actually sent (dev plan R9a); input_sha is the logical grouping key
   evidence_set TEXT NOT NULL,
   rules_ver TEXT NOT NULL, calib_ver TEXT NOT NULL, evidence_ver TEXT NOT NULL,
   status TEXT NOT NULL CHECK(status IN ('ok','timeout','error','abstain')),

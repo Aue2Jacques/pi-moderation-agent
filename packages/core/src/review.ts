@@ -307,6 +307,8 @@ export function fallbackCost(db: Db, reviewId: string): number {
 export type JudgeCallInput = {
   judgeCallId: string; reviewId: string | null; contentId: string; attempt: number | null;
   provider: string; model: string; api: string; inputSha: string; evidenceSet: readonly string[];
+  /** digest of the request actually sent (requestDigest); optional for callers that do not send a request */
+  requestSha?: string;
   pins: Pins; status: "ok" | "timeout" | "error" | "abstain"; shuffleSeed?: number; confirmsCallId?: string; massCovered?: number;
   latencyMs?: number; inputTokens?: number; outputTokens?: number; costMicro?: number; costStatus: "settled" | "estimated" | "unknown";
   answers: readonly { questionSha: string; ruleId: string | null; kind: "rule" | "exception" | "image_check"; choice: string; rawProbs: Record<string, number>; calibratedProbs: Record<string, number> | null; temperature?: number }[];
@@ -315,10 +317,10 @@ export type JudgeCallInput = {
 export function recordJudgeCall(db: Db, c: JudgeCallInput, at: number): void {
   tx(db, () => {
     db.prepare(
-      `INSERT OR IGNORE INTO judge_call(judge_call_id, review_id, content_id, attempt, provider, model, api, input_sha, evidence_set, rules_ver, calib_ver, evidence_ver, status,
+      `INSERT OR IGNORE INTO judge_call(judge_call_id, review_id, content_id, attempt, provider, model, api, input_sha, request_sha, evidence_set, rules_ver, calib_ver, evidence_ver, status,
          shuffle_seed, confirms_call_id, mass_covered, latency_ms, input_tokens, output_tokens, cost_micro, cost_status, prices_ver, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    ).run(c.judgeCallId, c.reviewId, c.contentId, c.attempt, c.provider, c.model, c.api, c.inputSha, JSON.stringify([...c.evidenceSet].sort()), c.pins.rulesVer, c.pins.calibVer, c.pins.evidenceVer,
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run(c.judgeCallId, c.reviewId, c.contentId, c.attempt, c.provider, c.model, c.api, c.inputSha, c.requestSha ?? null, JSON.stringify([...c.evidenceSet].sort()), c.pins.rulesVer, c.pins.calibVer, c.pins.evidenceVer,
       c.status, c.shuffleSeed ?? null, c.confirmsCallId ?? null, c.massCovered ?? null, c.latencyMs ?? null, c.inputTokens ?? null, c.outputTokens ?? null, c.costMicro ?? null, c.costStatus, c.pins.pricesVer, at);
     const ins = db.prepare("INSERT OR IGNORE INTO judge_answer(judge_call_id, question_sha, rule_id, question_kind, choice, raw_probs, calibrated_probs, temperature) VALUES (?,?,?,?,?,?,?,?)");
     for (const a of c.answers) ins.run(c.judgeCallId, a.questionSha, a.ruleId, a.kind, a.choice, JSON.stringify(a.rawProbs), a.calibratedProbs ? JSON.stringify(a.calibratedProbs) : null, a.temperature ?? null);

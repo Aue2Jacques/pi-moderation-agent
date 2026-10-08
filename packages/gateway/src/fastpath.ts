@@ -54,12 +54,14 @@ export async function runFastpath(deps: FastpathDeps, contentId: string): Promis
   // one judge call: every applicable rule question + its exceptions
   const rules = core.rulesFor(deps.bundle, scene);
   const questions = rules.flatMap((r) => [r.question, ...r.exceptions.map((x) => x.question)]);
-  const res = await deps.judge.classify({ contentId, text: content.text, scene, evidence: [], questions });
+  const request = { contentId, text: content.text, scene, evidence: [], questions };
+  const requestSha = core.requestDigest(deps.judge, request);
+  const res = await deps.judge.classify(request);
   const inputSha = core.inputFingerprint(content.text_sha, scene, [], deps.pins.evidenceVer);
   const judgeCallIds: string[] = [];
   const record = (id: string, answers: Record<string, { choice: string; probs: Record<string, number> }>, confirms?: { id: string; seed: number }) => {
     core.recordJudgeCall(deps.db, {
-      judgeCallId: id, reviewId: null, contentId, attempt: null, provider: deps.judge.provider, model: res.model, api: deps.judge.api, inputSha, evidenceSet: [], pins: deps.pins,
+      judgeCallId: id, reviewId: null, contentId, attempt: null, provider: deps.judge.provider, model: res.model, api: deps.judge.api, inputSha, requestSha, evidenceSet: [], pins: deps.pins,
       status: res.status, ...(confirms ? { confirmsCallId: confirms.id, shuffleSeed: confirms.seed } : {}), latencyMs: res.latencyMs,
       ...(res.status === "ok" && !confirms ? { inputTokens: res.usage.input, outputTokens: res.usage.output, costMicro: core.microOfUsage(deps.prices, `${deps.judge.provider}/${res.model}`, res.usage) } : { inputTokens: 0, outputTokens: 0, costMicro: 0 }),
       costStatus: res.status === "ok" ? "settled" : "unknown",

@@ -46,6 +46,8 @@ function migrate(db: Db): void {
     // R2: before this column, only generation 1 could ever bind a submission (the bind required submission_id IS NULL)
     db.exec("ALTER TABLE review ADD COLUMN submission_attempt INTEGER; UPDATE review SET submission_attempt=1 WHERE submission_id IS NOT NULL;");
   }
+  const jc = new Set((db.prepare("PRAGMA table_info(judge_call)").all() as { name: string }[]).map((c) => c.name));
+  if (!jc.has("request_sha")) db.exec("ALTER TABLE judge_call ADD COLUMN request_sha TEXT");   // R9a; old rows stay NULL
   const content = new Set((db.prepare("PRAGMA table_info(content)").all() as { name: string }[]).map((c) => c.name));
   if (!content.has("reply_to")) db.exec("ALTER TABLE content ADD COLUMN reply_to TEXT; ALTER TABLE content ADD COLUMN mentions TEXT;");   // R8b
   db.exec("CREATE INDEX IF NOT EXISTS content_reply ON content(reply_to, event_time)");

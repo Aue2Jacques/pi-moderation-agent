@@ -47,7 +47,7 @@ export type ContentRow = {
 export type JudgeCallRow = {
   judge_call_id: string; review_id: string | null; content_id: string; attempt: number | null;
   provider: string; model: string; api: string;
-  input_sha: string; evidence_set: string;
+  input_sha: string; request_sha: string | null; evidence_set: string;
   rules_ver: string; calib_ver: string; evidence_ver: string;
   status: "ok" | "timeout" | "error" | "abstain";
   shuffle_seed: number | null; confirms_call_id: string | null; mass_covered: number | null;
