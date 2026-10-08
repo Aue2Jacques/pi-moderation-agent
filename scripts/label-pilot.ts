@@ -4,6 +4,8 @@
 //                                                under another prompt version is never reused (identity = prompt sha)
 //   score <standard> <ids.txt>                  per group: two-model agreement on the 3-way label and on violate vs
 //                                                not, uncertain share, per-question agreement
+//   compare <stdA> <stdB> <ids.txt>             on items both models answered under both versions: violate-vs-not
+//                                                agreement and which model alone said violate, by group
 //   sample <group> <n> <out.txt> [exclude.txt…]  fresh dev-split ids of one group, none from the exclude files, by a
 //                                                fixed hash order (no text read) — a holdout for a reworded standard
 // Labeling models: deepseek-v4.1-flash and qwen3.8-flash (owner decision); deepseek's channel does not take a
@@ -18,6 +20,41 @@ for (const line of (() => { try { return readFileSync(".env", "utf8").split("\n"
 }
 const env = (k: string, d?: string): string => { const v = process.env[k] ?? d; if (v === undefined) throw new Error(`missing ${k}`); return v; };
 const [phase, stdId, idsPath, conc] = process.argv.slice(2);
+if (phase === "compare") {
+  const [, aId, bId, idsFile] = process.argv.slice(2);
+  const sa = STANDARDS[aId ?? ""], sb = STANDARDS[bId ?? ""];
+  if (!sa || !sb || !idsFile) throw new Error("usage: label-pilot.ts compare <stdA> <stdB> <ids.txt>");
+  const M = ["deepseek-v4.1-flash", "qwen3.8-flash"];
+  const load = (st: typeof sa) => {
+    const by = new Map<string, Record<string, { label: string }>>();
+    const f = `data/eval/label-pilot-${st.id}.jsonl`;
+    for (const l of (existsSync(f) ? readFileSync(f, "utf8") : "").split("\n").filter(Boolean)) {
+      const r = JSON.parse(l) as { id: string; model: string; ok: boolean; promptSha: string; label: string };
+      if (r.ok && r.promptSha === st.promptSha) (by.get(r.id) ?? by.set(r.id, {}).get(r.id)!)[r.model] = r;
+    }
+    return by;
+  };
+  const A = load(sa), B = load(sb);
+  const want = new Set(readFileSync(idsFile, "utf8").split("\n").filter(Boolean));
+  const out = new Map<string, Record<string, number>>();
+  for (const l of readFileSync("data/eval/eval20k.jsonl", "utf8").split("\n").filter(Boolean)) {
+    const it = JSON.parse(l) as { id: string; group: string };
+    if (!want.has(it.id)) continue;
+    const a = A.get(it.id), b = B.get(it.id);
+    if (!a || !b || !M.every((m) => a[m] && b[m])) continue;
+    for (const g of [it.group, "ALL"]) {
+      const c = out.get(g) ?? out.set(g, { n: 0 }).get(g)!;
+      c.n!++;
+      for (const [v, z] of [[sa.id, a], [sb.id, b]] as const) {
+        const dv = z[M[0]!]!.label === "violate", qv = z[M[1]!]!.label === "violate";
+        const k = `${v} ${dv === qv ? "agree" : dv ? "ds-only-violate" : "qw-only-violate"}`;
+        c[k] = (c[k] ?? 0) + 1;
+      }
+    }
+  }
+  for (const [g, c] of [...out].sort()) console.log(g.padEnd(14), JSON.stringify(c));
+  process.exit(0);
+}
 if (phase === "sample") {
   const [, group, n, out, ...excl] = process.argv.slice(2);
   const skip = new Set(excl.flatMap((f) => readFileSync(f, "utf8").split("\n").filter(Boolean)));
