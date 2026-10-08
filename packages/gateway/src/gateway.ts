@@ -2,19 +2,21 @@
 import * as core from "@mod/core";
 import type { Db, PolicyBundle, PriceTable, ReviewRow } from "@mod/core";
 import { crashAt, type JudgeClient } from "@mod/worker";
-import { runFastpath, type FastpathOutcome } from "./fastpath.ts";
+import { runFastpath, toHuman, type FastpathOutcome } from "./fastpath.ts";
 import { Blacklist, RateLimit, SimhashIndex } from "./preprocess.ts";
 
 export type GatewayConfig = {
   scanMs: number; intakeBatch: number; intakeConcurrency: number;
   queueAgentMax: number; queueHumanMax: number; outstandingMax: number;
   maxAttempts: number; budgetTools: number; budgetMicro: number;
+  /** fast-path tries per intake item before it goes to a human as fastpath_error (dev plan R4) */
+  intakeMaxAttempts: number;
   blacklist: string[]; rateMaxPerMinute: number;
 };
 
 export const DEFAULT_GATEWAY_CONFIG: GatewayConfig = {
   scanMs: 2000, intakeBatch: 16, intakeConcurrency: 8, queueAgentMax: 50, queueHumanMax: 500, outstandingMax: 2000,
-  maxAttempts: 3, budgetTools: 12, budgetMicro: 50_000, blacklist: [], rateMaxPerMinute: 30,
+  maxAttempts: 3, intakeMaxAttempts: 3, budgetTools: 12, budgetMicro: 50_000, blacklist: [], rateMaxPerMinute: 30,
 };
 
 export type GatewayDeps = { db: Db; bundle: PolicyBundle; ruleTexts?: Record<string, string>; judge: JudgeClient; prices: PriceTable; calibrator: core.Calibrator; evidenceVer: string; judgeModel: string; cfg: GatewayConfig; now: () => number; gatewayId: string };
@@ -23,7 +25,7 @@ export type GatewayDeps = { db: Db; bundle: PolicyBundle; ruleTexts?: Record<str
  * Metric definitions (round-9 item 8). Window = last 300 s unless stated.
  * - pass_pct / block_pct / suspicious_pct: share of fast-path outcomes in the last 60 s (G side only; suspicious = handed to the agent).
  * - release_pct: share of ALL content judged in the window whose review ended in human hands, from either process:
- *   G direct releases (judge_down / backpressure / preprocess_error / image_unsupported) and W releases (evidence_gap / timeout / budget_* / model_release / revoked).
+ *   G direct releases (judge_down / backpressure / preprocess_error / image_unsupported / fastpath_error) and W releases (evidence_gap / timeout / budget_* / model_release / revoked).
  *   release_by_reason breaks that down; release_fast_pct and release_agent_pct split by source.
  * - cost_micro_per_1k: total cost of the content stream in the window (fast-path judge calls + every review's used_micro) ÷ content judged in the window × 1000.
  *   Reviews whose cost is still 'estimated' are included and counted in cost_estimated_reviews.
@@ -84,14 +86,26 @@ export class Gateway {
       await Promise.all(Array.from({ length: Math.min(this.d.cfg.intakeConcurrency, rows.length) }, async () => {
         while (next < rows.length) {
           const id = rows[next++]!;
+          const deps = { db, bundle: this.d.bundle, judge: this.d.judge, prices: this.d.prices, pins: this.pins, judgeModel: this.d.judgeModel, calibrator: this.d.calibrator, blacklist: this.blacklist, index: this.index, rate: this.rate,
+            backpressure: () => this.backpressure(), budgetTools: this.d.cfg.budgetTools, budgetMicro: this.d.cfg.budgetMicro, now: this.d.now };
           try {
-            const o = await runFastpath({ db, bundle: this.d.bundle, judge: this.d.judge, prices: this.d.prices, pins: this.pins, judgeModel: this.d.judgeModel, calibrator: this.d.calibrator, blacklist: this.blacklist, index: this.index, rate: this.rate,
-              backpressure: () => this.backpressure(), budgetTools: this.d.cfg.budgetTools, budgetMicro: this.d.cfg.budgetMicro, now: this.d.now }, id);
+            const o = await runFastpath(deps, id);
             out.push(o);
             this.recent.push({ at: this.d.now(), decision: o.decision, latencyMs: o.latencyMs });
           } catch (e) {
             console.error("fastpath failed", id, core.redact(e));
             core.tx(db, () => db.prepare("UPDATE intake SET lease_owner=NULL, lease_until=NULL, updated_at=? WHERE content_id=? AND status<>'judged'").run(this.d.now(), id));
+            // dev plan R4: a failure that repeats (e.g. a ruling the submit check always rejects) must not loop forever,
+            // calling the judge on every pass; after intakeMaxAttempts the item goes to a human with the reason.
+            const tries = (db.prepare("SELECT attempts FROM intake WHERE content_id=? AND status<>'judged'").get(id) as { attempts: number } | undefined)?.attempts;
+            if (tries !== undefined && tries >= this.d.cfg.intakeMaxAttempts) {
+              try {
+                const r = toHuman(deps, id, "fastpath_error");
+                out.push({ contentId: id, decision: "fastpath_error", reviewId: r.review_id, latencyMs: 0, judgeStatus: "n/a", blacklistHits: 0, nearDup: 0 });
+              } catch (e2) {
+                console.error("fastpath give-up failed", id, core.redact(e2));
+              }
+            }
           }
         }
       }));
@@ -134,7 +148,7 @@ export class Gateway {
     // releases from both processes, by reason, over reviews that entered human hands in the window
     const byReason: Record<string, number> = {};
     for (const r of db.prepare("SELECT release_reason AS reason, COUNT(*) AS n FROM review WHERE release_reason IS NOT NULL AND state IN ('human_queue','human_disposed') AND updated_at > ? GROUP BY release_reason").all(now - W) as { reason: string; n: number }[]) byReason[r.reason] = r.n;
-    const fastReasons = new Set(["judge_down", "backpressure", "preprocess_error", "image_unsupported"]);
+    const fastReasons = new Set(["judge_down", "backpressure", "preprocess_error", "image_unsupported", "fastpath_error"]);
     const relFast = Object.entries(byReason).filter(([k]) => fastReasons.has(k)).reduce((a, [, n]) => a + n, 0);
     const relAgent = Object.entries(byReason).filter(([k]) => !fastReasons.has(k)).reduce((a, [, n]) => a + n, 0);
     const share = (n: number): number => (judged ? Math.round((100 * n) / judged) : 0);

@@ -13,6 +13,7 @@ const withVariant = (answers: ReturnType<typeof uniform>): JudgeResponse => ({ s
 const byText = (req: JudgeRequest): JudgeResponse => {
   const t = req.text ?? "";
   if (t.includes("TIMEOUT")) return { status: "timeout", model: "jev-recorded", latencyMs: 20_000 };
+  if (t.includes("BOTH")) return withVariant({ ...uniform(req.questions.filter((q) => q.kind === "rule"), 0.99), ...uniform(req.questions.filter((q) => q.kind !== "rule"), 0.01) });
   if (t.includes("ABUSE")) return withVariant({ ...uniform(req.questions.filter((q) => q.kind === "rule" && q.ruleId === "ABUSE-001"), 0.99), ...uniform(req.questions.filter((q) => q.kind !== "rule" || q.ruleId !== "ABUSE-001"), 0.01) });
   if (t.includes("MAYBE")) return withVariant({ ...uniform(req.questions.filter((q) => q.kind === "rule" && q.ruleId === "ABUSE-001"), 0.5), ...uniform(req.questions.filter((q) => q.kind !== "rule" || q.ruleId !== "ABUSE-001"), 0.01) });
   return withVariant(uniform(req.questions, 0.01));
@@ -157,3 +158,34 @@ describe("HTTP", () => {
     }
   });
 });
+
+describe("R4 multi-rule block and bounded fast-path retries (dev plan 2026-10-08)", () => {
+  // one judge request records the primary answer and its in-call confirm copy; count requests by their primary rows
+  const judgeCalls = (db: core.Db, cid: string): number => (db.prepare("SELECT COUNT(*) AS n FROM judge_call WHERE content_id=? AND confirms_call_id IS NULL").get(cid) as { n: number }).n;
+
+  it("abuse and marketing both block: one ruling on the first pass — heaviest action, citing only the rules that allow it", async () => {
+    const db = freshDb();
+    seedContent(db, "both1", "comment", { text: "BOTH text" });
+    const g = makeGateway(db);
+    const [o] = await g.processIntakeOnce();
+    expect(o).toMatchObject({ contentId: "both1", decision: "block" });
+    const rul = core.readRuling(db, o!.reviewId)!;
+    expect(rul.action).toBe("takedown");
+    expect(JSON.parse(rul.rule_ids)).toEqual(["ABUSE-001"]);                    // MARKETING-003 allows only limit
+    expect(rul.reason).toContain("MARKETING-003");                             // the other hit is kept in the reason
+    expect(judgeCalls(db, "both1")).toBe(1);
+  });
+
+  it("a failure that repeats on every pass goes to a human after intakeMaxAttempts; judge calls stay bounded", async () => {
+    const db = freshDb();
+    seedContent(db, "stuck1", "comment", { text: "ABUSE text" });
+    // the scene forbids takedown, so every ruling the fast path builds fails the submit check
+    const bundle = { ...BUNDLE, scenes: { ...BUNDLE.scenes, comment: { ...BUNDLE.scenes.comment, allowedActions: ["pass", "limit"] as const } } } as core.PolicyBundle;
+    const g = makeGateway(db, { intakeMaxAttempts: 3 }, () => Date.now(), bundle);
+    const status = () => (db.prepare("SELECT status FROM intake WHERE content_id='stuck1'").get() as { status: string }).status;
+    for (let pass = 0; pass < 10 && status() !== "judged"; pass++) await g.processIntakeOnce();
+    expect(state(db, "stuck1")).toMatchObject({ state: "human_queue", release_reason: "fastpath_error" });
+    expect(judgeCalls(db, "stuck1")).toBeLessThanOrEqual(3);
+  });
+});
+

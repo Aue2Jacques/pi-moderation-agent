@@ -15,7 +15,16 @@ export type FastpathDeps = {
   now: () => number;
 };
 
-export type FastpathOutcome = { contentId: string; decision: Decision["state"] | "judge_down" | "backpressure" | "preprocess_error" | "image_unsupported"; reviewId: string; latencyMs: number; judgeStatus: string; blacklistHits: number; nearDup: number };
+export type FastpathOutcome = { contentId: string; decision: Decision["state"] | "judge_down" | "backpressure" | "preprocess_error" | "image_unsupported" | "fastpath_error"; reviewId: string; latencyMs: number; judgeStatus: string; blacklistHits: number; nearDup: number };
+
+/** Route an item straight to the human queue with a reason (G direct release), recording the judge calls made so far. */
+export function toHuman(deps: FastpathDeps, contentId: string, reason: core.ReleaseReason, judgeCallIds: string[] = []): core.ReviewRow {
+  const sceneCfg = deps.bundle.scenes[core.readContent(deps.db, contentId)!.scene as Scene];
+  return core.createSuspiciousReview(deps.db, {
+    contentId, pins: deps.pins, judgeModel: deps.judgeModel, judgeCallIds, pendingVisibility: sceneCfg.pendingVisibility, deadlineMs: sceneCfg.deadlineMs,
+    budgetTools: deps.budgetTools, budgetMicro: deps.budgetMicro, direct: { reason, severity: sceneCfg.defaultSeverity, humanSlaMs: sceneCfg.humanSlaMs },
+  }, deps.now()).review;
+}
 
 export async function runFastpath(deps: FastpathDeps, contentId: string): Promise<FastpathOutcome> {
   const t0 = deps.now();
@@ -23,10 +32,7 @@ export async function runFastpath(deps: FastpathDeps, contentId: string): Promis
   if (!content) throw new core.CoreError("E_REVIEW_NOT_FOUND", contentId);
   const scene = content.scene as Scene;
   const sceneCfg = deps.bundle.scenes[scene];
-  const direct = (reason: core.ReleaseReason, judgeCallIds: string[] = []) => core.createSuspiciousReview(deps.db, {
-    contentId, pins: deps.pins, judgeModel: deps.judgeModel, judgeCallIds, pendingVisibility: sceneCfg.pendingVisibility, deadlineMs: sceneCfg.deadlineMs,
-    budgetTools: deps.budgetTools, budgetMicro: deps.budgetMicro, direct: { reason, severity: sceneCfg.defaultSeverity, humanSlaMs: sceneCfg.humanSlaMs },
-  }, deps.now()).review;
+  const direct = (reason: core.ReleaseReason, judgeCallIds: string[] = []) => toHuman(deps, contentId, reason, judgeCallIds);
 
   // preprocessing
   let pre: ReturnType<typeof preprocess>;

@@ -178,7 +178,7 @@ CREATE TABLE review (
   conversation_id  TEXT,
   submission_id    TEXT,                  -- durable submission id，对账用（§11.5）；缺失时按 §7.3 步 8 幂等补齐
   submission_attempt INTEGER,             -- submission_id 属于哪一代次（dev plan 2026-10-08 R2）；步 8 只认当前代次
-  release_reason   TEXT,                  -- timeout | budget_tools | budget_cost | evidence_gap | judge_down | model_release | backpressure | revoked | preprocess_error
+  release_reason   TEXT,                  -- timeout | budget_tools | budget_cost | evidence_gap | judge_down | model_release | backpressure | revoked | preprocess_error；fastpath_error（2026-10-08 R4：快判连续失败达 intakeMaxAttempts 次）
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
   UNIQUE(content_id, seq),
   UNIQUE(content_id, trigger_request_id),
@@ -384,6 +384,7 @@ CREATE TABLE metrics_minute (minute INTEGER PRIMARY KEY, payload TEXT NOT NULL);
 - `judge_call`（调用级）与 `judge_answer`（问题级）分开：一次调用可含多条规则问题、例外问题与内置问题。
 - `audit` 哈希链：`hash = sha256(prev_hash + kind + ref_id + actor + payload + created_at)`；拒绝审计在业务事务回滚之后单独提交（§5.3）。
 - 没有 `failed` 状态：预处理失败走 S2'（reason=preprocess_error）；release 写入失败由控制循环重试到成功。
+- **2026-10-08 修订（R4）**：快判（判官、策略、提交）抛错时，接入记录清租约后重试；同一条累计尝试达到 `GatewayConfig.intakeMaxAttempts`（默认 3）就以 `fastpath_error` 直接转人工，判官调用次数因此有上限。多条规则同时达到拦截时，动作取最重，裁决只引用允许该动作的规则，其余命中写进理由（`also_hit:`），不再因引用了不支持该动作的规则而每轮被提交检查拒绝。
 
 ### 2.3 ID 规则
 

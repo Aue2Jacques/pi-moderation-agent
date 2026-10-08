@@ -9,6 +9,7 @@ export type Visibility = "visible" | "self_only" | "hidden";
 export type ReleaseReason =
   | "timeout" | "budget_tools" | "budget_cost" | "evidence_gap" | "judge_down"
   | "model_release" | "backpressure" | "revoked" | "preprocess_error"
+  | "fastpath_error"   // the fast path kept failing for one item (dev plan R4): after GatewayConfig.intakeMaxAttempts tries it goes to a human
   | "image_unsupported"   // content carries images and no image channel to the judge exists (text MVP): never auto-disposed
   | "bundle_missing";     // the policy bundle version pinned on the review is not available to this worker
 
