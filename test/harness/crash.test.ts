@@ -61,11 +61,14 @@ describe("crash matrix (child process, SIGKILL)", () => {
     expect(crashed.signal).toBe("SIGKILL");
     expect(core.readRuling(db, reviewId)).toBeUndefined();
     expect(core.requireReview(db, reviewId).state).toBe("investigating");
+    const deadLeaseUntil = core.requireReview(db, reviewId).lease_until!;
     const rec = run({ ...env, WORKER_ID: "w2" });
     expect(rec.status).toBe(0);
     const started = rec.milestones.find((m) => m.milestone === "started")!;
     expect(started["active"]).toEqual([reviewId]);
-    expect(started["waitedMs"] as number).toBeGreaterThan(0);          // H-20: waited for the dead instance's lease
+    // H-20: the recovery did not take over before the dead instance's lease ran out. (It used to assert waitedMs > 0,
+    // which fails when the recovery process itself starts after the lease expired — seen under CPU load.)
+    expect((started["startAt"] as number) + (started["waitedMs"] as number)).toBeGreaterThanOrEqual(deadLeaseUntil - 50);
     expect(started["callsBeforeResume"]).toBe(0);                        // H-27: nothing external before resume
     expect(last(rec.milestones)).toMatchObject({ milestone: "done", state: "disposed", ruling: "pass" });
     const rul = core.readRuling(db, reviewId)!;

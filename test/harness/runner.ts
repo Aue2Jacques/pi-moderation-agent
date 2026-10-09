@@ -20,8 +20,12 @@ const reviewId = env("REVIEW_ID");
 const fx = await makeWorker({ db, storage, steps: [], workerId: env("WORKER_ID"), cfg, admitMax: 1 });
 setScript(fx, resolving(db, () => reviewId, PASS_SCRIPT));
 const t0 = Date.now();
+// heartbeat like a real W (scripts/start.sh -> worker.startLoops): without it a generation that outlasts the short test
+// lease under CPU load lost its lease mid-run and the run ended differently (flaky baseline / H-02 under load)
+const hb = setInterval(() => { fx.worker.heartbeat().catch(() => {}); }, Math.max(200, Math.floor(cfg.leaseTtlMs / 3)));
+hb.unref();
 const started = await fx.worker.start();
-log({ milestone: "started", ...started, resumedAt: fx.worker.resumedAt, callsBeforeResume: fx.calls.filter((c) => c.at < (fx.worker.resumedAt ?? 0)).length, elapsedMs: Date.now() - t0 });
+log({ milestone: "started", ...started, startAt: t0, resumedAt: fx.worker.resumedAt, callsBeforeResume: fx.calls.filter((c) => c.at < (fx.worker.resumedAt ?? 0)).length, elapsedMs: Date.now() - t0 });
 const admitted = await fx.worker.admitOnce();
 log({ milestone: "admitted", admitted });
 if (env("SCENARIO", "") === "abort-then-readmit") {
@@ -37,5 +41,6 @@ await fx.worker.pumpHost();
 await fx.worker.waitIdle();
 const r = core.readReview(db, reviewId);
 log({ milestone: "done", state: r?.state, ruling: core.readRuling(db, reviewId)?.action ?? null, calls: fx.calls.map((c) => c.kind), sessions: await fx.worker.sessions(), grants: fx.worker.grants.count() });
+clearInterval(hb);
 await fx.close();
 process.exit(0);

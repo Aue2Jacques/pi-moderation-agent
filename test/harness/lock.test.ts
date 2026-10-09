@@ -16,18 +16,30 @@ const args = (path: string) => ["--experimental-strip-types", "--no-warnings", c
 
 // Start n contenders at once; each that acquires keeps holding. Count holders only after every contender has
 // answered, then kill them all — so a lock released by an early exit can never be counted as a second holder.
-function race(path: string, n: number): Promise<number> {
+// A contender that exits without answering (crash, spawn failure under load) is counted as failed and its stderr kept,
+// instead of leaving the holder alive for HOLD_MS and the round hanging until the test timeout (seen twice under load).
+type Race = { got: number; failed: number; errors: string[]; ms: number };
+function race(path: string, n: number): Promise<Race> {
+  const t0 = Date.now();
   return new Promise((done) => {
     const kids = Array.from({ length: n }, () => spawn(process.execPath, args(path), { env: { ...process.env, HOLD_MS: "60000" } }));
-    let got = 0, answered = 0, closed = 0;
+    let got = 0, answered = 0, failed = 0, closed = 0;
+    const errors: string[] = [];
+    const settle = () => { if (answered + failed === n) for (const q of kids) q.kill("SIGKILL"); };
     for (const p of kids) {
-      let out = "";
-      p.on("close", () => { if (++closed === n) done(got); });   // listen from the start: BUSY contenders exit at once
+      let out = "", err = "", seen = false;
+      p.stderr.on("data", (b) => { err += String(b); });
+      p.on("close", (code, sig) => {
+        if (!seen) { failed++; errors.push(`exit ${code ?? sig}: ${err.slice(0, 200)}`); settle(); }
+        if (++closed === n) done({ got, failed, errors, ms: Date.now() - t0 });
+      });
       p.stdout.on("data", (b) => {
         out += String(b);
-        if (!out.includes("\n")) return;
+        if (seen || !out.includes("\n")) return;
+        seen = true;
         if (out.startsWith("GOT")) got++;
-        if (++answered === n) for (const q of kids) q.kill("SIGKILL");
+        answered++;
+        settle();
       });
     }
   });
@@ -47,7 +59,11 @@ describe("R1 single-instance lock", () => {
     // one path for all rounds: from round 2 on, contenders race over the leftover file of the previous round's holder
     // (the situation that tripped the pid-file lock)
     const path = join(mkdtempSync(join(tmpdir(), "lock-")), "w.lock.db");
-    for (let round = 0; round < 12; round++) expect(await race(path, 24)).toBe(1);
+    for (let round = 0; round < 12; round++) {
+      const r = await race(path, 24);
+      expect(r.errors, `round ${round}`).toEqual([]);
+      expect(r.got, `round ${round} (${r.ms} ms)`).toBe(1);
+    }
   }, 120_000);
 
   it("a holder killed with SIGKILL releases the lock", async () => {
