@@ -1,11 +1,51 @@
 // G's HTTP (docs §6.1): health, metrics (JSON + SSE), reviews (redacted), restricted view (auth + audit), human queue, appeals, replay control, static pages.
+// Console API (2026-10-09): content intake, per-content timeline (JSON + SSE), review / human-queue / appeal lists,
+// stats, rules view, config; the built web console (packages/console/dist) is served at / when present.
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { extname, join, normalize, sep } from "node:path";
 import * as core from "@mod/core";
 import type { Db, PolicyBundle } from "@mod/core";
 import type { Gateway } from "./gateway.ts";
 import { DASHBOARD_HTML, HUMAN_HTML } from "./pages.ts";
+import { buildTimeline, humanQueue, listAppeals, listReviews, rulesInfo, stats, type CalibFileInfo } from "./console-api.ts";
+import type { ConsoleConfig, DemoSampleInfo } from "./console-types.ts";
 
-export type HttpDeps = { db: Db; gateway: Gateway; bundle: PolicyBundle; humanAuth: core.HumanAuth; now: () => number };
+/** What the console needs beyond the core HTTP deps. All optional: without it the API still works, with real-mode defaults. */
+export type ConsoleDeps = {
+  mode: "demo" | "real";
+  /** directory of the built console (index.html + assets/); absent or missing files: / serves the legacy dashboard */
+  dir?: string;
+  agentModel?: string | null;
+  samples?: readonly DemoSampleInfo[];
+  calibFiles?: readonly CalibFileInfo[];
+  /** how often a timeline stream re-reads app.db (ms) */
+  streamPollMs?: number;
+};
+
+export type HttpDeps = { db: Db; gateway: Gateway; bundle: PolicyBundle; humanAuth: core.HumanAuth; now: () => number; console?: ConsoleDeps };
+
+/** Scenes the text intake accepts: every configured scene except the image-only one. */
+const textScenes = (b: PolicyBundle): string[] => Object.keys(b.scenes).filter((s) => s !== "image");
+const ID_RE = /^[A-Za-z0-9._:-]{1,64}$/;
+const MAX_TEXT = 2000;
+
+const MIME: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".json": "application/json", ".woff2": "font/woff2" };
+
+/** Serve a file of the built console; false when it does not exist (path traversal is refused the same way). */
+function serveStatic(res: ServerResponse, dir: string, urlPath: string): boolean {
+  const rel = normalize(decodeURIComponent(urlPath)).replace(/^([/\\])+/, "");
+  const full = join(dir, rel || "index.html");
+  if (!full.startsWith(dir.endsWith(sep) ? dir : dir + sep)) return false;
+  try {
+    if (!existsSync(full) || !statSync(full).isFile()) return false;
+    res.writeHead(200, { "content-type": MIME[extname(full)] ?? "application/octet-stream", "cache-control": rel.startsWith("assets/") ? "public, max-age=31536000, immutable" : "no-cache" });
+    res.end(readFileSync(full));
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const json = (res: ServerResponse, status: number, body: unknown): void => {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
@@ -15,11 +55,16 @@ const html = (res: ServerResponse, body: string): void => {
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   res.end(body);
 };
+class BadRequest extends Error {}
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);
   const raw = Buffer.concat(chunks).toString("utf8");
-  return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+  if (!raw) return {};
+  let v: unknown;
+  try { v = JSON.parse(raw); } catch { throw new BadRequest("body is not JSON"); }
+  if (!v || typeof v !== "object" || Array.isArray(v)) throw new BadRequest("body must be a JSON object");
+  return v as Record<string, unknown>;
 }
 
 const REVIEW_PUBLIC = ["review_id", "content_id", "seq", "trigger", "state", "attempt", "lease_owner", "lease_until", "deadline_at", "snapshot_seq", "budget_tools", "budget_micro", "used_micro", "cost_status", "over_budget_micro", "rules_ver", "calib_ver", "judge_model", "agent_model", "release_reason", "created_at", "updated_at"] as const;
@@ -43,12 +88,26 @@ export function createHttpServer(d: HttpDeps): Server {
   // the copy stored when that version was in use. undefined: that version was never stored here.
   const bundleOf = (r: core.ReviewRow): core.PolicyBundle | undefined =>
     r.rules_ver === d.bundle.rulesVer ? d.bundle : (core.loadStoredBundle(db, r.rules_ver)?.bundle as core.PolicyBundle | undefined);
+  const stored = new Map<string, PolicyBundle>();
+  const bundleByVer = (v: string): PolicyBundle | undefined => {
+    if (v === d.bundle.rulesVer) return d.bundle;
+    if (gateway.d.candidate && v === gateway.d.candidate.bundle.rulesVer) return gateway.d.candidate.bundle;
+    let b = stored.get(v);
+    if (!b) { b = core.loadStoredBundle(db, v)?.bundle as PolicyBundle | undefined; if (b) stored.set(v, b); }
+    return b;
+  };
+  const cons: ConsoleDeps = d.console ?? { mode: "real" };
+  const consoleDir = cons.dir && existsSync(join(cons.dir, "index.html")) ? cons.dir : undefined;
+  const bad = (res: ServerResponse, message: string, code = "E_BAD_REQUEST"): void => json(res, 400, { code, message });
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
       const path = url.pathname;
       const m = (re: RegExp): RegExpExecArray | null => re.exec(path);
-      if (req.method === "GET" && path === "/") return html(res, DASHBOARD_HTML);
+      let mm0: RegExpExecArray | null;
+      if (req.method === "GET" && path === "/") return consoleDir && serveStatic(res, consoleDir, "index.html") ? undefined : html(res, DASHBOARD_HTML);
+      if (req.method === "GET" && path === "/legacy") return html(res, DASHBOARD_HTML);
+      if (req.method === "GET" && consoleDir && (path.startsWith("/assets/") || path === "/favicon.svg") && serveStatic(res, consoleDir, path)) return;
       if (req.method === "GET" && path === "/human") return html(res, HUMAN_HTML);
       if (req.method === "GET" && path === "/api/health") return json(res, 200, { ok: true, version: "0.0.0", queues: core.control.backpressure(db), replay_paused: gateway.replayPaused, rules_ver: gateway.d.bundle.rulesVer, calib_ver: gateway.d.calibrator.calibVer, calib_mode: gateway.d.calibrator.mode, completion: core.reconcile.completion(db) });
       if (req.method === "GET" && path === "/api/metrics") {
@@ -67,6 +126,100 @@ export function createHttpServer(d: HttpDeps): Server {
         const limit = Math.min(500, Number(url.searchParams.get("limit") ?? 100));
         const rows = (state ? db.prepare("SELECT * FROM review WHERE state=? ORDER BY created_at DESC LIMIT ?").all(state, limit) : db.prepare("SELECT * FROM review ORDER BY created_at DESC LIMIT ?").all(limit)) as core.ReviewRow[];
         return json(res, 200, rows.map((r) => pick(r, REVIEW_PUBLIC)));
+      }
+      // ---- console API ----
+      if (req.method === "GET" && path === "/api/config") {
+        const cfg: ConsoleConfig = {
+          mode: cons.mode, rules_ver: d.bundle.rulesVer, calib_ver: gateway.d.calibrator.calibVer, calib_mode: gateway.d.calibrator.mode, prices_ver: gateway.d.prices.pricesVer,
+          judge_model: gateway.d.judgeModel, agent_model: cons.agentModel ?? null,
+          scenes: textScenes(d.bundle).map((k) => ({ scene: k, allowed_actions: [...d.bundle.scenes[k as core.Scene].allowedActions] })),
+          reviewers: [...d.humanAuth.reviewers],
+          demo_auth: cons.mode === "demo" ? { reviewer: d.humanAuth.reviewers[0] ?? "rev1", token: d.humanAuth.token } : null,
+          samples: [...(cons.samples ?? [])],
+        };
+        return json(res, 200, cfg);
+      }
+      if (req.method === "GET" && path === "/api/review-list") {
+        const g = (k: string): string | undefined => url.searchParams.get(k) || undefined;
+        const limit = Math.max(1, Math.min(200, Number(g("limit") ?? 50) || 50));
+        const offset = Math.max(0, Number(g("offset") ?? 0) || 0);
+        return json(res, 200, listReviews(db, { ...(g("state") ? { state: g("state")! } : {}), ...(g("trigger") ? { trigger: g("trigger")! } : {}), ...(g("route") ? { route: g("route")! } : {}),
+          ...(g("scene") ? { scene: g("scene")! } : {}), ...(g("action") ? { action: g("action")! } : {}), ...(g("actor") ? { actor: g("actor")! } : {}), ...(g("q") ? { q: g("q")! } : {}), limit, offset }));
+      }
+      if (req.method === "GET" && path === "/api/stats") return json(res, 200, stats(db, d.now()));
+      if (req.method === "GET" && path === "/api/rules") {
+        return json(res, 200, rulesInfo(db, d.bundle, gateway.d.ruleTexts ?? {}, { calibVer: gateway.d.calibrator.calibVer, calibMode: gateway.d.calibrator.mode, calibFiles: [...(cons.calibFiles ?? [])], ...(gateway.d.candidate ? { candidate: gateway.d.candidate.bundle } : {}) }));
+      }
+      if (req.method === "GET" && path === "/api/human/queue") {
+        const st = url.searchParams.get("status") ?? "open";
+        if (st !== "open" && st !== "closed" && st !== "all") return bad(res, "status must be open|closed|all");
+        return json(res, 200, humanQueue(db, st));
+      }
+      if (req.method === "GET" && path === "/api/appeals") return json(res, 200, listAppeals(db));
+      if (req.method === "POST" && path === "/api/contents") {
+        const b = await readJson(req);
+        const text = typeof b["text"] === "string" ? b["text"].trim() : "";
+        const scene = String(b["scene"] ?? "");
+        if (!text) return bad(res, "text is required");
+        if (text.length > MAX_TEXT) return bad(res, `text longer than ${MAX_TEXT} characters`);
+        if (!textScenes(d.bundle).includes(scene)) return bad(res, `scene must be one of ${textScenes(d.bundle).join(", ")}`, "E_SCENE_INVALID");
+        const opt = (k: string): string | undefined => (typeof b[k] === "string" && (b[k] as string).trim() ? (b[k] as string).trim() : undefined);
+        for (const k of ["content_id", "account_id", "thread_id", "reply_to"]) if (opt(k) !== undefined && !ID_RE.test(opt(k)!)) return bad(res, `${k} must match ${ID_RE.source}`);
+        const parent = b["parent"] && typeof b["parent"] === "object" ? (b["parent"] as Record<string, unknown>) : undefined;
+        const parentText = parent && typeof parent["text"] === "string" ? parent["text"].trim() : "";
+        if (parent && (!parentText || parentText.length > MAX_TEXT)) return bad(res, "parent.text must be 1..2000 characters");
+        const parentAccount = parent && typeof parent["account_id"] === "string" && parent["account_id"] ? String(parent["account_id"]) : undefined;
+        if (parentAccount !== undefined && !ID_RE.test(parentAccount)) return bad(res, `parent.account_id must match ${ID_RE.source}`);
+        if (parent && opt("reply_to")) return bad(res, "give either parent or reply_to, not both");
+        const contentId = opt("content_id") ?? `c-${d.now().toString(36)}-${core.uuid().slice(0, 6)}`;
+        // idempotent by content id: the same text and scene again is a duplicate (200), anything else is a conflict
+        const existing = core.readContent(db, contentId);
+        if (existing) {
+          if (existing.scene === scene && existing.text_sha === core.sha256(text)) return json(res, 200, { content_id: contentId, duplicate: true });
+          return json(res, 409, { code: "E_REQUEST_CONFLICT", message: `content ${contentId} exists with a different payload` });
+        }
+        if (gateway.replayPaused) return json(res, 429, { code: "E_BACKPRESSURE", message: "intake paused by backpressure" });
+        const at = d.now();
+        const threadId = opt("thread_id") ?? (parent ? `t-${contentId}` : undefined);
+        let replyTo = opt("reply_to");
+        if (parent) {
+          // the parent existed before this content (context only: never judged itself; the agent's context tool reads it)
+          replyTo = `${contentId}.parent`;
+          core.contextInsert(db, { contentId: replyTo, scene: scene as core.Scene, text: parentText, ...(parentAccount ? { accountId: parentAccount } : {}), ...(threadId ? { threadId } : {}), eventTime: at - 60_000 }, at);
+        }
+        core.intakeInsert(db, { contentId, scene: scene as core.Scene, text, ...(opt("account_id") ? { accountId: opt("account_id")! } : {}), ...(threadId ? { threadId } : {}), ...(replyTo ? { replyTo } : {}), eventTime: at }, at);
+        return json(res, 201, { content_id: contentId, duplicate: false, timeline: `/api/contents/${encodeURIComponent(contentId)}`, stream: `/api/contents/${encodeURIComponent(contentId)}/stream` });
+      }
+      if (req.method === "GET" && (mm0 = m(/^\/api\/contents\/([^/]+)\/stream$/))) {
+        const id = decodeURIComponent(mm0[1]!);
+        if (!core.readContent(db, id)) return json(res, 404, { code: "E_CONTENT_NOT_FOUND" });
+        res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", connection: "keep-alive", "x-accel-buffering": "no" });
+        let last = "";
+        const push = (): void => {
+          try {
+            const t = buildTimeline(db, id, bundleByVer);
+            if (t && t.version !== last) { last = t.version; res.write(`event: timeline\nid: ${t.version}\ndata: ${JSON.stringify(t)}\n\n`); }
+          } catch (e) {
+            console.error("timeline stream", core.redact(e));
+          }
+        };
+        push();
+        const poll = setInterval(push, cons.streamPollMs ?? 250);
+        const beat = setInterval(() => res.write(": keep-alive\n\n"), 15_000);
+        req.on("close", () => { clearInterval(poll); clearInterval(beat); });
+        return;
+      }
+      if (req.method === "GET" && (mm0 = m(/^\/api\/contents\/([^/]+)$/))) {
+        const id = decodeURIComponent(mm0[1]!);
+        const wantRestricted = url.searchParams.get("view") === "restricted";
+        if (wantRestricted) {
+          const who = auth(d, req);
+          if (!who) return json(res, 401, { code: "E_HUMAN_AUTH" });
+          if (req.headers["x-confirm"] !== "yes") return json(res, 400, { code: "E_CONFIRM_REQUIRED" });
+          if (core.readContent(db, id)) core.tx(db, () => core.appendAudit(db, "restricted_view", id, who.reviewerId, { path, view: "timeline" }, d.now()));
+        }
+        const t = buildTimeline(db, id, bundleByVer, { restricted: wantRestricted });
+        return t ? json(res, 200, t) : json(res, 404, { code: "E_CONTENT_NOT_FOUND" });
       }
       let mm: RegExpExecArray | null;
       if (req.method === "GET" && (mm = m(/^\/api\/reviews\/([^/]+)\/restricted$/))) {
@@ -98,16 +251,36 @@ export function createHttpServer(d: HttpDeps): Server {
       if (req.method === "POST" && path === "/api/human/claim") {
         const who = auth(d, req);
         if (!who) return json(res, 401, { code: "E_HUMAN_AUTH" });
-        const row = core.tx(db, () => {
+        const b = await readJson(req);
+        // with review_id: claim that item (console); without: the next one by severity and due time (original behaviour)
+        const wanted = b["review_id"] === undefined ? undefined : String(b["review_id"]);
+        type Claim = { review_id: string } | { error: number; code: string; message: string } | undefined;
+        const row: Claim = core.tx(db, (): Claim => {
+          if (wanted !== undefined) {
+            const q = db.prepare("SELECT review_id, claimed_by, closed_at FROM human_queue WHERE review_id=?").get(wanted) as { review_id: string; claimed_by: string | null; closed_at: number | null } | undefined;
+            if (!q) return { error: 404, code: "E_REVIEW_NOT_FOUND", message: `no human task for ${wanted}` };
+            if (q.closed_at !== null) return { error: 409, code: "E_STATE_INVALID", message: "task already closed" };
+            if (q.claimed_by && q.claimed_by !== who.reviewerId) return { error: 409, code: "E_LEASE_HELD", message: `claimed by ${q.claimed_by}` };
+            db.prepare("UPDATE human_queue SET claimed_by=?, claimed_at=? WHERE review_id=?").run(who.reviewerId, d.now(), q.review_id);
+            return { review_id: q.review_id };
+          }
           const r = db.prepare("SELECT review_id FROM human_queue WHERE closed_at IS NULL AND (claimed_by IS NULL OR claimed_by=?) ORDER BY severity DESC, due_at LIMIT 1").get(who.reviewerId) as { review_id: string } | undefined;
           if (r) db.prepare("UPDATE human_queue SET claimed_by=?, claimed_at=? WHERE review_id=?").run(who.reviewerId, d.now(), r.review_id);
           return r;
         });
+        if (row && "error" in row) return json(res, row.error, { code: row.code, message: row.message });
         if (!row) return json(res, 200, { review: null });
         const r = core.readReview(db, row.review_id)!;
         const pinned = bundleOf(r);
         if (!pinned) return json(res, 409, { code: "E_BUNDLE_MISSING", message: `rules ${r.rules_ver} not stored` });
         return json(res, 200, { review: pick(r, REVIEW_PUBLIC), rules: core.rulesFor(pinned, core.readContent(db, r.content_id)!.scene).map((x) => ({ rule_id: x.ruleId, default_action: x.defaultAction })) });
+      }
+      if (req.method === "POST" && path === "/api/human/unclaim") {
+        const who = auth(d, req);
+        if (!who) return json(res, 401, { code: "E_HUMAN_AUTH" });
+        const b = await readJson(req);
+        const n = core.tx(db, () => db.prepare("UPDATE human_queue SET claimed_by=NULL, claimed_at=NULL WHERE review_id=? AND claimed_by=? AND closed_at IS NULL").run(String(b["review_id"] ?? ""), who.reviewerId).changes);
+        return n === 1 ? json(res, 200, { released: true }) : json(res, 409, { code: "E_STATE_INVALID", message: "not claimed by you or already closed" });
       }
       if (req.method === "POST" && path === "/api/human/submit") {
         const who = auth(d, req);
@@ -115,6 +288,9 @@ export function createHttpServer(d: HttpDeps): Server {
         const b = await readJson(req);
         const r = core.readReview(db, String(b["review_id"]));
         if (!r) return json(res, 404, { code: "E_REVIEW_NOT_FOUND" });
+        // a task claimed by someone else is theirs to decide (an unclaimed one can still be decided directly)
+        const holder = (db.prepare("SELECT claimed_by FROM human_queue WHERE review_id=? AND closed_at IS NULL").get(r.review_id) as { claimed_by: string | null } | undefined)?.claimed_by;
+        if (holder && holder !== who.reviewerId) return json(res, 409, { code: "E_LEASE_HELD", message: `claimed by ${holder}` });
         const pinned = bundleOf(r);
         if (!pinned) return json(res, 409, { code: "E_BUNDLE_MISSING", message: `rules ${r.rules_ver} not stored` });
         try {
@@ -129,6 +305,8 @@ export function createHttpServer(d: HttpDeps): Server {
       }
       if (req.method === "POST" && path === "/api/appeals") {
         const b = await readJson(req);
+        if (typeof b["content_id"] !== "string" || typeof b["trigger_request_id"] !== "string" || !b["trigger_request_id"]) return bad(res, "content_id and trigger_request_id are required");
+        if (b["reason_code"] !== undefined && b["reason_code"] !== null && (typeof b["reason_code"] !== "string" || !/^[a-z_]{1,32}$/.test(b["reason_code"]))) return bad(res, "reason_code must match ^[a-z_]{1,32}$");
         const contentId = String(b["content_id"]);
         const scene = core.readContent(db, contentId)?.scene;
         if (!scene) return json(res, 404, { code: "E_REVIEW_NOT_FOUND" });
@@ -150,6 +328,7 @@ export function createHttpServer(d: HttpDeps): Server {
       if (req.method === "POST" && path === "/api/replay/resume") { gateway.replayPaused = false; return json(res, 200, { paused: false }); }
       json(res, 404, { code: "NOT_FOUND" });
     } catch (e) {
+      if (e instanceof BadRequest) return bad(res, e.message, "E_BAD_JSON");
       console.error("http error", core.redact(e));
       json(res, 500, { code: "INTERNAL" });
     }
