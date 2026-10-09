@@ -125,7 +125,7 @@ export async function runFastpath(deps: FastpathDeps, contentId: string): Promis
 
   // policy: answers → three states (blacklist hits and rate limiting force suspicious; they are deterministic signals for the agent, not rulings)
   const answers = core.trustedAnswersFromCalls(deps.db, contentId, judgeCallIds, deps.bundle, inputSha);
-  let d = decide({ bundle: deps.bundle, scene, hasImages, imageDelivered: images.length > 0, answers, judgeOk: true, hasContext: !!(content.reply_to || content.mentions) });
+  let d = decide({ bundle: deps.bundle, scene, hasImages, imageDelivered: images.length > 0, answers, judgeOk: true, hasContext: !!(content.reply_to || content.mentions), parentMissing: core.parentMissing(deps.db, contentId) });
   // the agent has no image channel: image content that is neither auto-passed nor blocked goes to a person
   if (images.length && d.state === "suspicious" && d.route === "agent") d = { ...d, route: "human", reason: "image_review" };
   if ((pre.blacklistHits.length > 0 || pre.rateLimited) && d.state === "pass") d = { state: "suspicious", action: null, hits: [], reason: pre.blacklistHits.length ? "blacklist_hit" : "rate_limited", route: "agent" };

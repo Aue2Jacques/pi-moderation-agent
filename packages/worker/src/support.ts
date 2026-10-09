@@ -19,7 +19,7 @@ export function supportOf(db: Db, review: ReviewRow, bundle: PolicyBundle, judge
   const scene = content.scene as core.Scene;
   const { answers, calls } = core.trustedAnswers(db, review, bundle, judgeCallIds, review.evidence_ver);
   // same rule as the submit check: delivered only when a cited call came from the image channel
-  const r = core.allowedActions({ bundle, scene, hasImages: !!content.image_refs, imageDelivered: !!content.image_refs && calls.some((c) => c.api === "image" && c.status === "ok"), answers, stage: "agent" });
+  const r = core.allowedActions({ bundle, scene, hasImages: !!content.image_refs, imageDelivered: !!content.image_refs && calls.some((c) => c.api === "image" && c.status === "ok"), answers, stage: "agent", parentMissing: core.parentMissing(db, review.content_id) });
   const confirmPass = bundle.scenes[scene].confirmPass ?? true;
   const byRule = new Map(core.rulesFor(bundle, scene).map((x) => [x.ruleId, x] as const));
   const rules: RuleSupport[] = r.rules.map((v) => {
@@ -43,6 +43,7 @@ export function supportOf(db: Db, review: ReviewRow, bundle: PolicyBundle, judge
   const missing = [
     ...rules.filter((x) => x.missing).map((x) => `${x.rule_id}：${x.missing}`),
     ...r.required.filter((c) => !r.covered[c] && c === "image_check").map(() => "内容带图片，没有图片通道，不能自动放行"),
+    ...(core.parentMissing(db, review.content_id) ? ["回复的父内容在库里不存在（已删除或还没到达）：找到父内容前不能放行；取不到就转人工（evidence_gap）"] : []),
   ];
   return { allowed_now: [...r.allowed], rules, missing };
 }

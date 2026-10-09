@@ -13,6 +13,8 @@ export type AllowedInput = {
   answers: readonly AnswerRecord[];
   /** whose dispose is being checked: the agent's uses a rule's agentThresholds when it has them; default "fast" */
   stage?: "fast" | "agent";
+  /** the content's parent is missing (core.parentMissing): "pass" is never allowed */
+  parentMissing?: boolean;
 };
 
 export type RuleVerdict = {
@@ -99,6 +101,6 @@ export function allowedActions(input: AllowedInput): AllowedResult {
   const RANK: Record<Action, number> = { pass: 0, limit: 1, takedown: 2 };
   const heaviest = blocking.map((v) => byRule.get(v.ruleId)!.defaultAction).sort((a, b) => RANK[b] - RANK[a])[0];
   if (heaviest) allowed.add(heaviest);
-  if (blocking.length === 0 && required.every((c) => covered[c])) allowed.add("pass");
+  if (blocking.length === 0 && required.every((c) => covered[c]) && !input.parentMissing) allowed.add("pass");
   return { allowed, rules, covered, required, effectiveAnswers };
 }

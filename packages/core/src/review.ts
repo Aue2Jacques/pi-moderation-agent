@@ -36,6 +36,14 @@ export function readRuling(db: Db, reviewId: string): RulingRow | undefined {
 export function readContent(db: Db, contentId: string): ContentRow | undefined {
   return db.prepare("SELECT * FROM content WHERE content_id=?").get(contentId) as ContentRow | undefined;
 }
+/** dev plan 2026-10-08 §3.1 problem 3 (temporary): the content replies to something that is not in the store (deleted,
+ *  or not arrived yet). Such a reply is never passed automatically — not by the fast path, not by the agent — because the
+ *  missing parent may be what makes it a violation; a clear violation can still be acted on, and a person can pass it. */
+export function parentMissing(db: Db, contentId: string): boolean {
+  const c = readContent(db, contentId);
+  if (!c?.reply_to) return false;
+  return !db.prepare("SELECT 1 FROM content WHERE content_id=?").get(c.reply_to);
+}
 export function latestReview(db: Db, contentId: string): ReviewRow | undefined {
   return db.prepare("SELECT * FROM review WHERE content_id=? ORDER BY seq DESC LIMIT 1").get(contentId) as ReviewRow | undefined;
 }

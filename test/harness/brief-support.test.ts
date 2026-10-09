@@ -141,3 +141,44 @@ describe("agent-stage thresholds (dev plan §3.1 problem 1, temporary)", () => {
     expect(state).not.toBe("disposed");
   });
 });
+
+describe("parent missing (dev plan §3.1 problem 3, temporary)", () => {
+  const run = async (id: string, parentArrives: boolean) => {
+    const db = freshDb();
+    seedContent(db, id, "comment", { eventTime: Date.now() - 1000, accountId: "acc", replyTo: `${id}-parent` });
+    if (parentArrives) seedContent(db, `${id}-parent`, "comment", { eventTime: Date.now() - 2000, accountId: "acc2" });
+    const r = core.createSuspiciousReview(db, { contentId: id, pins: PINS, judgeModel: "jev", judgeCallIds: [], pendingVisibility: "hidden", deadlineMs: CFG.deadlineMs, budgetTools: 12, budgetMicro: 50_000, suspectReason: "parent_missing" }, Date.now() - 500).review;
+    const steps: Step[] = [
+      { tool: "get_thread_context", args: {} },
+      { tool: "judge", args: { rule_ids: [], evidence_ids: ["$E1"] } },
+      { tool: "confirm", args: { judge_call_id: "$J1", rule_ids: [], evidence_ids: ["$E1"] } },
+      { tool: "dispose", args: { action: "pass", evidence_ids: ["$E1"], rule_ids: [], reason: "low risk, confirmed" } },
+      { text: "done" },
+    ];
+    const fx = await makeWorker({ db, steps: [], judge: lowRisk });
+    const seen: unknown[][] = [];
+    setScript(fx, recording(resolving(db, () => r.review_id, steps), seen));
+    await fx.worker.start();
+    await fx.worker.admitOnce();
+    await runToIdle(fx);
+    const first = textOf(seen[0]![0]);
+    const results = toolResults(seen[seen.length - 1]!);
+    const state = core.requireReview(db, r.review_id).state;
+    await fx.close();
+    return { first, results, state };
+  };
+  it("parent not in the store: the brief says why, support offers no pass and names what is missing, the pass is refused", async () => {
+    const { first, results, state } = await run("pm1", false);
+    expect(first).toContain("被回复的内容在库里不存在");
+    const c = results[2] as { support: { allowed_now: string[]; missing: string[] } };
+    expect(c.support.allowed_now).toEqual([]);
+    expect(c.support.missing.join("")).toContain("父内容在库里不存在");
+    expect(JSON.stringify(results[3])).toContain("E_ACTION_NOT_SUPPORTED");
+    expect(state).not.toBe("disposed");
+  });
+  it("the parent arrived: the same answers allow pass and the dispose goes through", async () => {
+    const { results, state } = await run("pm2", true);
+    expect((results[2] as { support: { allowed_now: string[] } }).support.allowed_now).toEqual(["pass"]);
+    expect(state).toBe("disposed");
+  });
+});

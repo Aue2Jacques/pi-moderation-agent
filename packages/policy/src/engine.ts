@@ -15,6 +15,8 @@ export type EngineInput = {
   judgeOk: boolean;
   /** the content replies to someone or @-mentions someone (scene switch context_route) */
   hasContext?: boolean;
+  /** the content replies to something not in the store (core.parentMissing): never auto-passed */
+  parentMissing?: boolean;
 };
 
 export function decide(i: EngineInput): Decision {
@@ -37,6 +39,9 @@ export function decide(i: EngineInput): Decision {
   // not decided automatically ("pass": not auto-passed; "all": not auto-passed or auto-blocked) but looked at with context
   const cr = i.bundle.scenes[i.scene].contextRoute;
   if (cr && i.hasContext && (d.state === "pass" || (cr === "all" && d.state === "block"))) return { state: "suspicious", action: null, hits: d.hits, reason: "needs_context", route: "agent" };
+  // §3.1 problem 3 (temporary): a reply whose parent is missing is not passed on its text alone; the agent may find a
+  // parent that arrived late, act on a clear violation, or hand it to a person (it cannot pass it either)
+  if (i.parentMissing && d.state === "pass") return { state: "suspicious", action: null, hits: [], reason: "parent_missing", route: "agent" };
   if (d.state !== "suspicious") return d;
   // §2.2: why is it suspicious? A required question with no answer, or no calibrated answer, is a system cause the
   // agent cannot fix (its own judge calls would be just as uncalibrated); anything else needs a closer look.

@@ -6,7 +6,7 @@ import { nextSeq, tx, type Db } from "./db.ts";
 import { CoreError } from "./errors.ts";
 import { canonical, outboxEventId, sha256 } from "./ids.ts";
 import { usedToolSlots } from "./budget.ts";
-import { appendRejectAudit, insertReview, readContent, readReview, readRuling, upsertContentState, visibilityFor } from "./review.ts";
+import { appendRejectAudit, insertReview, parentMissing, readContent, readReview, readRuling, upsertContentState, visibilityFor } from "./review.ts";
 import { assertTransition } from "./states.ts";
 import { CONTENT_BEARING_EVIDENCE, allQuestions, questionsOf, rulesFor, ruleAllowed, type Action, type Actor, type EvidenceRow, type JudgeAnswerRow, type JudgeCallRow, type Pins, type PolicyBundle, type ReviewRow, type RulingRow } from "./types.ts";
 
@@ -145,7 +145,7 @@ export function writeRulingChecked(ctx: Ctx, input: SubmitRulingInput, preloaded
     // stage ③: an image counts as delivered only when a cited call came from the image channel (api 'image', status ok) —
     // a text judge's image_check answer is never coverage (round-9 item 6)
     const imageDelivered = hasImages && trusted!.calls.some((c) => c.api === "image" && c.status === "ok");
-    allowed = allowedActions({ bundle, scene: content!.scene, hasImages, imageDelivered, answers: trusted!.answers, stage: input.actor === "agent" ? "agent" : "fast" });
+    allowed = allowedActions({ bundle, scene: content!.scene, hasImages, imageDelivered, answers: trusted!.answers, stage: input.actor === "agent" ? "agent" : "fast", parentMissing: parentMissing(db, content!.content_id) });
     if (!allowed.allowed.has(input.action)) {
       fail("E_ACTION_NOT_SUPPORTED", 11, `${input.action} not in allowed set`, {
         allowed: [...allowed.allowed], required: allowed.required, covered: allowed.covered,

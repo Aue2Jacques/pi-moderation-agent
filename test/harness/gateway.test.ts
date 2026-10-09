@@ -57,6 +57,17 @@ describe("fast path S1/S2/S2'", () => {
     expect((db.prepare("SELECT COUNT(*) AS n FROM intake WHERE status='judged'").get() as { n: number }).n).toBe(4);
     expect(core.reconcile.instant(db, { scanMs: 2000, intakeQueueMaxMs: 60_000 }, Date.now())).toEqual([]);
   });
+  it("parent missing (§3.1 problem 3): a low-risk reply to a missing parent queues for the agent; a clear violation still blocks; a reply whose parent exists passes", async () => {
+    const db = freshDb();
+    seedContent(db, "par1", "comment", { text: "normal parent" });
+    seedContent(db, "r-gone", "comment", { text: "normal reply", replyTo: "deleted-parent" });
+    seedContent(db, "r-bad", "comment", { text: "ABUSE reply", replyTo: "deleted-parent" });
+    seedContent(db, "r-ok", "comment", { text: "normal reply", replyTo: "par1" });
+    const g = makeGateway(db);
+    const out = await g.processIntakeOnce();
+    expect(Object.fromEntries(out.map((o) => [o.contentId, o.decision]))).toMatchObject({ "r-gone": "suspicious", "r-bad": "block", "r-ok": "pass", par1: "pass" });
+    expect(db.prepare("SELECT suspect_reason FROM review WHERE content_id='r-gone'").get()).toEqual({ suspect_reason: "parent_missing" });
+  });
   it("blacklist hit forces suspicious even when the judge says pass; rate limit too", async () => {
     const db = freshDb();
     seedContent(db, "bl1", "comment", { text: "normal 加我微信 text" });

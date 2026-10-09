@@ -257,3 +257,19 @@ describe("agent-stage thresholds (dev plan 2026-10-08 §3.1 problem 1, temporary
     expect(policy.classifyChange(abuse, { ...abuse, agentThresholds: { block: 0.8, pass: 0.2 } })).toBe("threshold_only");
   });
 });
+
+describe("parent missing (dev plan §3.1 problem 3, temporary)", () => {
+  const low = [...pair(abuse.question.sha, "a"), ...pair(mkt.question.sha, "m"), ...G];
+  const high = [ans(abuse.question.sha, "h", 0.99, "violate"), ...G];
+  it("a would-be pass goes to the agent as parent_missing; a clear block still blocks; no flag -> unchanged", () => {
+    expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: low, judgeOk: true, parentMissing: true })).toMatchObject({ state: "suspicious", reason: "parent_missing", route: "agent" });
+    expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: high, judgeOk: true, parentMissing: true })).toMatchObject({ state: "block", action: "takedown" });
+    expect(policy.decide({ bundle: B, scene: "comment", hasImages: false, answers: low, judgeOk: true, parentMissing: false }).state).toBe("pass");
+  });
+  it("allowedActions never offers pass while the parent is missing, at either stage", () => {
+    for (const stage of ["fast", "agent"] as const) {
+      expect([...coreAllowed({ bundle: B, scene: "comment", hasImages: false, answers: low, stage, parentMissing: true }).allowed]).toEqual([]);
+      expect([...coreAllowed({ bundle: B, scene: "comment", hasImages: false, answers: low, stage }).allowed]).toEqual(["pass"]);
+    }
+  });
+});
