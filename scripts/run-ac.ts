@@ -107,7 +107,7 @@ function rowsOf(db: core.Db) {
     const done = (db.prepare("SELECT MAX(created_at) AS t FROM ruling WHERE review_id=?").get(r.review_id) as { t: number | null }).t ?? r.updated_at;
     const route = r.suspect_reason !== null || agentRan ? "agent" : r.state === "human_queue" ? "human_direct" : "fastpath";
     const action = rul?.action ?? null;
-    const sys = ["judge_unavailable", "fastpath_error", "budget_cost", "budget_tools", "deadline", "crash", "lease_lost"].some((x) => (r.release_reason ?? "").startsWith(x));
+    const sys = ["judge_unavailable", "fastpath_error", "budget_cost", "budget_tools", "deadline", "crash", "lease_lost", "agent_stalled"].some((x) => (r.release_reason ?? "").startsWith(x));
     const outcome = r.state === "human_queue"
       ? (c.expected.disposition === "human" ? "correct_human" : sys ? "system_failure" : "human_instead_of_auto")
       : action === null ? "system_failure"
