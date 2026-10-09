@@ -619,7 +619,7 @@ body.on-dark .nav .bar { background: #7fa3e0; }
   <div class="inner">
     <div class="copy">
       <h2>一张 16GB 显卡，约 1 小时训练一版。</h2>
-      <p class="lede">推理提速还在进行中。</p>
+      <p class="lede">原生推理每秒约 10 条；我们优化后，同一张卡每秒约 60 条（对外服务约 50 条）。</p>
     </div>
     <div class="visual"><div class="fit"><div class="train">
       <div class="win">
@@ -636,13 +636,14 @@ body.on-dark .nav .bar { background: #7fa3e0; }
             <div class="tr th"><span>任务</span><span class="c-ep">轮数</span><span>耗时</span><span>状态</span></div>
             <div class="tr"><span>微调 v0</span><span class="c-ep">1</span><span>约 84 分钟</span><span class="badge b-ok">完成</span></div>
             <div class="tr"><span>微调 v1（清洗后）</span><span class="c-ep">1</span><span>约 62 分钟</span><span class="badge b-ok">完成</span></div>
-            <div class="tr"><span>推理提速实验</span><span class="c-ep">—</span><span>—</span><span class="badge b-warn"><span class="spin"></span>进行中</span></div>
+            <div class="tr"><span>提速格式 v2s</span><span class="c-ep">1</span><span>约 2.7 小时</span><span class="badge b-ok">完成</span></div>
+            <div class="tr"><span>推理：原生 → 优化后</span><span class="c-ep">—</span><span>约 10 → 60 条/秒</span><span class="badge b-ok">实测</span></div>
           </div>
         </div>
       </div>
     </div></div></div>
   </div>
-  <p class="foot">耗时为实测，仅供参考；损失曲线形状为示意</p>
+  <p class="foot">耗时与速度为实测（RTX 5060 Ti 16GB，单次），仅供参考；损失曲线形状为示意</p>
 </section>
 
 <!-- 12 结尾：控制台拉远 -->

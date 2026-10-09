@@ -12,6 +12,8 @@
 
 ## 现在在哪一步
 
+**一句话（对外口径，实测、仅供参考）**：单张入门级 RTX 5060 Ti（16GB），开源判官 Kev-4B **原生推理每秒约 10 条评论**；经我们的推理优化（[python/kevfast/](python/kevfast/)）后**每秒约 60 条（对外 HTTP 服务约 50 条），单条约 40 毫秒**；辱骂识别 AUROC 0.96、营销引流 0.999，与商用审核 API 相当。测试集 3,002 条单次实测，训练标签与测试集同一打标流程；最快配置要求关闭"双确认"。怎么做到的见 [docs/kevfast-explained.md](docs/kevfast-explained.md)。
+
 **2026-10-09 补充**：
 - **Web 控制台与演示模式**：`pnpm run demo` 一条命令起 G、W 和控制台（http://127.0.0.1:8080/），不需要 key 和 GPU；`pnpm run console` 是真实模式（读 `.env`）。页面：提交与实时追踪、审次、人工复核、申诉、概览、规则与版本。演示模式只把判官和 agent 模型换成脚本，其余链路（快判、提交检查、Pi 会话、人工、申诉）与真实模式相同。说明、接口、测试和不足见 [docs/console-2026-10-09.md](docs/console-2026-10-09.md)。
 - **开源判官微调**：在一张 RTX 5060 Ti 16GB 上，从发布版 Kev-4B 续训两版（v0 基线、v1 清洗后），每版约 1 小时。测试集 3,002 条上：
@@ -105,6 +107,7 @@
 | [docs/dev-plan-2026-10-08.md](docs/dev-plan-2026-10-08.md) | **当前开发计划**：各阶段执行记录、遇到的问题（3.1 节，含 10-09 新增 13、14）、待负责人定 |
 | [reports/2026-10-09-kev4b-finetune.md](reports/2026-10-09-kev4b-finetune.md) | Kev-4B 微调 v0 / v1 |
 | [reports/2026-10-09-kev-inference-speed.md](reports/2026-10-09-kev-inference-speed.md) | 推理提速：逐项测量、kevfast 开关、一致性、阶梯、压测、单卡上限 |
+| [docs/kevfast-explained.md](docs/kevfast-explained.md) | 推理提速说明（大白话版）：每一步做了什么、为什么有效、怎么验证、试过没用的、上限、踩坑、常见问题 |
 | [demo/index.html](demo/index.html) | 演示页（静态，自行部署） |
 | [docs/policy/abuse-standard-v3.md](docs/policy/abuse-standard-v3.md) | 辱骂类统一标注标准 v3 与试标数据 |
 | [docs/dev-plan-2026-10-07.md](docs/dev-plan-2026-10-07.md) | 上一版开发计划（已被 2026-10-08 版取代）：合并第十、十一轮审查；修复清单、裁决语义真值表、疑似分流、案例池、agent 接口、A/C 对比、待拍板事项 |
