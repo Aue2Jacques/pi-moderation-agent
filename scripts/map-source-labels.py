@@ -8,7 +8,7 @@ items are flagged.
              stops the run (nothing is mapped by default)
   sample  -> data/eval/clean-check-ids.txt: train items for an unbiased check of the mapping, stratified by basis
              (SAMPLE_PER_BASIS), fixed hash order, no text read; label them with the frozen procedure, then `check`
-  check   -> how the mapping agrees with the platform labels (frozen procedure, data/eval/labels-*.jsonl) on items that
+  check [ids.txt] -> how the mapping agrees with the platform labels (frozen procedure, data/eval/labels-*.jsonl) on items that
              carry them, train and val only (the test split is not used to judge the cleaning); counts only
 
 usage (repo root, dev box): python3 scripts/map-source-labels.py map|sample|check
@@ -128,6 +128,9 @@ def main(argv):
         print(json.dumps({"sampled": len(ids), "per_basis": SAMPLE_PER_BASIS}))
     elif phase == "check":
         mapped = _jsonl(OUT)
+        if len(argv) > 2:   # only these ids (e.g. the stratified sample; the other labelled items are hard cases, not random)
+            keep = set(open(argv[2]).read().split())
+            mapped = [r for r in mapped if r["id"] in keep]
         lab = lambda std: {r["id"]: r["label"] for r in _jsonl(f"data/eval/labels-{std}.jsonl")}
         print(json.dumps(check(mapped, lab("abuse-v4.3"), lab("marketing-v2")), ensure_ascii=False, indent=1))
     else:
