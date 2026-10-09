@@ -7,7 +7,7 @@ can record exactly which optimisations were on.
 usage (kev venv): KF_LAYOUT=rules_first KF_QUESTIONS=short KF_CONFIRM=off KF_FP8=auto \\
   python -m kevfast.serve --run <checkpoint dir> --port 8010"""
 
-import argparse, asyncio, queue, threading, time, uuid
+import argparse, asyncio, queue, sys, threading, time, uuid
 from concurrent.futures import Future
 
 from kevfast.common import load, to_engine_request
@@ -21,7 +21,9 @@ class Server:
         self.engine = Engine(self.tok, model, opts)
         self.warmed: set = set()
         self.queue: queue.Queue = queue.Queue()
-        self.batches = self.requests = 0
+        self.batches = self.requests = self.oom_splits = 0
+        # the model thread gives up the GIL at every CUDA sync; kev.serve measured batches ~2x slower at the default 5 ms
+        sys.setswitchinterval(0.0005)
         threading.Thread(target=self._work, name="kevfast-model", daemon=True).start()
 
     def submit(self, req) -> Future:
@@ -29,6 +31,18 @@ class Server:
         f: Future = Future()
         self.queue.put((er, meta, f))
         return f
+
+    def _answer(self, reqs):
+        """engine.answer; out of GPU memory, free the cache and answer each half (down to one request) instead of failing."""
+        import torch
+        try:
+            return self.engine.answer(reqs)
+        except torch.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            if len(reqs) == 1: raise
+            self.oom_splits += 1
+            h = len(reqs) // 2
+            return self._answer(reqs[:h]) + self._answer(reqs[h:])
 
     def _warm(self, er):
         """First request with a new (prefix, question set): capture its single-request graphs (KF_WARM_GRAPHS=off to skip)."""
@@ -51,7 +65,7 @@ class Server:
             self._warm(first[0])
             t0 = time.perf_counter()
             try:
-                ps = self.engine.answer([b[0] for b in batch])
+                ps = self._answer([b[0] for b in batch])
                 ms = (time.perf_counter() - t0) * 1000
                 for (er, meta, f), p in zip(batch, ps): f.set_result((p, meta, ms))
             except Exception as e:   # every request of the batch gets the error; the thread lives on
@@ -79,7 +93,7 @@ def make_app(server: Server):
     @app.get("/v1/models")
     def models():
         card = {"description": f"kevfast serving {server.run}", "run": server.run, "kevfast": server.opts.describe(),
-                "batches": {"count": server.batches, "requests": server.requests, "queued": server.queue.qsize()}}
+                "batches": {"count": server.batches, "requests": server.requests, "queued": server.queue.qsize(), "oom_splits": server.oom_splits}}
         return {"models": [{"name": "kev-latest", **card}]}
 
     return app

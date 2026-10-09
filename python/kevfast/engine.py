@@ -27,7 +27,7 @@ Switches (Options, or KF_* environment variables for serve.py):
   max_batch  requests per model call (serve.py)
   branch_mode  two_pass: the comment runs once, then the question branches continue its saved state (fewest tokens);
                rows: one pass, each question a row = comment + branch (the comment is recomputed per question; fewer
-               kernel launches); auto: rows when a call has at most rows_max_requests requests. Same answers either way.
+               kernel launches); auto: rows when a call has at most rows_max_requests (8) requests. Same answers either way.
   cuda_graphs  rows calls run right-padded (pads after a row's last token change nothing it reads) in length buckets of
                16 tokens, each (rows, bucket) captured once as a CUDA graph and replayed: no per-kernel launch cost
   deltanet_kernel  chunk: fla's chunked gated delta rule (64-token chunks); recurrent: fla's fused recurrent kernel (one
@@ -59,14 +59,14 @@ class Options:
     fp8: str = "off"
     fp8_min_tokens: int = 512
     max_batch: int = 32
-    max_pass_tokens: int = 6144
+    max_pass_tokens: int = 4096
     branch_mode: str = "auto"          # two_pass | rows | auto
-    rows_max_requests: int = 4
+    rows_max_requests: int = 8
     cuda_graphs: bool = True           # rows calls: right-padded to a length bucket and replayed from a captured graph
-    graph_max_tokens: int = 1024       # only rows calls up to this many padded tokens use graphs (memory: each graph keeps its buffers)
+    graph_max_tokens: int = 2048       # only rows calls up to this many padded tokens use graphs (memory: each graph keeps its buffers)
     deltanet_kernel: str = "auto"      # chunk | recurrent | auto (recurrent when a pass's segments average < 32 tokens)
     dense: bool = False                # two_pass calls: right-padded dense passes (graph-capturable) instead of packed varlen; measured slower at batch >= 16 (compute-bound), so off
-    max_graphs: int = 48
+    max_graphs: int = 64
 
     def __post_init__(self):
         if self.layout not in LAYOUTS: raise ValueError(f"layout {self.layout!r} not in {LAYOUTS}")
@@ -389,7 +389,9 @@ class Engine:
 
     def rows_graph(self, b_ids, b_pos, root) -> torch.Tensor:
         """Run rows right-padded to a 16-token bucket, through a CUDA graph captured once per (rows, bucket, prefix)."""
-        R, Lb = len(b_ids), -(-max(len(r) for r in b_ids) // 16) * 16
+        n, Lb = len(b_ids), -(-max(len(r) for r in b_ids) // 16) * 16
+        R = next((x for x in (3, 6, 12, 24, 48) if x >= n), n)       # row-count buckets too, so few graphs cover all calls
+        if R > n: b_ids = b_ids + [b_ids[-1]] * (R - n); b_pos = b_pos + [b_pos[-1]] * (R - n)
         key = (R, Lb, None if root is None else id(root))
         g = self.graphs.get(key)
         dev = self.model.device
@@ -409,7 +411,7 @@ class Engine:
             self.graphs[key] = g
         self._fill(g, b_ids, b_pos)
         g["graph"].replay()
-        return g["out"]
+        return g["out"][:n]
 
     # ------------------------------------------------------------ dense two-pass (large calls), CUDA-graph capturable
     @torch.no_grad()
