@@ -45,7 +45,8 @@ def kev_rows_first(t):
     return out
 
 
-engines = {"native": Engine(tok, model, Options(branch_mode="two_pass")), "rules": Engine(tok, model, Options(layout="rules_first", branch_mode="two_pass")),
+K = __import__("os").environ.get("KF_DELTANET_KERNEL", "auto")
+engines = {"native": Engine(tok, model, Options(branch_mode="two_pass", deltanet_kernel=K)), "rules": Engine(tok, model, Options(layout="rules_first", branch_mode="two_pass", deltanet_kernel=K)),
            "native-varlen": Engine(tok, model, Options(branch_mode="two_pass", dense=False)), "rules-varlen": Engine(tok, model, Options(layout="rules_first", branch_mode="two_pass", dense=False)),
            "native-rows": Engine(tok, model, Options(branch_mode="rows")), "rules-rows": Engine(tok, model, Options(layout="rules_first", branch_mode="rows"))}
 checks = ["native", "rules", "native-varlen", "rules-varlen", "native-rows", "rules-rows", "rules-rows-graph"] + (["native-fp8"] if "--fp8" in sys.argv else [])

@@ -28,6 +28,8 @@ Switches (Options, or KF_* environment variables for serve.py):
                kernel launches); auto: rows when a call has at most rows_max_requests requests. Same answers either way.
   cuda_graphs  rows calls run right-padded (pads after a row's last token change nothing it reads) in length buckets of
                16 tokens, each (rows, bucket) captured once as a CUDA graph and replayed: no per-kernel launch cost
+  deltanet_kernel  chunk: fla's chunked gated delta rule (64-token chunks); recurrent: fla's fused recurrent kernel (one
+             step per token, no chunk padding: short segments); auto: recurrent when segments average < 32 tokens
   dense      two_pass calls run right-padded in 16-token buckets and batch buckets (8, 16, 24, 32, 48, 64, ...), as one
              CUDA graph per bucket when cuda_graphs is on; off: packed varlen passes (no padding, no graphs)
   max_pass_tokens  a call is split into groups of requests whose content + branch tokens fit this budget (16 GB card:
@@ -45,7 +47,7 @@ import torch.nn.functional as F
 
 LAYOUTS, QUESTIONS, FP8_MODES, BRANCH_MODES = ("native", "rules_first"), ("full", "short"), ("off", "on", "auto"), ("two_pass", "rows", "auto")
 SHORT_LABELS = {"violate": "违规", "none": "不违规", "unknown": "无法判断"}
-SDPA_GATHER_BYTES = 1 << 30   # per attention layer: gather the shared prefix per segment (fused SDPA) up to this size
+SDPA_GATHER_BYTES = int(os.environ.get("KF_SDPA_GATHER_MB", 1024)) << 20   # per attention layer: gather the shared prefix per segment (fused SDPA) up to this size, else LSE merge
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,7 @@ class Options:
     rows_max_requests: int = 4
     cuda_graphs: bool = True           # rows calls: right-padded to a length bucket and replayed from a captured graph
     graph_max_tokens: int = 1024       # only rows calls up to this many padded tokens use graphs (memory: each graph keeps its buffers)
+    deltanet_kernel: str = "auto"      # chunk | recurrent | auto (recurrent when a pass's segments average < 32 tokens)
     dense: bool = False                # two_pass calls: right-padded dense passes (graph-capturable) instead of packed varlen; measured slower at batch >= 16 (compute-bound), so off
     max_graphs: int = 48
 
@@ -69,6 +72,7 @@ class Options:
         if self.questions not in QUESTIONS: raise ValueError(f"questions {self.questions!r} not in {QUESTIONS}")
         if self.fp8 not in FP8_MODES: raise ValueError(f"fp8 {self.fp8!r} not in {FP8_MODES}")
         if self.branch_mode not in BRANCH_MODES: raise ValueError(f"branch_mode {self.branch_mode!r} not in {BRANCH_MODES}")
+        if self.deltanet_kernel not in ("chunk", "recurrent", "auto"): raise ValueError(f"deltanet_kernel {self.deltanet_kernel!r}")
 
     @staticmethod
     def from_env(env=os.environ) -> "Options":
@@ -78,14 +82,14 @@ class Options:
                        fp8_min_tokens=int(env.get("KF_FP8_MIN_TOKENS", o.fp8_min_tokens)), max_batch=int(env.get("KF_MAX_BATCH", o.max_batch)),
                        max_pass_tokens=int(env.get("KF_MAX_PASS_TOKENS", o.max_pass_tokens)), branch_mode=env.get("KF_BRANCH_MODE", o.branch_mode),
                        rows_max_requests=int(env.get("KF_ROWS_MAX_REQUESTS", o.rows_max_requests)), cuda_graphs=env.get("KF_CUDA_GRAPHS", "on") != "off",
-                       graph_max_tokens=int(env.get("KF_GRAPH_MAX_TOKENS", o.graph_max_tokens)), dense=env.get("KF_DENSE", "off") == "on",
+                       graph_max_tokens=int(env.get("KF_GRAPH_MAX_TOKENS", o.graph_max_tokens)), dense=env.get("KF_DENSE", "off") == "on", deltanet_kernel=env.get("KF_DELTANET_KERNEL", o.deltanet_kernel),
                        max_graphs=int(env.get("KF_MAX_GRAPHS", o.max_graphs)))
 
     def describe(self) -> dict:
         return {"layout": self.layout, "questions": self.questions, "confirm": self.confirm, "fp8": self.fp8,
                 "fp8_min_tokens": self.fp8_min_tokens, "max_batch": self.max_batch, "max_pass_tokens": self.max_pass_tokens,
                 "branch_mode": self.branch_mode, "rows_max_requests": self.rows_max_requests, "cuda_graphs": self.cuda_graphs,
-                "graph_max_tokens": self.graph_max_tokens, "dense": self.dense, "max_graphs": self.max_graphs}
+                "graph_max_tokens": self.graph_max_tokens, "dense": self.dense, "max_graphs": self.max_graphs, "deltanet_kernel": self.deltanet_kernel}
 
 
 # ---------------------------------------------------------------- linear layers (bf16 / FP8)
@@ -171,8 +175,20 @@ class Engine:
                 model._kf_fp8_on = [{k: L[k] for k in ("in", "out", "gate_up", "down")} for L in self.layers]
                 torch.cuda.empty_cache()
         self.prefix_cache: dict[tuple, LevelOut] = {}
+        self.branch_cache: dict[tuple, list[int]] = {}
+        self.profile = os.environ.get("KF_PROFILE") == "1"      # synchronised section timers (slows everything; for measuring only)
+        self.prof: dict[str, float] = {}
+        self._t0 = None
         self.graphs: dict[tuple, dict] = {}
         self.graph_pool = None
+
+    def tick(self, name: str | None):
+        """Close the running section (charged to the previous name) and start `name`; no-op unless KF_PROFILE=1."""
+        if not self.profile: return
+        import time
+        torch.cuda.synchronize(); now = time.perf_counter()
+        if self._t0 is not None: self.prof[self._t0[0]] = self.prof.get(self._t0[0], 0.0) + now - self._t0[1]
+        self._t0 = None if name is None else (name, now)
 
     # ------------------------------------------------------------ one packed pass
     @torch.no_grad()
@@ -185,10 +201,16 @@ class Engine:
         from transformers.models.qwen3_5.modeling_qwen3_5 import apply_rotary_pos_emb
 
         dev = self.model.device
+        lvl = "content" if want_state else "branch"
+        self.tick(f"{lvl}:prep")
         lens = [len(s) for s in level.ids]
         cu = [0]
         for n in lens: cu.append(cu[-1] + n)
         T, N = cu[-1], len(lens)
+        from fla.ops.gated_delta_rule import fused_recurrent_gated_delta_rule
+        kern = self.opts.deltanet_kernel
+        if kern == "auto": kern = "recurrent" if T / N < 32 else "chunk"
+        gdr = fused_recurrent_gated_delta_rule if kern == "recurrent" else chunk_gated_delta_rule
         ids = torch.tensor([t for s in level.ids for t in s], device=dev)
         pos = torch.tensor([p for s in level.pos for p in s], device=dev)
         cu_cpu = torch.tensor(cu, dtype=torch.long)
@@ -196,8 +218,10 @@ class Engine:
         seg = torch.repeat_interleave(torch.arange(N, device=dev), torch.tensor(lens, device=dev))
         par = None if parent is None else torch.tensor(level.parent, device=dev)
 
+        self.tick(f"{lvl}:embed")
         x = self.lm.embed_tokens(ids)                                     # [T, d]
         cos, sin = self.lm.rotary_emb(x[None], pos[None, None].expand(3, 1, T))
+        self.tick(f"{lvl}:mask")
 
         # attention context: the parent's own keys appended to the parent's context; a segment reads its parent's
         # ancestors plus its parent (block mask), and itself causally
@@ -269,23 +293,30 @@ class Engine:
         conv_out, rec_out, k_out, v_out = [], [], [], []
         for li, L in enumerate(self.layers):
             layer, mix = L["layer"], L["mix"]
+            self.tick(f"{lvl}:norm")
             h = rms_norm(x, layer.input_norm_weight, None, eps=layer.input_layernorm.eps)
             if L["type"] == "linear_attention":
+                self.tick(f"{lvl}:lin_in")
                 mixed, z, b, a = L["in"](h).split(mix.splits, -1)
+                self.tick(f"{lvl}:state_gather")
                 ci = None if parent is None else parent.conv[li].index_select(0, par)
                 ri = None if parent is None else parent.rec[li].index_select(0, par)
+                self.tick(f"{lvl}:deltanet")
                 mixed, conv_state = causal_conv1d(mixed[None], mix.conv_weight, None, initial_state=ci, output_final_state=want_state,
                                                   activation="silu", cu_seqlens=cu_t, cu_seqlens_cpu=cu_cpu)
                 q, k, v = mixed.split([mix.key_dim, mix.key_dim, mix.value_dim], -1)
-                o, rec = chunk_gated_delta_rule(q.reshape(1, T, -1, mix.head_k_dim), k.reshape(1, T, -1, mix.head_k_dim), v.reshape(1, T, -1, mix.head_v_dim),
-                                                g=a[None], beta=b[None], initial_state=ri, output_final_state=want_state, cu_seqlens=cu_t, cu_seqlens_cpu=cu_cpu,
-                                                use_qk_l2norm_in_kernel=True, use_gate_in_kernel=True, A_log=mix.A_log, dt_bias=mix.dt_bias,
-                                                use_beta_sigmoid_in_kernel=True)
+                o, rec = gdr(q.reshape(1, T, -1, mix.head_k_dim), k.reshape(1, T, -1, mix.head_k_dim), v.reshape(1, T, -1, mix.head_v_dim),
+                             g=a[None], beta=b[None], initial_state=ri, output_final_state=want_state, cu_seqlens=cu_t,
+                             use_qk_l2norm_in_kernel=True, use_gate_in_kernel=True, A_log=mix.A_log, dt_bias=mix.dt_bias,
+                             use_beta_sigmoid_in_kernel=True, **({"cu_seqlens_cpu": cu_cpu} if kern == "chunk" else {}))
                 o = rms_norm_gated(o, z.reshape(1, T, -1, mix.head_v_dim), mix.norm.weight, None, activation="swish", eps=mix.norm.variance_epsilon)
+                self.tick(f"{lvl}:lin_out")
                 h = L["out"](o.reshape(T, -1))
                 conv_out.append(conv_state if want_state else None); rec_out.append(rec if want_state else None); k_out.append(None); v_out.append(None)
             else:
+                self.tick(f"{lvl}:lin_in")
                 q_gate, k, v = L["in"](h).split(mix.splits, -1)
+                self.tick(f"{lvl}:attn")
                 hd = mix.head_dim
                 q, gate = q_gate.reshape(T, -1, 2 * hd).chunk(2, -1)
                 q = rms_norm(q, mix.q_norm_weight, None, eps=mix.q_norm.eps).transpose(0, 1)[None]           # [1, Hq, T, hd]
@@ -294,12 +325,17 @@ class Engine:
                 v = v.reshape(T, -1, hd).transpose(0, 1)[None]
                 K, V = (k[0], v[0]) if ctx_k is None else (torch.cat([ctx_k[li], k[0]], 1), torch.cat([ctx_v[li], v[0]], 1))   # [Hkv, C+T, hd]
                 o = attend(q[0], K, V, mix.scaling)
+                self.tick(f"{lvl}:lin_out")
                 h = L["out"](sigmoidglu(gate.reshape(T, -1), o))
                 conv_out.append(None); rec_out.append(None); k_out.append(k[0]); v_out.append(v[0])
+            self.tick(f"{lvl}:norm")
             h, residual = rms_norm(h, layer.post_norm_weight, None, residual=x, eps=layer.post_attention_layernorm.eps, prenorm=True)
+            self.tick(f"{lvl}:mlp")
             gate_up = L["gate_up"](h)
             x = residual + L["down"](swiglu(*gate_up.chunk(2, -1)))
+        self.tick(f"{lvl}:final_norm")
         hidden = self.lm.norm(x).float()
+        self.tick(None)
         return LevelOut(hidden, cu, conv_out, rec_out, k_out, v_out, None if ctx_k is None else (ctx_k, ctx_v), ranges)
 
     # ------------------------------------------------------------ padded rows + CUDA graphs (small calls)
@@ -536,13 +572,27 @@ class Engine:
         return self.prefix_cache[key]
 
     def branch_tokens(self, q: dict) -> list[int]:
-        """[<q> instr <opt> o </opt>... <decide>] as kev.model.encode builds it; short: instr = the rule key, options = short labels."""
+        """[<q> instr <opt> o </opt>... <decide>] as kev.model.encode builds it; short: instr = the rule key, options = short labels.
+        Cached per question (the same few questions come with every request)."""
+        key = (q["key"], q["instr"], tuple(q["options"]), tuple(q["names"]))
+        hit = self.branch_cache.get(key)
+        if hit is not None: return hit
         from kev.model import user_tokens
         instr = q["key"] if self.opts.questions == "short" else q["instr"]
         opts = [SHORT_LABELS.get(n, n) for n in q["names"]] if self.opts.questions == "short" else q["options"]
         b = [self.q_id] + user_tokens(self.tok, instr)
         for o in opts: b += [self.o_id] + user_tokens(self.tok, o) + [self.c_id]
-        return b + [self.d_id]
+        b = b + [self.d_id]
+        if len(self.branch_cache) > 4096: self.branch_cache.clear()
+        self.branch_cache[key] = b
+        return b
+
+    def content_tokens(self, r: dict) -> list[int]:
+        """The request's content tokens, computed once per request (kept on the request dict)."""
+        if "_ids" not in r:
+            from kev.model import user_tokens
+            r["_ids"] = user_tokens(self.tok, r["content"])
+        return r["_ids"]
 
     @torch.no_grad()
     def answer(self, reqs: list[dict]) -> list[list[torch.Tensor]]:
@@ -550,9 +600,10 @@ class Engine:
         All requests in one call must share the prefix (serve.py groups them). -> per request, per question, probabilities.
         Requests are run in groups that fit max_pass_tokens."""
         from kev.model import user_tokens
+        self.tick("call:cost")
         pre = reqs[0]["prefix"]
         if any(r["prefix"] != pre for r in reqs): raise ValueError("one call, one prefix")
-        cost = [len(user_tokens(self.tok, r["content"])) + sum(len(self.branch_tokens(q)) for q in r["questions"]) for r in reqs]
+        cost = [len(self.content_tokens(r)) + sum(len(self.branch_tokens(q)) for q in r["questions"]) for r in reqs]
         groups, cur, used = [], [], 0
         order = sorted(range(len(reqs)), key=cost.__getitem__)          # similar lengths together: less padding
         for i in order:
@@ -563,16 +614,18 @@ class Engine:
         out = [None] * len(reqs)
         for g in groups:
             for i, p in zip(g, self._answer_group([reqs[i] for i in g])): out[i] = p
+        self.tick(None)
         return out
 
     def _answer_group(self, reqs: list[dict]) -> list[list[torch.Tensor]]:
         from kev.model import user_tokens
+        self.tick("call:tokenize")
         pre = reqs[0]["prefix"]
         root = self.prefix(pre) if pre is not None else None
         P = 0 if root is None else root.cu[-1]
         c_ids, c_pos = [], []
         for r in reqs:
-            ids = user_tokens(self.tok, r["content"]) if root is not None else [self.state_id] + user_tokens(self.tok, r["content"])
+            ids = self.content_tokens(r) if root is not None else [self.state_id] + self.content_tokens(r)
             c_ids.append(ids); c_pos.append(list(range(P, P + len(ids))))
         mode = self.opts.branch_mode
         if mode == "auto": mode = "rows" if len(reqs) <= self.opts.rows_max_requests else "two_pass"
@@ -605,6 +658,7 @@ class Engine:
         else:
             content = self.run(Level(c_ids, c_pos, [0] * len(reqs) if root is not None else None), root, want_state=True)
             branches = self.run(Level(b_ids, b_pos, b_par), content, want_state=False)
+        self.tick("call:readout")
         rows = []
         for s, (d, oe) in enumerate(picks):
             off = branches.cu[s]
