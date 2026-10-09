@@ -1,0 +1,24 @@
+{
+ "T": 0.3518,
+ "n": 724,
+ "ece_before": 0.021388888888889,
+ "ece_after": 0.01641121842665362,
+ "fitted_at": 1791484738248,
+ "bucket": {
+  "judge": "jev-latest",
+  "rules_ver": "rules@1e20fa7936f8",
+  "scene": "comment",
+  "n_options": 3,
+  "question": "injection_guard"
+ },
+ "source": "scripts/fit-calib.ts; ece_* on the 20% held out",
+ "held_out": {
+  "n": 180,
+  "nll_before": 0.048810715528007,
+  "nll_after": 0.028565687648653786,
+  "ece_before": 0.021388888888889,
+  "ece_after": 0.01641121842665362
+ },
+ "carried_from": "rules@0c46158a17ee",
+ "carried_at": 1791511206813
+}

@@ -13,6 +13,9 @@ question:
   violation_option: violate
   pass_choices: [none]
 thresholds: { block: 0.92, pass: 0.10, keyed_by_option_count: true }
+# agent stage only (temporary, dev plan 2026-10-08 §3.1 problem 1): chosen on 177 labelled validation items the fast path
+# sends to the agent (eval-test.ts agent-lines, bound: at most 1 error per class); the fast path keeps the line above
+agent_thresholds: { block: 0.65, pass: 0.10 }
 contract_tests:
   - { id: c1, kind: obvious_positive, ref: fx/m3-1, expect: violate, required: true }
   - { id: c3, kind: obvious_negative, ref: fx/m3-3, expect: pass, required: true }

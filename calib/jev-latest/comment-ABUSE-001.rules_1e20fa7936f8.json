@@ -1,0 +1,24 @@
+{
+ "T": 1.379,
+ "n": 1312,
+ "ece_before": 0.05355491329479778,
+ "ece_after": 0.056987687965094805,
+ "fitted_at": 1791484738199,
+ "bucket": {
+  "judge": "jev-latest",
+  "rules_ver": "rules@1e20fa7936f8",
+  "scene": "comment",
+  "n_options": 3,
+  "question": "ABUSE-001"
+ },
+ "source": "scripts/fit-calib.ts; ece_* on the 20% held out",
+ "held_out": {
+  "n": 346,
+  "nll_before": 0.40411675356607846,
+  "nll_after": 0.38483920642141,
+  "ece_before": 0.05355491329479778,
+  "ece_after": 0.056987687965094805
+ },
+ "carried_from": "rules@0c46158a17ee",
+ "carried_at": 1791511206813
+}
