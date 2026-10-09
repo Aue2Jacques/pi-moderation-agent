@@ -20,6 +20,8 @@
     "demo": "node --experimental-strip-types --no-warnings scripts/console.ts --demo",
     "console": "node --experimental-strip-types --no-warnings scripts/console.ts",
     "console:build": "pnpm --filter @mod/console run build",
+    "e2e:console": "node --experimental-strip-types --no-warnings test/e2e/console-demo.ts",
+    "e2e:browser": "node --experimental-strip-types --no-warnings test/e2e/console-browser.ts",
     "fixtures-check": "node --experimental-strip-types --no-warnings scripts/fixtures-check.ts"
   },
   "devDependencies": {
@@ -27,6 +29,7 @@
     "@earendil-works/pi-ai": "1.0.4",
     "@earendil-works/pi-durable": "1.0.4",
     "@types/node": "22.19.0",
+    "playwright-core": "1.63.0",
     "typescript": "5.9.3",
     "vitest": "3.2.4",
     "yaml": "2.8.1"

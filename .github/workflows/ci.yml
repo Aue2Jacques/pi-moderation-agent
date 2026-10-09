@@ -19,6 +19,7 @@ jobs:
       - run: pnpm run console:build   # the web console must build (G serves packages/console/dist)
       - run: pnpm run test:unit
       - run: pnpm run test:harness
+      - run: pnpm run e2e:console   # demo mode end to end: scripts/console.ts --demo, then HTTP only
       - run: pnpm run redact-scan
       - run: bash scripts/fetch-fixtures.sh   # fixtures present and not stale: an engineering check
   python:

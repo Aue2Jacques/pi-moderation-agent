@@ -1,7 +1,7 @@
 // One command for the web console: build it if needed, start G (which serves it) and W, stop both on Ctrl-C.
-// usage: node --experimental-strip-types scripts/console.ts [--demo] [--keep] [--build] [--port 8080]
-//   --demo   demo mode (DEMO=1): scripted judge and agent, no .env, no API key; its own app.db under data/demo/,
-//            emptied on every start unless --keep
+// usage: node --experimental-strip-types scripts/console.ts [--demo] [--keep] [--build] [--port 8080] [--data dir]
+//   --demo   demo mode (DEMO=1): scripted judge and agent, no .env, no API key; its own app.db under data/demo/
+//            (or --data dir), emptied on every start unless --keep
 //   (none)   real mode: G and W read .env as usual (JEV_BASE_URL may point at Jev or kevfast; RELAY_* for the agent)
 //   --build  rebuild the console even when packages/console/dist exists
 // pnpm run demo / pnpm run console are the short forms.
@@ -25,7 +25,7 @@ if (has("--build") || !existsSync(join(dist, "index.html"))) {
 
 const env: NodeJS.ProcessEnv = { ...process.env, G_PORT: String(port), W_PORT: String(port + 1), CONSOLE_DIR: dist };
 if (demo) {
-  const dir = join(ROOT, "data", "demo");
+  const dir = resolve(opt("--data", join(ROOT, "data", "demo")));
   if (!has("--keep")) rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   Object.assign(env, { DEMO: "1", APP_DB: join(dir, "app.db"), SESSION_DB: join(dir, "session.sqlite"), W_LOCK: join(dir, "w.lock.db"), HUMAN_REVIEW_TOKEN: env["HUMAN_REVIEW_TOKEN"] ?? "demo-token" });
