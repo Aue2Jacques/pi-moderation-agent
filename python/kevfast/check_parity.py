@@ -1,5 +1,6 @@
 """GPU checks against kev's own path (DecisionModel.probs on kev.model.encode), same checkpoint, same texts:
-  native  kevfast native/full vs kev on the native record: must agree to bf16 noise
+  native  kevfast native/full (two_pass, dense padded + CUDA graphs) vs kev on the native record: must agree to bf16 noise
+  *-varlen  two_pass as packed varlen passes (dense=False)
   *-rows  the same with branch_mode=rows (one pass, the comment recomputed per question), 16 requests per call
   rules-rows-graph  one request per call: the padded rows path replayed from CUDA graphs
   native-fp8 (--fp8)  fp8=on against kev in bf16: the FP8 rounding drift (expected to exceed bf16 noise)
@@ -45,8 +46,9 @@ def kev_rows_first(t):
 
 
 engines = {"native": Engine(tok, model, Options(branch_mode="two_pass")), "rules": Engine(tok, model, Options(layout="rules_first", branch_mode="two_pass")),
+           "native-varlen": Engine(tok, model, Options(branch_mode="two_pass", dense=False)), "rules-varlen": Engine(tok, model, Options(layout="rules_first", branch_mode="two_pass", dense=False)),
            "native-rows": Engine(tok, model, Options(branch_mode="rows")), "rules-rows": Engine(tok, model, Options(layout="rules_first", branch_mode="rows"))}
-checks = ["native", "rules", "native-rows", "rules-rows", "rules-rows-graph"] + (["native-fp8"] if "--fp8" in sys.argv else [])
+checks = ["native", "rules", "native-varlen", "rules-varlen", "native-rows", "rules-rows", "rules-rows-graph"] + (["native-fp8"] if "--fp8" in sys.argv else [])
 for check in checks:
     if check == "native-fp8":   # last: fp8=on frees the bf16 weights; the reference answers below are computed first
         refs = {}
@@ -77,4 +79,6 @@ for check in checks:
             for a, b in zip(ref, g):
                 a, b = a.float().cpu(), b.float().cpu()
                 dps.append(float((a - b).abs().max())); flips += int(a.argmax() != b.argmax()); total += 1
+    for e in engines.values(): e.graphs.clear(); e.graph_pool = None
+    import torch; torch.cuda.empty_cache()
     print(json.dumps({"check": check, "questions": total, "max_dp": round(max(dps), 4), "mean_dp": round(st.mean(dps), 5), "top_choice_changed": flips}), flush=True)

@@ -28,6 +28,8 @@ Switches (Options, or KF_* environment variables for serve.py):
                kernel launches); auto: rows when a call has at most rows_max_requests requests. Same answers either way.
   cuda_graphs  rows calls run right-padded (pads after a row's last token change nothing it reads) in length buckets of
                16 tokens, each (rows, bucket) captured once as a CUDA graph and replayed: no per-kernel launch cost
+  dense      two_pass calls run right-padded in 16-token buckets and batch buckets (8, 16, 24, 32, 48, 64, ...), as one
+             CUDA graph per bucket when cuda_graphs is on; off: packed varlen passes (no padding, no graphs)
   max_pass_tokens  a call is split into groups of requests whose content + branch tokens fit this budget (16 GB card:
                    one pass of ~14k branch tokens ran out of memory)
 Checkpoints are trained on one layout; switching layout / questions / confirm changes what the model reads, so answers are
@@ -59,6 +61,8 @@ class Options:
     rows_max_requests: int = 4
     cuda_graphs: bool = True           # rows calls: right-padded to a length bucket and replayed from a captured graph
     graph_max_tokens: int = 1024       # only rows calls up to this many padded tokens use graphs (memory: each graph keeps its buffers)
+    dense: bool = False                # two_pass calls: right-padded dense passes (graph-capturable) instead of packed varlen; measured slower at batch >= 16 (compute-bound), so off
+    max_graphs: int = 48
 
     def __post_init__(self):
         if self.layout not in LAYOUTS: raise ValueError(f"layout {self.layout!r} not in {LAYOUTS}")
@@ -74,13 +78,14 @@ class Options:
                        fp8_min_tokens=int(env.get("KF_FP8_MIN_TOKENS", o.fp8_min_tokens)), max_batch=int(env.get("KF_MAX_BATCH", o.max_batch)),
                        max_pass_tokens=int(env.get("KF_MAX_PASS_TOKENS", o.max_pass_tokens)), branch_mode=env.get("KF_BRANCH_MODE", o.branch_mode),
                        rows_max_requests=int(env.get("KF_ROWS_MAX_REQUESTS", o.rows_max_requests)), cuda_graphs=env.get("KF_CUDA_GRAPHS", "on") != "off",
-                       graph_max_tokens=int(env.get("KF_GRAPH_MAX_TOKENS", o.graph_max_tokens)))
+                       graph_max_tokens=int(env.get("KF_GRAPH_MAX_TOKENS", o.graph_max_tokens)), dense=env.get("KF_DENSE", "off") == "on",
+                       max_graphs=int(env.get("KF_MAX_GRAPHS", o.max_graphs)))
 
     def describe(self) -> dict:
         return {"layout": self.layout, "questions": self.questions, "confirm": self.confirm, "fp8": self.fp8,
                 "fp8_min_tokens": self.fp8_min_tokens, "max_batch": self.max_batch, "max_pass_tokens": self.max_pass_tokens,
                 "branch_mode": self.branch_mode, "rows_max_requests": self.rows_max_requests, "cuda_graphs": self.cuda_graphs,
-                "graph_max_tokens": self.graph_max_tokens}
+                "graph_max_tokens": self.graph_max_tokens, "dense": self.dense, "max_graphs": self.max_graphs}
 
 
 # ---------------------------------------------------------------- linear layers (bf16 / FP8)
@@ -140,23 +145,30 @@ class Engine:
         self.state_id = tok.convert_tokens_to_ids(SPECIAL[0])
         self.q_id, self.o_id, self.c_id, self.d_id = (tok.convert_tokens_to_ids(t) for t in SPECIAL[1:])
         self.layers = []
+        freed = getattr(model, "_kf_fp8_on", None)       # an earlier fp8=on engine freed the bf16 weights; reuse its FP8 copies
+        if freed is not None and opts.fp8 != "on":
+            raise ValueError("this model's bf16 projection weights were freed by an fp8=on engine; load it again for fp8 off/auto")
         with torch.no_grad():
-            for layer in self.lm.layers:
+            for li, layer in enumerate(self.lm.layers):
                 if not hasattr(layer, "input_norm_weight"):
                     raise ValueError("kevfast needs the checkpoint loaded with kev's fused kernels (LoadOptions(fused=True))")
                 mix = layer.linear_attn if layer.block_type == "linear_attention" else layer.self_attn
-                L = {"type": layer.block_type, "layer": layer, "mix": mix,
-                     "in": Lin(mix.in_proj if layer.block_type == "linear_attention" else mix.qkv, opts.fp8, opts.fp8_min_tokens),
-                     "out": Lin((mix.out_proj if layer.block_type == "linear_attention" else mix.o_proj).weight, opts.fp8, opts.fp8_min_tokens),
-                     "gate_up": Lin(layer.mlp.gate_up, opts.fp8, opts.fp8_min_tokens),
-                     "down": Lin(layer.mlp.down_proj.weight, opts.fp8, opts.fp8_min_tokens)}
+                if freed is not None:
+                    L = {"type": layer.block_type, "layer": layer, "mix": mix, **freed[li]}
+                else:
+                    L = {"type": layer.block_type, "layer": layer, "mix": mix,
+                         "in": Lin(mix.in_proj if layer.block_type == "linear_attention" else mix.qkv, opts.fp8, opts.fp8_min_tokens),
+                         "out": Lin((mix.out_proj if layer.block_type == "linear_attention" else mix.o_proj).weight, opts.fp8, opts.fp8_min_tokens),
+                         "gate_up": Lin(layer.mlp.gate_up, opts.fp8, opts.fp8_min_tokens),
+                         "down": Lin(layer.mlp.down_proj.weight, opts.fp8, opts.fp8_min_tokens)}
                 self.layers.append(L)
-            if opts.fp8 == "on":   # the FP8 copies replace the bf16 weights
+            if opts.fp8 == "on" and freed is None:   # the FP8 copies replace the bf16 weights
                 for L in self.layers:
                     mix, layer = L["mix"], L["layer"]
                     if L["type"] == "linear_attention": mix.in_proj = None; mix.out_proj = None
                     else: mix.qkv = None; mix.o_proj = None
                     layer.mlp.gate_up = None; layer.mlp.down_proj = None
+                model._kf_fp8_on = [{k: L[k] for k in ("in", "out", "gate_up", "down")} for L in self.layers]
                 torch.cuda.empty_cache()
         self.prefix_cache: dict[tuple, LevelOut] = {}
         self.graphs: dict[tuple, dict] = {}
@@ -351,15 +363,144 @@ class Engine:
             with torch.cuda.stream(s):
                 for _ in range(2): self.run_padded(g["ids"], g["pos"], root)    # warm-up: triton autotune / compile outside the capture
             torch.cuda.current_stream().wait_stream(s)
+            torch.cuda.synchronize(); torch.cuda.empty_cache()
             if self.graph_pool is None: self.graph_pool = torch.cuda.graph_pool_handle()
             g["graph"] = torch.cuda.CUDAGraph()
             with torch.cuda.graph(g["graph"], pool=self.graph_pool):
                 g["out"] = self.run_padded(g["ids"], g["pos"], root)
-            if len(self.graphs) >= 32: self.graphs.pop(next(iter(self.graphs)))
+            if len(self.graphs) >= self.opts.max_graphs: self.graphs.pop(next(iter(self.graphs)))
             self.graphs[key] = g
         self._fill(g, b_ids, b_pos)
         g["graph"].replay()
         return g["out"]
+
+    # ------------------------------------------------------------ dense two-pass (large calls), CUDA-graph capturable
+    @torch.no_grad()
+    def run_dense(self, ids, pos, valid, lens, root, content=None, par=None, picks=None):
+        """Rows right-padded to [R, L]; valid [R, L]; lens [R]. Content level (content=None): rows continue `root` and the
+        level's final states are returned (pads change nothing: in DeltaNet a padded step has gate 0 and beta 0, so the
+        recurrent state passes through; the conv state is taken at each row's own end; attention never reads a pad key).
+        Branch level: rows continue content rows par[r] (states and keys gathered per layer). picks [R, K]: positions to
+        return from the final hidden states. GPU work only."""
+        from fla.modules.activations import sigmoidglu, swiglu
+        from fla.modules.conv import causal_conv1d
+        from fla.modules.fused_norm_gate import rms_norm_gated
+        from fla.modules.layernorm import rms_norm
+        from fla.ops.gated_delta_rule import chunk_gated_delta_rule
+        from transformers.models.qwen3_5.modeling_qwen3_5 import apply_rotary_pos_emb
+        R, L = ids.shape
+        dev = ids.device
+        want = content is None
+        x = self.lm.embed_tokens(ids)
+        cos, sin = self.lm.rotary_emb(x, pos[None].expand(3, R, L))
+        P = 0 if root is None else root.cu[-1]
+        parts = [] if root is None else [torch.ones(R, L, P, dtype=torch.bool, device=dev)]
+        if content is not None: parts.append(content["valid"].index_select(0, par)[:, None, :].expand(R, L, -1))
+        parts.append(torch.ones(L, L, dtype=torch.bool, device=dev).tril()[None] & valid[:, None, :])
+        mask = torch.cat(parts, 2)[:, None]
+        padq = (~valid)[..., None]
+        st = {"conv": [], "rec": [], "k": [], "v": [], "valid": valid}
+        for li, Ly in enumerate(self.layers):
+            layer, mix = Ly["layer"], Ly["mix"]
+            h = rms_norm(x, layer.input_norm_weight, None, eps=layer.input_layernorm.eps)
+            if Ly["type"] == "linear_attention":
+                mixed, z, b, a = Ly["in"](h.reshape(R * L, -1)).reshape(R, L, -1).split(mix.splits, -1)
+                a = a.masked_fill(padq, -1e4); b = b.masked_fill(padq, -1e4)     # padded steps: no decay, no write
+                if content is not None:
+                    ci, ri = content["conv"][li].index_select(0, par), content["rec"][li].index_select(0, par)
+                elif root is not None:
+                    ci = root.conv[li].expand(R, *root.conv[li].shape[1:]).contiguous(); ri = root.rec[li].expand(R, *root.rec[li].shape[1:]).contiguous()
+                else:
+                    ci = ri = None
+                if want:
+                    W = mix.conv_weight.shape[-1]
+                    init = ci.to(mixed.dtype) if ci is not None else torch.zeros(R, mixed.shape[-1], W, dtype=mixed.dtype, device=dev)
+                    full = torch.cat([init, mixed.transpose(1, 2)], 2)                       # [R, D, W + L]
+                    idx = (lens[:, None] + torch.arange(W, device=dev)[None])[:, None, :].expand(R, mixed.shape[-1], W)
+                    st["conv"].append(full.gather(2, idx).contiguous())                     # the last W real inputs
+                mixed, _ = causal_conv1d(mixed, mix.conv_weight, None, initial_state=ci, output_final_state=False, activation="silu")
+                q, k, v = mixed.split([mix.key_dim, mix.key_dim, mix.value_dim], -1)
+                o, rec = chunk_gated_delta_rule(q.reshape(R, L, -1, mix.head_k_dim), k.reshape(R, L, -1, mix.head_k_dim), v.reshape(R, L, -1, mix.head_v_dim),
+                                                g=a, beta=b, initial_state=ri, output_final_state=want,
+                                                use_qk_l2norm_in_kernel=True, use_gate_in_kernel=True, A_log=mix.A_log, dt_bias=mix.dt_bias, use_beta_sigmoid_in_kernel=True)
+                if want: st["rec"].append(rec); st["k"].append(None); st["v"].append(None)
+                o = rms_norm_gated(o, z.reshape(R, L, -1, mix.head_v_dim), mix.norm.weight, None, activation="swish", eps=mix.norm.variance_epsilon)
+                h = Ly["out"](o.reshape(R * L, -1)).reshape(R, L, -1)
+            else:
+                q_gate, k, v = Ly["in"](h.reshape(R * L, -1)).reshape(R, L, -1).split(mix.splits, -1)
+                hd = mix.head_dim
+                q, gate = q_gate.reshape(R, L, -1, 2 * hd).chunk(2, -1)
+                q = rms_norm(q, mix.q_norm_weight, None, eps=mix.q_norm.eps).transpose(1, 2)
+                k = rms_norm(k.reshape(R, L, -1, hd), mix.k_norm_weight, None, eps=mix.k_norm.eps).transpose(1, 2)
+                q, k = apply_rotary_pos_emb(q, k, cos, sin)
+                v = v.reshape(R, L, -1, hd).transpose(1, 2)
+                if want: st["conv"].append(None); st["rec"].append(None); st["k"].append(k); st["v"].append(v)
+                ks, vs = [], []
+                if root is not None: ks.append(root.k[li][None].expand(R, -1, -1, -1)); vs.append(root.v[li][None].expand(R, -1, -1, -1))
+                if content is not None: ks.append(content["k"][li].index_select(0, par)); vs.append(content["v"][li].index_select(0, par))
+                ks.append(k); vs.append(v)
+                o = F.scaled_dot_product_attention(q, torch.cat(ks, 2), torch.cat(vs, 2), attn_mask=mask, scale=mix.scaling, enable_gqa=True)
+                h = Ly["out"](sigmoidglu(gate.reshape(R * L, -1), o.transpose(1, 2).reshape(R * L, -1))).reshape(R, L, -1)
+            h, residual = rms_norm(h, layer.post_norm_weight, None, residual=x, eps=layer.post_attention_layernorm.eps, prenorm=True)
+            x = residual + Ly["down"](swiglu(*Ly["gate_up"](h.reshape(R * L, -1)).chunk(2, -1))).reshape(R, L, -1)
+        if want: return st
+        hid = self.lm.norm(x.gather(1, picks[..., None].expand(-1, -1, x.shape[-1]))).float()   # [R, K, d]
+        return hid
+
+    def dense_graph(self, c_rows, b_rows, b_par, picks, root):
+        """Two passes (content, then branches) right-padded to buckets and replayed from one CUDA graph per
+        (content rows, content bucket, branch rows, branch bucket, picks per branch, prefix). -> [NB, K, d]."""
+        B, NB, K = len(c_rows), len(b_rows), max(len(p) for p in picks)
+        Lc = -(-max(len(r) for r, _ in c_rows) // 16) * 16
+        Lb = -(-max(len(r) for r, _ in b_rows) // 16) * 16
+        Bb = next((x for x in (8, 16, 24, 32, 48, 64, 96, 128) if x >= B), B)
+        NBb = Bb * -(-NB // B)                                   # branches per request stay the same in dummy rows
+        key = ("dense", Bb, Lc, NBb, Lb, K, None if root is None else id(root))
+        dev = self.model.device
+        g = self.graphs.get(key)
+        def fill(g):
+            pad_id = self.tok.pad_token_id or 0
+            def rows(lst, Rb, Lb_):
+                ids = torch.full((Rb, Lb_), pad_id, dtype=torch.long); pos = torch.zeros(Rb, Lb_, dtype=torch.long)
+                val = torch.zeros(Rb, Lb_, dtype=torch.bool); ln = torch.ones(Rb, dtype=torch.long)
+                for r in range(Rb):
+                    a, p = lst[r] if r < len(lst) else lst[-1]        # dummy rows repeat the last real row
+                    ids[r, :len(a)] = torch.tensor(a); pos[r, :len(p)] = torch.tensor(p); val[r, :len(a)] = True; ln[r] = len(a)
+                    if len(p) < Lb_: pos[r, len(p):] = p[-1] + 1 + torch.arange(Lb_ - len(p))
+                return ids, pos, val, ln
+            for name, t in zip(("c_ids", "c_pos", "c_valid", "c_lens"), rows(c_rows, Bb, Lc)): g[name].copy_(t, non_blocking=True)
+            for name, t in zip(("b_ids", "b_pos", "b_valid", "b_lens"), rows(b_rows, NBb, Lb)): g[name].copy_(t, non_blocking=True)
+            par = torch.tensor(list(b_par) + [b_par[-1]] * (NBb - NB), dtype=torch.long)
+            pk = torch.zeros(NBb, K, dtype=torch.long)
+            for r, p in enumerate(picks): pk[r, :len(p)] = torch.tensor(p)
+            g["b_par"].copy_(par, non_blocking=True); g["picks"].copy_(pk, non_blocking=True)
+        if g is None:
+            g = {n: torch.zeros(sh, dtype=dt, device=dev) for n, sh, dt in (
+                ("c_ids", (Bb, Lc), torch.long), ("c_pos", (Bb, Lc), torch.long), ("c_valid", (Bb, Lc), torch.bool), ("c_lens", (Bb,), torch.long),
+                ("b_ids", (NBb, Lb), torch.long), ("b_pos", (NBb, Lb), torch.long), ("b_valid", (NBb, Lb), torch.bool), ("b_lens", (NBb,), torch.long),
+                ("b_par", (NBb,), torch.long), ("picks", (NBb, K), torch.long))}
+            fill(g)
+            def body():
+                c = self.run_dense(g["c_ids"], g["c_pos"], g["c_valid"], g["c_lens"], root)
+                return self.run_dense(g["b_ids"], g["b_pos"], g["b_valid"], g["b_lens"], root, content=c, par=g["b_par"], picks=g["picks"])
+            if self.opts.cuda_graphs:
+                s = torch.cuda.Stream(); s.wait_stream(torch.cuda.current_stream())
+                with torch.cuda.stream(s):
+                    for _ in range(2): body()
+                torch.cuda.current_stream().wait_stream(s)
+                torch.cuda.synchronize(); torch.cuda.empty_cache()     # hand the warm-up's cached blocks back before the capture pool grows
+                if self.graph_pool is None: self.graph_pool = torch.cuda.graph_pool_handle()
+                g["graph"] = torch.cuda.CUDAGraph()
+                with torch.cuda.graph(g["graph"], pool=self.graph_pool):
+                    g["out"] = body()
+                if len(self.graphs) >= self.opts.max_graphs: self.graphs.pop(next(iter(self.graphs)))
+                self.graphs[key] = g
+            else:
+                g["body"] = body
+        else:
+            fill(g)
+        if "graph" in g: g["graph"].replay(); return g["out"][:NB]
+        return g["body"]()[:NB]
 
     def warm_graphs(self, prefix: str | None, questions: list[dict], max_tokens: int = 256, requests: int = 1):
         """Capture the rows graphs a call of `requests` requests with these questions can hit, for every 16-token bucket up
@@ -413,7 +554,9 @@ class Engine:
         if any(r["prefix"] != pre for r in reqs): raise ValueError("one call, one prefix")
         cost = [len(user_tokens(self.tok, r["content"])) + sum(len(self.branch_tokens(q)) for q in r["questions"]) for r in reqs]
         groups, cur, used = [], [], 0
-        for i, c in enumerate(cost):
+        order = sorted(range(len(reqs)), key=cost.__getitem__)          # similar lengths together: less padding
+        for i in order:
+            c = cost[i]
             if cur and used + c > self.opts.max_pass_tokens: groups.append(cur); cur, used = [], 0
             cur.append(i); used += c
         groups.append(cur)
@@ -452,6 +595,13 @@ class Engine:
             return out
         if mode == "rows":
             branches = self.run(Level(b_ids, b_pos, [0] * len(b_ids) if root is not None else None), root, want_state=False)
+        elif self.opts.dense:
+            H = self.dense_graph(list(zip(c_ids, c_pos)), list(zip(b_ids, b_pos)), b_par, [[d] + oe for d, oe in picks], root)   # [NB, K, d]
+            X = torch.cat([H[r, :1 + len(oe)] for r, (d, oe) in enumerate(picks)])
+            ps = list(self.model._readout_many(X, ks))
+            out, it = [], iter(ps)
+            for r in reqs: out.append([next(it) for _ in r["questions"]])
+            return out
         else:
             content = self.run(Level(c_ids, c_pos, [0] * len(reqs) if root is not None else None), root, want_state=True)
             branches = self.run(Level(b_ids, b_pos, b_par), content, want_state=False)
