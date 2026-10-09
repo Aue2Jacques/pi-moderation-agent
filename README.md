@@ -13,6 +13,7 @@
 ## 现在在哪一步
 
 **2026-10-09 补充**：
+- **Web 控制台与演示模式**：`pnpm run demo` 一条命令起 G、W 和控制台（http://127.0.0.1:8080/），不需要 key 和 GPU；`pnpm run console` 是真实模式（读 `.env`）。页面：提交与实时追踪、审次、人工复核、申诉、概览、规则与版本。演示模式只把判官和 agent 模型换成脚本，其余链路（快判、提交检查、Pi 会话、人工、申诉）与真实模式相同。说明、接口、测试和不足见 [docs/console-2026-10-09.md](docs/console-2026-10-09.md)。
 - **开源判官微调**：在一张 RTX 5060 Ti 16GB 上，从发布版 Kev-4B 续训两版（v0 基线、v1 清洗后），每版约 1 小时。测试集 3,002 条上：
   - 辱骂 AUROC 0.924 → 0.964，营销 0.980 → 0.999。Jev 是 0.964 / 0.993。
   - 违规被快判自动放行 9.4% → 2.0%，正常误处置 0.3%。
@@ -66,7 +67,7 @@
 | 开源判官微调（Kev-4B） | ✓ 训练记录导出（与快判同形，排除校准行）、算力服务器训练脚本 | ✓ 同一评测流程（run-judge） | v0 / v1 各一次 | 测试集 AUROC 辱骂 0.964、营销 0.999（仅供参考，标签同源） |
 | 推理引擎 kevfast | ✓ 每项优化一个开关 | ✓ /v1/systemone 协议，评测脚本不改 | 与 Kev 一致性比对、完整测试集端到端、HTTP 压测（并发 1–256，0 失败） | 单卡约 50 条/秒（HTTP）、单条约 40 ms |
 
-测试：unit 155、harness 81、Python 15（2026-10-09）；kevfast 的一致性检查与压测只能在 GPU 上跑（`python -m kevfast.check_parity` / `bench` / `loadtest`），没进 CI。`pnpm run check` 同时类型检查 packages、test、scripts。
+测试：unit 164、harness 87、Python 15，控制台端到端 28 项检查、浏览器冒烟 10 项（2026-10-09）；kevfast 的一致性检查与压测只能在 GPU 上跑（`python -m kevfast.check_parity` / `bench` / `loadtest`），没进 CI。`pnpm run check` 同时类型检查 packages、test、scripts。
 
 **计划**：[docs/dev-plan-2026-10-08.md](docs/dev-plan-2026-10-08.md)（各阶段执行记录在 3.1、5.1 节）。
 
@@ -80,10 +81,20 @@
 6. **校准版本是整个目录的哈希**：沿用校准会改变现行审次的校准版本号。
 7. 图片审核接口、训练/验证/测试比例（现临时 70/15/15）、agent 阶段阈值、暴力规则边界等待负责人定。
 
+## 启动控制台
+
+| 模式 | 命令 | 需要 |
+|---|---|---|
+| 演示 | `pnpm install && pnpm run demo` | 只要 Node 22 和 pnpm；不读 `.env`，判官和 agent 是脚本，数据在 `data/demo/`（每次启动清空，`--keep` 保留） |
+| 真实 | `pnpm install && pnpm run console` | `.env` 里的 `JEV_BASE_URL` / `JEV_API_KEY`（Jev，或开源判官 kevfast 的地址）、`RELAY_BASE_URL` / `RELAY_API_KEY`（agent 模型）；校准默认 strict |
+
+两种模式都打开 http://127.0.0.1:8080/ （`--port` 改端口）。第一次启动会自动构建前端（`packages/console`）。演示顺序和每条示例的路径见 [docs/console-2026-10-09.md](docs/console-2026-10-09.md) 第 2 节。
+
 ## 文档
 
 | 文件 | 内容 |
 |---|---|
+| [docs/console-2026-10-09.md](docs/console-2026-10-09.md) | **Web 控制台与演示模式**：怎么启动、页面、接口、时间线怎么从账本重建、演示模式的脚本判官与 agent、测试、不足 |
 | [docs/project-doc-v2.md](docs/project-doc-v2.md) | **项目文档（权威）**：目标、业务、范围与分类体系、企业级属性、架构、模块设计、Pi 接口映射、数据、评测、演示、计划、风险；附录 C/D/E 是三轮审查的修订记录 |
 | [docs/dev-doc-v1.md](docs/dev-doc-v1.md) | **开发文档 v1.5**（v1.4 + 第九轮验收审查处理，附录 U；§14.1 四态表）：仓库结构、app.db DDL、状态转换表、事务边界 T1–T16、有效判官结果与 allowedActions、错误码、接口、租约/恢复/预算、Pi 绑定写法（按 pi-durable 1.0.4 的 d.ts 核对）、评测执行协议、用例目录与 CI、部署配置、分阶段开工与停止条件；附录 W 是 v2.3 契约覆盖表，附录 V/X 是第八、七轮处理记录；旧版在 docs/history/ |
 | [docs/reviews/](docs/reviews/) | 十一轮审查原文：可行性、设计、harness/agent 角度、基于 GitHub 的终审、开发文档 v1.0 审查、v1.1 审查、v1.2 自审、v1.3 审查、阶段 1–4 验收审查、整仓审阅（bbe6340）、方向与优先级（bbe6340） |
