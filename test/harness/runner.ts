@@ -20,11 +20,13 @@ const reviewId = env("REVIEW_ID");
 const fx = await makeWorker({ db, storage, steps: [], workerId: env("WORKER_ID"), cfg, admitMax: 1 });
 setScript(fx, resolving(db, () => reviewId, PASS_SCRIPT));
 const t0 = Date.now();
-// heartbeat like a real W (scripts/start.sh -> worker.startLoops): without it a generation that outlasts the short test
-// lease under CPU load lost its lease mid-run and the run ended differently (flaky baseline / H-02 under load)
+const started = await fx.worker.start();
+// heartbeat like a real W (worker main: start() first, then startLoops()): without it a generation that outlasts the
+// short test lease under CPU load lost its lease mid-run (flaky baseline / H-02 under load). It must start AFTER
+// start(): a heartbeat ends with pumpHost(), and running that during startup recovery is an ordering production never
+// has — on CI it sent a recovering review to a human (H-22) or left nothing to resume (R2).
 const hb = setInterval(() => { fx.worker.heartbeat().catch(() => {}); }, Math.max(200, Math.floor(cfg.leaseTtlMs / 3)));
 hb.unref();
-const started = await fx.worker.start();
 log({ milestone: "started", ...started, startAt: t0, resumedAt: fx.worker.resumedAt, callsBeforeResume: fx.calls.filter((c) => c.at < (fx.worker.resumedAt ?? 0)).length, elapsedMs: Date.now() - t0 });
 const admitted = await fx.worker.admitOnce();
 log({ milestone: "admitted", admitted });
