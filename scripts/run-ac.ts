@@ -11,7 +11,7 @@
 // fetch from its task brief. Everything else is the same: case pool, main model, rules, calibration, evidence, budget,
 // deadline and the submit path. Every run writes a manifest (code commit, rules / calib / prices versions, models, case
 // pool sha, parameters, start / end, output sha) next to its results.
-// usage: node --experimental-strip-types scripts/run-ac.ts prepare|run|report ...   (RELAY_* / JEV_* / CALIB_DIR from env or .env)
+// usage: CALIB_DIR=calib node --experimental-strip-types scripts/run-ac.ts prepare|run|report ...   (RELAY_* / JEV_* from env or .env; CALIB_DIR required)
 import { execSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -37,7 +37,11 @@ if (!phase || !outDir) throw new Error("usage: run-ac.ts prepare <outDir> [limit
 const CASES = env("CASE_POOL", "data/cases/pool-v1.jsonl");
 const AGENT = env("AGENT_MODEL", "qwen3.8-flash");
 const JEV = env("JEV_MODEL", "jev-latest");
-const CALIB = env("CALIB_DIR", "");   // empty -> identity (raw probabilities), recorded in the manifest
+// required: an unset CALIB_DIR used to fall back to identity silently and a whole run was void (dev plan problem 12);
+// CALIB_DIR=identity asks for raw probabilities on purpose
+const CALIB_ARG = process.env.CALIB_DIR;
+if (!CALIB_ARG) throw new Error("set CALIB_DIR (e.g. calib), or CALIB_DIR=identity for raw probabilities");
+const CALIB = CALIB_ARG === "identity" ? "" : CALIB_ARG;   // "" -> identity, recorded in the manifest
 const ADMIT = Number(env("ADMIT_MAX", "8"));
 // queued reviews get their deadline re-based to the start of the arm's run (base.db was made earlier; the scene's 60 s
 // would have passed), the same window for both arms; latency is measured per case separately
@@ -187,6 +191,11 @@ if (phase === "prepare") {
     modelFor: () => ({ provider: "a6api", modelId: AGENT }), instructions: INSTR[arm],
   });
   const t0 = now();
+  // a run whose queue cannot drain inside the window ends with most reviews timed out in the queue (dev plan problem 12):
+  // about 30 s per review at ADMIT_MAX in parallel (agent median 21–25 s on test-v1); refuse unless the window fits or
+  // ALLOW_SHORT_DEADLINE=1
+  const queuedN = (db.prepare("SELECT COUNT(*) AS n FROM review WHERE state='queued'").get() as { n: number }).n;
+  if (queuedN / ADMIT * 30_000 > DEADLINE_MS && process.env.ALLOW_SHORT_DEADLINE !== "1") throw new Error(`${queuedN} queued reviews at ADMIT_MAX=${ADMIT} need about ${Math.ceil(queuedN / ADMIT / 2)} min; AGENT_DEADLINE_MS=${DEADLINE_MS} is shorter (set it, or ALLOW_SHORT_DEADLINE=1)`);
   const rebased = db.prepare("UPDATE review SET deadline_at=?, updated_at=? WHERE state='queued'").run(t0 + DEADLINE_MS, t0).changes;
   await worker.start();
   worker.startLoops();
