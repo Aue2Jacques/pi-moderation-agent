@@ -12,7 +12,35 @@
 
 ## 现在在哪一步
 
-**一句话**（2026-10-08 晚）：第 ① 阶段（文本主流程收口）、第 ② 阶段（案例池、agent 任务说明、A/C 对比）已完成并各跑过一次真实模型；第 ③ 阶段做了人工与申诉、规则灰度发布、反馈回流、agent 层注入配对，图片审核等负责人定接口；第 ④ 阶段已冻结正式测试集（split-v1，3,002 条），测试集上有了快判成绩和一次完整系统端到端结果（自动完成 60.4%，自动处置错误 30 / 3,002，见评测报告）。所有实验数字都只是一次运行、仅供参考。CI：`ci`（工程检查）必须全绿；`model-quality`（真实判官契约）单独报告，仍为红（c1、c2）。
+**2026-10-09 补充**：
+- **开源判官微调**：在一张 RTX 5060 Ti 16GB 上，从发布版 Kev-4B 续训两版（v0 基线、v1 清洗后），每版约 1 小时。测试集 3,002 条上：
+  - 辱骂 AUROC 0.924 → 0.964，营销 0.980 → 0.999。Jev 是 0.964 / 0.993。
+  - 违规被快判自动放行 9.4% → 2.0%，正常误处置 0.3%。
+  - 训练标签与测试集出自同一打标流程，和 Jev 比条件不完全对等。
+  - 报告：[reports/2026-10-09-kev4b-finetune.md](reports/2026-10-09-kev4b-finetune.md)。
+- **推理提速**：[python/kevfast/](python/kevfast/) 是一个可开关的推理引擎，可开关的优化有：
+  - 拼接不补齐
+  - 规则块前缀缓存、评论只算一次
+  - 短问题、去复问
+  - FP8
+  - 单次 / 两次计算
+  - CUDA graphs
+
+  每项都和 Kev 自身计算做过一致性比对，差异在 bf16 误差内。实测：
+  - 单卡吞吐：每秒 9.4 条 → 约 60 条（引擎），HTTP 服务约 50 条/秒。
+  - 单条耗时：206 ms → 约 40 ms。
+  - 作为 Kev 服务的直接替代跑完整判官评测，AUROC 与分流和原服务相同。
+
+  报告：[reports/2026-10-09-kev-inference-speed.md](reports/2026-10-09-kev-inference-speed.md)。
+- **数据**：
+  - 2 万条统一来源标签。
+  - 判官挑出 816 条可疑标签，按冻结流程重标，82% 确实改判。
+  - 验证集 3,035 条全量平台标签（[docs/eval-dataset-plan.md](docs/eval-dataset-plan.md) 4.3）。
+- **演示页**：[demo/index.html](demo/index.html) 是滚动驱动的产品式介绍页，静态文件，可直接部署；界面截图为示意。
+- **进行中**：按"规则前置 + 短问题"格式训练的 v2s，以及逐个开关的准确率对比，算力服务器上排队运行，结果出来后写入提速报告。
+
+
+**2026-10-08 晚的状态**：第 ① 阶段（文本主流程收口）、第 ② 阶段（案例池、agent 任务说明、A/C 对比）已完成并各跑过一次真实模型；第 ③ 阶段做了人工与申诉、规则灰度发布、反馈回流、agent 层注入配对，图片审核等负责人定接口；第 ④ 阶段已冻结正式测试集（split-v1，3,002 条），测试集上有了快判成绩和一次完整系统端到端结果（自动完成 60.4%，自动处置错误 30 / 3,002，见评测报告）。所有实验数字都只是一次运行、仅供参考。CI：`ci`（工程检查）必须全绿；`model-quality`（真实判官契约）单独报告，仍为红（c1、c2）。
 
 完成声明只用四种状态：**实现**（代码写了）/ **接通**（主流程或 CI 真的调用它）/ **故障验收**（在真实 G/W 入口下触发异常并核对终态）/ **效果**（冻结标注集上有数字）。
 
@@ -35,8 +63,10 @@
 | 评测集数据线 | ✓ 原文保留、家族、正式切分、依赖声明、运行清单（E1–E8 大部分） | – | – | 测试集 3,002 条：快判与端到端各一次（报告） |
 | 图片 | ✓ 临时最小通道（默认关闭；gemini-3.8-flash；线上接口待负责人定） | 设置 IMAGE_DIR + IMAGE_MODEL 才启用；否则含图一律转人审 | ✓ 5 项；6 张自制图真实探测 | ✗ 无校准，带图内容不会自动放行 |
 | 暴力类规则 | 草稿（未启用） | – | 8 条探测 | ✗ |
+| 开源判官微调（Kev-4B） | ✓ 训练记录导出（与快判同形，排除校准行）、算力服务器训练脚本 | ✓ 同一评测流程（run-judge） | v0 / v1 各一次 | 测试集 AUROC 辱骂 0.964、营销 0.999（仅供参考，标签同源） |
+| 推理引擎 kevfast | ✓ 每项优化一个开关 | ✓ /v1/systemone 协议，评测脚本不改 | 与 Kev 一致性比对、完整测试集端到端、HTTP 压测（并发 1–256，0 失败） | 单卡约 50 条/秒（HTTP）、单条约 40 ms |
 
-测试：unit 143、harness 67、Python 7。`pnpm run check` 同时类型检查 packages、test、scripts。
+测试：unit 155、harness 81、Python 15（2026-10-09）；kevfast 的一致性检查与压测只能在 GPU 上跑（`python -m kevfast.check_parity` / `bench` / `loadtest`），没进 CI。`pnpm run check` 同时类型检查 packages、test、scripts。
 
 **计划**：[docs/dev-plan-2026-10-08.md](docs/dev-plan-2026-10-08.md)（各阶段执行记录在 3.1、5.1 节）。
 
@@ -60,9 +90,13 @@
 | [docs/review-request-stage1-2026-10-08.md](docs/review-request-stage1-2026-10-08.md) | **第 ① 阶段审查请求**：范围、计划项 → 提交 → 回归测试对应表、按设计改变的行为、已知不足、希望重点看的问题、复现命令 |
 | [docs/methods-for-review-2026-10-08.md](docs/methods-for-review-2026-10-08.md) | **给审查用的做法说明**：参考的标准规范、数据组成、清洗、标注标准试标、切分与评测协议、图片审核计划；每部分写做法、理由、数据（仅供参考）和不足 |
 | [docs/project-status-2026-10-08.md](docs/project-status-2026-10-08.md) | 全盘状态汇总：七条线各在哪一步、待拍板、已定事项 |
-| [docs/eval-dataset-plan.md](docs/eval-dataset-plan.md) | 2 万条综合评测集方案与清洗记录 |
+| [docs/eval-dataset-plan.md](docs/eval-dataset-plan.md) | 2 万条综合评测集方案与清洗记录（4.3：来源标签统一、可疑标签重标、验证集全量打标） |
+| [docs/dev-plan-2026-10-08.md](docs/dev-plan-2026-10-08.md) | **当前开发计划**：各阶段执行记录、遇到的问题（3.1 节，含 10-09 新增 13、14）、待负责人定 |
+| [reports/2026-10-09-kev4b-finetune.md](reports/2026-10-09-kev4b-finetune.md) | Kev-4B 微调 v0 / v1 |
+| [reports/2026-10-09-kev-inference-speed.md](reports/2026-10-09-kev-inference-speed.md) | 推理提速：逐项测量、kevfast 开关、一致性、阶梯、压测、单卡上限 |
+| [demo/index.html](demo/index.html) | 演示页（静态，自行部署） |
 | [docs/policy/abuse-standard-v3.md](docs/policy/abuse-standard-v3.md) | 辱骂类统一标注标准 v3 与试标数据 |
-| [docs/dev-plan-2026-10-07.md](docs/dev-plan-2026-10-07.md) | **当前开发计划（草案）**：合并第十、十一轮审查；修复清单、裁决语义真值表、疑似分流、案例池、agent 接口、A/C 对比、待拍板事项 |
+| [docs/dev-plan-2026-10-07.md](docs/dev-plan-2026-10-07.md) | 上一版开发计划（已被 2026-10-08 版取代）：合并第十、十一轮审查；修复清单、裁决语义真值表、疑似分流、案例池、agent 接口、A/C 对比、待拍板事项 |
 | [docs/requirements-v1.md](docs/requirements-v1.md) | 需求文档 v1（历史，第 12–15 节记录了早期修订） |
 | [docs/dev-eval-plan-v1.md](docs/dev-eval-plan-v1.md) | 开发与评测方案 v1（历史；Pi 源码映射细节仍有参考价值） |
 | [docs/confirmed-items-2026-10-07.md](docs/confirmed-items-2026-10-07.md) | 早期 63 条确认事项清单（历史） |
