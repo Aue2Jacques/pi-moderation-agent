@@ -8,11 +8,14 @@
 //       calibrated with CALIB_DIR exactly as the runtime and routed through policy.decide; per group, against the
 //       platform labels (frozen procedure; "uncertain" kept out of the binary counts and reported) and, separately,
 //       against the datasets' own labels (never mixed). Prints counts only.
+//   agent-lines <outDir> text [n=200]   (EVAL_SPLIT=val)
+//       temporary agent-stage thresholds: picks n items the fast path sends to the agent, then (once they carry
+//       platform labels) replays a grid of per-rule agent lines through allowedActions(stage "agent")
 //   separation <outDir> [view=text]
 //       threshold-free judge comparison on the raw answers against the platform labels: AUROC per question (primary,
 //       in-call copy, their mean), primary/copy top-option agreement, mass on "unknown", allow items passed at a line
 //       that lets ≤1% of violate items through.
-// usage: node --experimental-strip-types scripts/eval-test.ts collect|score|separation <outDir> ...
+// usage: node --experimental-strip-types scripts/eval-test.ts collect|score|separation|agent-lines <outDir> ...
 import { execSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -29,7 +32,7 @@ for (const line of (() => { try { return readFileSync(".env", "utf8").split("\n"
 }
 const env = (k: string, d?: string): string => { const v = process.env[k] ?? d; if (v === undefined) throw new Error(`missing ${k}`); return v; };
 const [phase, outDir, viewArg, concArg] = process.argv.slice(2);
-if (!phase || !outDir) throw new Error("usage: eval-test.ts collect|score|separation <outDir> [view] [concurrency]");
+if (!phase || !outDir) throw new Error("usage: eval-test.ts collect|score|separation|agent-lines <outDir> [view] [concurrency]");
 const VIEW = (viewArg ?? "text") as "text" | "text_strip";
 if (VIEW !== "text" && VIEW !== "text_strip") throw new Error("view: text | text_strip");
 const JEV = env("JEV_MODEL", "jev-latest");
@@ -51,6 +54,22 @@ type Probs = Record<string, number>;
 type Row = { id: string; view: string; textSha: string; rulesVer: string; model: string; ok: boolean; primary?: Record<string, Probs>; copy?: Record<string, Probs>; tries: number };
 const readJsonl = <T>(p: string): T[] => existsSync(p) ? readFileSync(p, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as T) : [];
 const identity = (it: Item) => `${it.id}|${VIEW}|${sha(it[VIEW])}|${bundle.rulesVer}|${JEV}`;
+
+// calibrated answer records for one row (primary, then the in-call copy confirming it), exactly as the runtime builds them
+const recordsOf = (cal: core.Calibrator, r: Row): core.AnswerRecord[] => {
+  const rec = (ans: Record<string, Probs>, id: string, confirms: string | null, at: number): core.AnswerRecord[] => Object.entries(ans).flatMap(([key, probs]) => {
+    const q = byKey.get(key);
+    if (!q) return [];
+    const c = cal.apply({ judge: JEV, rulesVer: bundle.rulesVer, scene, nOptions: Object.keys(q.criteria).length, question: key }, probs);
+    const top = Object.entries(c?.probs ?? probs).sort((a, b) => b[1] - a[1])[0]![0];
+    return [{ judgeCallId: id, questionSha: q.sha, choice: top, p: c ? (c.probs[q.violationOption] ?? 0) : null, evidenceSet: [], inputSha: "eval", model: JEV, calibVer: cal.calibVer, confirmsCallId: confirms, createdAt: at }];
+  });
+  return [...rec(r.primary!, `p-${r.id}`, null, 1), ...(r.copy ? rec(r.copy, `c-${r.id}`, `p-${r.id}`, 2) : [])];
+};
+const fastRoute = (cal: core.Calibrator, r: Row): string => {
+  const d = decide({ bundle, scene, hasImages: false, answers: recordsOf(cal, r), judgeOk: true });
+  return d.state === "pass" ? "auto_pass" : d.state === "block" ? `auto_${d.action}` : d.route === "human" ? "human" : "agent";
+};
 
 if (phase === "collect") {
   const models = createModels();
@@ -88,17 +107,7 @@ if (phase === "collect") {
   const rows = new Map(readJsonl<Row>(OUT).filter((r) => r.ok && r.rulesVer === bundle.rulesVer && r.model === JEV).map((r) => [`${r.id}|${r.textSha}`, r] as const));
   const lab = (std: string) => new Map(readJsonl<{ id: string; label: string; source: string }>(`data/eval/labels-${std}.jsonl`).map((r) => [r.id, r] as const));
   const L = { abuse: lab("abuse-v4.3"), marketing: lab("marketing-v2"), guard: lab("guard-v1") };
-  const route = (r: Row) => {
-    const rec = (ans: Record<string, Probs>, id: string, confirms: string | null, at: number): core.AnswerRecord[] => Object.entries(ans).flatMap(([key, probs]) => {
-      const q = byKey.get(key);
-      if (!q) return [];
-      const c = cal.apply({ judge: JEV, rulesVer: bundle.rulesVer, scene, nOptions: Object.keys(q.criteria).length, question: key }, probs);
-      const top = Object.entries(c?.probs ?? probs).sort((a, b) => b[1] - a[1])[0]![0];
-      return [{ judgeCallId: id, questionSha: q.sha, choice: top, p: c ? (c.probs[q.violationOption] ?? 0) : null, evidenceSet: [], inputSha: "eval", model: JEV, calibVer: cal.calibVer, confirmsCallId: confirms, createdAt: at }];
-    });
-    const d = decide({ bundle, scene, hasImages: false, answers: [...rec(r.primary!, `p-${r.id}`, null, 1), ...(r.copy ? rec(r.copy, `c-${r.id}`, `p-${r.id}`, 2) : [])], judgeOk: true });
-    return d.state === "pass" ? "auto_pass" : d.state === "block" ? `auto_${d.action}` : d.route === "human" ? "human" : "agent";
-  };
+  const route = (r: Row) => fastRoute(cal, r);
   // platform truth per item: violate if abuse or marketing violate; allow if both allow (and guard not violate); else uncertain/unlabelled
   const platform = (id: string): "violate" | "allow" | "uncertain" | "unlabelled" => {
     const a = L.abuse.get(id)?.label, m = L.marketing.get(id)?.label;
@@ -178,6 +187,52 @@ if (phase === "collect") {
   const summary = { view: VIEW, model: JEV, rulesVer: bundle.rulesVer, items: items.length, answered: [...rows.keys()].length, questions: out };
   writeFileSync(join(outDir, `separation-${VIEW}.json`), JSON.stringify(summary, null, 1));
   console.log(JSON.stringify(summary, null, 1));
+} else if (phase === "agent-lines") {
+  // Temporary agent-stage thresholds (dev plan 2026-10-08 §3.1 problem 1), chosen on the VALIDATION split only.
+  // 1) the agent's population: items the fast path sends to the agent with the shipped calibration; a fixed hash order
+  //    picks n of them (ids written once, then reused); 2) they need platform labels by the frozen procedure; 3) every
+  //    pair of per-rule lines on a grid is replayed through core.allowedActions(stage "agent") on the recorded answers.
+  //    Approximation: the item's own fast-path answers stand in for the agent's re-judge (eval items have no thread).
+  const N = Number(concArg ?? 200);
+  const cal = loadCalibrator(env("CALIB_DIR", "calib"), JEV);
+  const rows = new Map(readJsonl<Row>(OUT).filter((r) => r.ok && r.rulesVer === bundle.rulesVer && r.model === JEV).map((r) => [`${r.id}|${r.textSha}`, r] as const));
+  const IDS = join(outDir, "agent-lines-ids.txt");
+  const routed = items.map((it) => ({ it, r: rows.get(`${it.id}|${sha(it[VIEW])}`) })).filter((x): x is { it: Item; r: Row } => !!x.r);
+  const agentPop = routed.filter((x) => fastRoute(cal, x.r) === "agent");
+  if (!existsSync(IDS)) writeFileSync(IDS, agentPop.map((x) => x.it.id).sort((a, b) => sha(`agent-lines|${a}`).localeCompare(sha(`agent-lines|${b}`))).slice(0, N).join("\n") + "\n");
+  const ids = new Set(readFileSync(IDS, "utf8").split("\n").filter(Boolean));
+  const lab = (std: string) => new Map(readJsonl<{ id: string; label: string }>(`data/eval/labels-${std}.jsonl`).map((r) => [r.id, r.label] as const));
+  const LA = lab("abuse-v4.3"), LM = lab("marketing-v2");
+  const truthOf = (id: string) => { const a = LA.get(id), m = LM.get(id); if (!a || !m) return "unlabelled"; return a === "violate" || m === "violate" ? "violate" : a === "allow" && m === "allow" ? "allow" : "uncertain"; };
+  const pool = routed.filter((x) => ids.has(x.it.id)).map((x) => ({ id: x.it.id, group: x.it.group, truth: truthOf(x.it.id), answers: recordsOf(cal, x.r) }));
+  const counts = pool.reduce<Record<string, number>>((m, x) => ((m[x.truth] = (m[x.truth] ?? 0) + 1), m), {});
+  const scored = pool.filter((x) => x.truth === "violate" || x.truth === "allow");
+  const vN = scored.filter((x) => x.truth === "violate").length, aN = scored.length - vN;
+  const PASS = [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45], BLOCK = [0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.55];
+  const evalLines = (ab: { pass: number; block: number }, mk: { pass: number; block: number }) => {
+    const b: core.PolicyBundle = { ...bundle, rules: bundle.rules.map((r) => (r.ruleId === "ABUSE-001" ? { ...r, agentThresholds: ab } : r.ruleId === "MARKETING-003" ? { ...r, agentThresholds: mk } : r)) };
+    let passOk = 0, actOk = 0, miss = 0, wrongAct = 0;
+    for (const x of scored) {
+      const al = core.allowedActions({ bundle: b, scene, hasImages: false, answers: x.answers, stage: "agent" }).allowed;
+      const out = al.has("takedown") || al.has("limit") ? "act" : al.has("pass") ? "pass" : "human";
+      if (out === "pass") x.truth === "allow" ? passOk++ : miss++;
+      if (out === "act") x.truth === "violate" ? actOk++ : wrongAct++;
+    }
+    return { abuse: ab, marketing: mk, auto_pass_correct: passOk, auto_act_correct: actOk, violate_passed: miss, allow_acted: wrongAct, to_human: scored.length - passOk - actOk - miss - wrongAct };
+  };
+  const grid: ReturnType<typeof evalLines>[] = [];
+  for (const ap of PASS) for (const abk of BLOCK) for (const mp of PASS) for (const mb of BLOCK) grid.push(evalLines({ pass: ap, block: abk }, { pass: mp, block: mb }));
+  // bound: errors at most 2% of each class in this sample (temporary bound, not an owner decision)
+  const maxMiss = Math.floor(vN * 0.02), maxWrong = Math.floor(aN * 0.02);
+  const dist = (g: (typeof grid)[number]) => (g.abuse.pass - 0.1) + (0.9 - g.abuse.block) + (g.marketing.pass - 0.1) + (0.9 - g.marketing.block);
+  const ok = grid.filter((g) => g.violate_passed <= maxMiss && g.allow_acted <= maxWrong)
+    .sort((x, y) => y.auto_pass_correct + y.auto_act_correct - (x.auto_pass_correct + x.auto_act_correct) || x.violate_passed + x.allow_acted - (y.violate_passed + y.allow_acted) || dist(x) - dist(y));
+  const shared = PASS.flatMap((ps) => BLOCK.map((bk) => evalLines({ pass: ps, block: bk }, { pass: ps, block: bk })));
+  const summary = { split: PART, view: VIEW, calibVer: cal.calibVer, rulesVer: bundle.rulesVer, agent_population: agentPop.length, picked: ids.size, labels: counts, scored: scored.length, violate_n: vN, allow_n: aN,
+    bound: { max_violate_passed: maxMiss, max_allow_acted: maxWrong }, current: evalLines(bundle.rules.find((r) => r.ruleId === "ABUSE-001")!.thresholds, bundle.rules.find((r) => r.ruleId === "MARKETING-003")!.thresholds), chosen: ok[0] ?? null, next_best: ok.slice(1, 6),
+    shared_lines: shared.filter((g) => g.abuse.pass <= 0.3 && g.abuse.block >= 0.7) };
+  writeFileSync(join(outDir, `agent-lines-${VIEW}.json`), JSON.stringify({ ...summary, grid }, null, 1));
+  console.log(JSON.stringify(summary, null, 1));
 } else {
-  throw new Error("phase must be collect | score | separation");
+  throw new Error("phase must be collect | score | separation | agent-lines");
 }
