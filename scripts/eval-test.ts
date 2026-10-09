@@ -8,7 +8,11 @@
 //       calibrated with CALIB_DIR exactly as the runtime and routed through policy.decide; per group, against the
 //       platform labels (frozen procedure; "uncertain" kept out of the binary counts and reported) and, separately,
 //       against the datasets' own labels (never mixed). Prints counts only.
-// usage: node --experimental-strip-types scripts/eval-test.ts collect|score <outDir> ...
+//   separation <outDir> [view=text]
+//       threshold-free judge comparison on the raw answers against the platform labels: AUROC per question (primary,
+//       in-call copy, their mean), primary/copy top-option agreement, mass on "unknown", allow items passed at a line
+//       that lets ≤1% of violate items through.
+// usage: node --experimental-strip-types scripts/eval-test.ts collect|score|separation <outDir> ...
 import { execSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -25,7 +29,7 @@ for (const line of (() => { try { return readFileSync(".env", "utf8").split("\n"
 }
 const env = (k: string, d?: string): string => { const v = process.env[k] ?? d; if (v === undefined) throw new Error(`missing ${k}`); return v; };
 const [phase, outDir, viewArg, concArg] = process.argv.slice(2);
-if (!phase || !outDir) throw new Error("usage: eval-test.ts collect|score <outDir> [view] [concurrency]");
+if (!phase || !outDir) throw new Error("usage: eval-test.ts collect|score|separation <outDir> [view] [concurrency]");
 const VIEW = (viewArg ?? "text") as "text" | "text_strip";
 if (VIEW !== "text" && VIEW !== "text_strip") throw new Error("view: text | text_strip");
 const JEV = env("JEV_MODEL", "jev-latest");
@@ -127,6 +131,50 @@ if (phase === "collect") {
     platform: table("platform"), dataset: table("dataset") };
   writeFileSync(join(outDir, `score-${VIEW}.json`), JSON.stringify(summary, null, 1));
   console.log(JSON.stringify(summary, null, 1));
+} else if (phase === "separation") {
+  // Threshold-free comparison between judges (raw answers, no calibration): per question, how well p(violate) separates
+  // the platform labels ("uncertain" left out), how often the primary and the in-call copy pick the same option, how
+  // much mass goes to "unknown", and how many allow items fall under the highest pass line that lets ≤1% of the
+  // violate items through. Temperature calibration cannot change the ranking much, so this isolates the judge itself.
+  const lab = (std: string) => new Map(readJsonl<{ id: string; label: string }>(`data/eval/labels-${std}.jsonl`).map((r) => [r.id, r.label] as const));
+  const truthOf: Record<string, Map<string, string>> = { "ABUSE-001": lab("abuse-v4.3"), "MARKETING-003": lab("marketing-v2"), injection_guard: lab("guard-v1") };
+  const rows = new Map(readJsonl<Row>(OUT).filter((r) => r.ok && r.rulesVer === bundle.rulesVer && r.model === JEV).map((r) => [`${r.id}|${r.textSha}`, r] as const));
+  const auc = (pos: number[], neg: number[]) => {
+    const all = [...pos.map((p) => [p, 1] as const), ...neg.map((p) => [p, 0] as const)].sort((a, b) => a[0] - b[0]);
+    let rankSum = 0;
+    for (let i = 0; i < all.length;) { let j = i; while (j < all.length && all[j]![0] === all[i]![0]) j++; const r = (i + j + 1) / 2; for (let k = i; k < j; k++) if (all[k]![1] === 1) rankSum += r; i = j; }
+    return pos.length && neg.length ? +((rankSum - (pos.length * (pos.length + 1)) / 2) / (pos.length * neg.length)).toFixed(4) : null;
+  };
+  const passAt1 = (pos: number[], neg: number[]) => {
+    const s = [...pos].sort((a, b) => a - b), allowed = Math.floor(s.length * 0.01);
+    const line = s[allowed] ?? Infinity; // items strictly below this line pass; at most `allowed` violate items do
+    return { line: +line.toFixed(4), allow_passed_pct: +((neg.filter((p) => p < line).length / Math.max(1, neg.length)) * 100).toFixed(1) };
+  };
+  const out: Record<string, unknown> = {};
+  for (const [key, truth] of Object.entries(truthOf)) {
+    const q = byKey.get(key);
+    if (!q) continue;
+    const v = q.violationOption, P = { primary: { pos: [] as number[], neg: [] as number[] }, copy: { pos: [] as number[], neg: [] as number[] }, mean: { pos: [] as number[], neg: [] as number[] } };
+    let both = 0, agree = 0, unknownMass = 0, answered = 0;
+    for (const it of items) {
+      const r = rows.get(`${it.id}|${sha(it[VIEW])}`), a = r?.primary?.[key], c = r?.copy?.[key];
+      if (!a) continue;
+      answered++; unknownMass += a.unknown ?? 0;
+      const top = (x: Probs) => Object.entries(x).sort((m, n) => n[1] - m[1])[0]![0];
+      if (c) { both++; if (top(a) === top(c)) agree++; }
+      const t = truth.get(it.id);
+      if (t !== "violate" && t !== "allow") continue;
+      const side = t === "violate" ? "pos" : "neg";
+      P.primary[side].push(a[v] ?? 0);
+      if (c) { P.copy[side].push(c[v] ?? 0); P.mean[side].push(((a[v] ?? 0) + (c[v] ?? 0)) / 2); }
+    }
+    out[key] = { violate_n: P.primary.pos.length, allow_n: P.primary.neg.length, auroc_primary: auc(P.primary.pos, P.primary.neg), auroc_copy: auc(P.copy.pos, P.copy.neg), auroc_mean: auc(P.mean.pos, P.mean.neg),
+      primary_copy_same_top_pct: +((agree / Math.max(1, both)) * 100).toFixed(1), mean_unknown_mass: +(unknownMass / Math.max(1, answered)).toFixed(3),
+      pass_line_at_1pct_miss_primary: passAt1(P.primary.pos, P.primary.neg), pass_line_at_1pct_miss_mean: passAt1(P.mean.pos, P.mean.neg) };
+  }
+  const summary = { view: VIEW, model: JEV, rulesVer: bundle.rulesVer, items: items.length, answered: [...rows.keys()].length, questions: out };
+  writeFileSync(join(outDir, `separation-${VIEW}.json`), JSON.stringify(summary, null, 1));
+  console.log(JSON.stringify(summary, null, 1));
 } else {
-  throw new Error("phase must be collect | score");
+  throw new Error("phase must be collect | score | separation");
 }
