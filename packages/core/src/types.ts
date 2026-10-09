@@ -99,6 +99,9 @@ export type Rule = {
   severity: number;
   defaultAction: "limit" | "takedown";
   thresholds: { block: number; pass: number };
+  /** Optional lines for the agent stage only (dev plan 2026-10-08 §3.1 problem 1, temporary): the agent's dispose is
+   *  checked against these instead of `thresholds`; the fast path always uses `thresholds`. Absent = same as fast path. */
+  agentThresholds?: { block: number; pass: number };
   question: Question;
   exceptions: readonly { id: string; question: Question }[];
 };

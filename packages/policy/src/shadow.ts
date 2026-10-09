@@ -11,6 +11,7 @@ export function classifyChange(oldRule: Rule, newRule: Rule): ChangeKind {
   if (semantic) return "semantic";
   const thresholdOnly =
     oldRule.thresholds.block !== newRule.thresholds.block || oldRule.thresholds.pass !== newRule.thresholds.pass ||
+    oldRule.agentThresholds?.block !== newRule.agentThresholds?.block || oldRule.agentThresholds?.pass !== newRule.agentThresholds?.pass ||
     oldRule.defaultAction !== newRule.defaultAction || oldRule.scenes.join() !== newRule.scenes.join() || oldRule.severity !== newRule.severity;
   return thresholdOnly ? "threshold_only" : "none";
 }

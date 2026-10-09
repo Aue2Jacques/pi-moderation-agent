@@ -11,6 +11,8 @@ export type AllowedInput = {
   imageDelivered?: boolean;
   /** trusted answers (status ok, input_sha verified, question known); grouping by question happens here */
   answers: readonly AnswerRecord[];
+  /** whose dispose is being checked: the agent's uses a rule's agentThresholds when it has them; default "fast" */
+  stage?: "fast" | "agent";
 };
 
 export type RuleVerdict = {
@@ -72,7 +74,8 @@ export function allowedActions(input: AllowedInput): AllowedResult {
   const sceneCfg = bundle.scenes[scene];
   const effectiveAnswers: Record<string, string[]> = {};
   const confirmPass = sceneCfg.confirmPass ?? true;
-  const rules = rulesFor(bundle, scene).map((r) => verdictFor(r.ruleId, r.question, r.thresholds, r.exceptions, answers, effectiveAnswers, confirmPass));
+  const lines = (r: Rule) => (input.stage === "agent" && r.agentThresholds ? r.agentThresholds : r.thresholds);
+  const rules = rulesFor(bundle, scene).map((r) => verdictFor(r.ruleId, r.question, lines(r), r.exceptions, answers, effectiveAnswers, confirmPass));
   const byRule = new Map(rulesFor(bundle, scene).map((r) => [r.ruleId, r] as const));
 
   const required = [...sceneCfg.requiredCategories];

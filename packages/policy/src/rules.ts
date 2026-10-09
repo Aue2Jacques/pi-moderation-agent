@@ -11,6 +11,7 @@ export type RuleYaml = {
   exceptions?: { id: string; text: string; question: QuestionYaml }[];
   question: QuestionYaml;
   thresholds: { block: number; pass: number; keyed_by_option_count?: boolean };
+  agent_thresholds?: { block: number; pass: number };
   contract_tests?: ContractTestYaml[];
 };
 export type QuestionYaml = { id: string; instructions: string; options: Record<string, string>; violation_option: string; pass_choices?: string[]; applies_choice?: string; not_applies_choice?: string };
@@ -58,9 +59,12 @@ function toQuestion(kind: Question["kind"], q: QuestionYaml, ruleId?: string, ex
 
 export function ruleFromYaml(y: RuleYaml): Rule {
   if (!(y.thresholds.pass < y.thresholds.block)) throw new Error(`rule ${y.rule_id}: pass threshold must be below block threshold`);
+  const at = y.agent_thresholds;
+  if (at && !(at.pass < at.block)) throw new Error(`rule ${y.rule_id}: agent pass threshold must be below agent block threshold`);
   return {
     ruleId: y.rule_id, category: y.category, scenes: y.scenes, severity: y.severity, defaultAction: y.default_action,
     thresholds: { block: y.thresholds.block, pass: y.thresholds.pass },
+    ...(at ? { agentThresholds: { block: at.block, pass: at.pass } } : {}),
     question: toQuestion("rule", y.question, y.rule_id, undefined, { rule: y.text }),
     exceptions: (y.exceptions ?? []).map((x) => ({ id: x.id, question: toQuestion("exception", x.question, y.rule_id, x.id, { rule: y.text, exception: x.text }) })),
   };

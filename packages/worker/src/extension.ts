@@ -267,7 +267,7 @@ export function buildModerationExtension(deps: ExtensionDeps) {
       if (g.mode !== "active") return err("E_LEASE_LOST");
       const rule = g.bundle.rules.find((r) => r.ruleId === args.rule_id);
       if (!rule) return err("E_RULE_UNKNOWN", args.rule_id);
-      const body = { rule_id: rule.ruleId, text: g.ruleTexts[rule.ruleId] ?? "", exceptions: rule.exceptions.map((x) => x.id), default_action: rule.defaultAction, thresholds: rule.thresholds };
+      const body = { rule_id: rule.ruleId, text: g.ruleTexts[rule.ruleId] ?? "", exceptions: rule.exceptions.map((x) => x.id), default_action: rule.defaultAction, thresholds: rule.agentThresholds ?? rule.thresholds };   // the lines the agent's dispose is checked against
       const review = core.requireReview(db, g.reviewId);
       const id = writeEvidence(deps, g, "rule", rule.ruleId, body, body, review.snapshot_seq);
       return { content: text(JSON.stringify({ evidence_id: id, ...body })) };

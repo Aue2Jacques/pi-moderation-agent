@@ -6,6 +6,7 @@ import { parse } from "yaml";
 import type { AnswerRecord, PolicyBundle, Rule } from "../../packages/core/src/index.ts";
 import * as policy from "../../packages/policy/src/index.ts";
 import * as judges from "../../packages/judges/src/index.ts";
+import { allowedActions as coreAllowed } from "../../packages/core/src/index.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const loaded = policy.loadBundle(join(ROOT, "rules"), join(ROOT, "config", "scenes.yaml"));
@@ -226,5 +227,33 @@ describe("context_route scene switch (stage ② finding: the fast path cannot se
   it("all: neither auto-passed nor auto-blocked; system causes still win (judge down -> human)", () => {
     expect(policy.decide({ bundle: withRoute("all"), scene: "comment", hasImages: false, answers: high, judgeOk: true, hasContext: true })).toMatchObject({ state: "suspicious", reason: "needs_context", route: "agent" });
     expect(policy.decide({ bundle: withRoute("all"), scene: "comment", hasImages: false, answers: low, judgeOk: false, hasContext: true })).toMatchObject({ reason: "judge_unavailable", route: "human" });
+  });
+});
+
+describe("agent-stage thresholds (dev plan 2026-10-08 §3.1 problem 1, temporary)", () => {
+  const withAgent = (a: { block: number; pass: number } | undefined): PolicyBundle => ({ ...B, rules: B.rules.map((r) => (r.ruleId === "ABUSE-001" ? { ...r, ...(a ? { agentThresholds: a } : {}) } : r)) });
+  const mid = [ans(abuse.question.sha, "h1", 0.82, "violate"), ans(abuse.question.sha, "h2", 0.82, "violate", "h1", 1), ...pair(mkt.question.sha, "m"), ...G];
+  const midLow = [ans(abuse.question.sha, "l1", 0.15, "none"), ans(abuse.question.sha, "l2", 0.15, "none", "l1", 1), ...pair(mkt.question.sha, "m"), ...G];
+  it("YAML: optional, parsed, and pass must be below block", () => {
+    expect(abuse.agentThresholds).toBeUndefined();
+    expect(policy.ruleFromYaml({ ...yamlOf(abuse), agent_thresholds: { block: 0.8, pass: 0.2 } }).agentThresholds).toEqual({ block: 0.8, pass: 0.2 });
+    expect(() => policy.ruleFromYaml({ ...yamlOf(abuse), agent_thresholds: { block: 0.2, pass: 0.8 } })).toThrow(/agent pass threshold/);
+  });
+  it("only the agent stage uses them; the fast path and the default stage keep the rule's thresholds", () => {
+    const b = withAgent({ block: 0.8, pass: 0.2 });
+    const core = (s: "fast" | "agent" | undefined, answers: AnswerRecord[]) => [...coreAllowed({ bundle: b, scene: "comment", hasImages: false, answers, ...(s ? { stage: s } : {}) }).allowed];
+    expect(core("agent", mid)).toEqual(["takedown"]);
+    expect(core("fast", mid)).toEqual([]);
+    expect(core(undefined, mid)).toEqual([]);
+    expect(policy.decide({ bundle: b, scene: "comment", hasImages: false, answers: mid, judgeOk: true }).state).toBe("suspicious");
+    expect(core("agent", midLow)).toEqual(["pass"]);
+    expect(core("fast", midLow)).toEqual([]);
+  });
+  it("a rule without them: the agent stage behaves exactly like before", () => {
+    const b = withAgent(undefined);
+    expect([...coreAllowed({ bundle: b, scene: "comment", hasImages: false, answers: mid, stage: "agent" }).allowed]).toEqual([]);
+  });
+  it("shadow: changing only the agent lines is a threshold-only change", () => {
+    expect(policy.classifyChange(abuse, { ...abuse, agentThresholds: { block: 0.8, pass: 0.2 } })).toBe("threshold_only");
   });
 });

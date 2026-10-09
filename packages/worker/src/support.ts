@@ -19,7 +19,7 @@ export function supportOf(db: Db, review: ReviewRow, bundle: PolicyBundle, judge
   const scene = content.scene as core.Scene;
   const { answers, calls } = core.trustedAnswers(db, review, bundle, judgeCallIds, review.evidence_ver);
   // same rule as the submit check: delivered only when a cited call came from the image channel
-  const r = core.allowedActions({ bundle, scene, hasImages: !!content.image_refs, imageDelivered: !!content.image_refs && calls.some((c) => c.api === "image" && c.status === "ok"), answers });
+  const r = core.allowedActions({ bundle, scene, hasImages: !!content.image_refs, imageDelivered: !!content.image_refs && calls.some((c) => c.api === "image" && c.status === "ok"), answers, stage: "agent" });
   const confirmPass = bundle.scenes[scene].confirmPass ?? true;
   const byRule = new Map(core.rulesFor(bundle, scene).map((x) => [x.ruleId, x] as const));
   const rules: RuleSupport[] = r.rules.map((v) => {
@@ -30,13 +30,14 @@ export function supportOf(db: Db, review: ReviewRow, bundle: PolicyBundle, judge
     if (e.inconsistent) return { rule_id: v.ruleId, p: last.p, state: "inconsistent", missing: "同一证据上的主问和复问不一致，需要能改变判断的新证据" };
     if (v.blockSupport) return { rule_id: v.ruleId, p: e.p, state: "supports_action", missing: null };
     if (v.passSupport) return { rule_id: v.ruleId, p: e.p, state: "supports_pass", missing: null };
-    const lowEnough = last.p !== null && last.p < rule.thresholds.pass;
-    const highEnough = e.p >= rule.thresholds.block;
+    const t = rule.agentThresholds ?? rule.thresholds;   // the agent's dispose is checked against its own lines
+    const lowEnough = last.p !== null && last.p < t.pass;
+    const highEnough = e.p >= t.block;
     const missing = lowEnough && confirmPass
       ? "概率已低于放行线，放行还缺：用 confirm 对同一证据复问一次"
       : highEnough
         ? `概率已达处置线，但例外未确认不成立（${Object.entries(v.exceptions).filter(([, s]) => s !== "not_applies").map(([k]) => k).join("、") || "—"}）`
-        : `违规概率 ${e.p.toFixed(2)} 在中间带（放行线 <${rule.thresholds.pass}，处置线 ≥${rule.thresholds.block}），需要能改变判断的新证据`;
+        : `违规概率 ${e.p.toFixed(2)} 在中间带（放行线 <${t.pass}，处置线 ≥${t.block}），需要能改变判断的新证据`;
     return { rule_id: v.ruleId, p: e.p, state: "middle_band", missing };
   });
   const missing = [

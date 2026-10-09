@@ -3,9 +3,9 @@
 import { describe, expect, it } from "vitest";
 import type { FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
 import * as core from "../../packages/core/src/index.ts";
-import { taskBrief } from "../../packages/worker/src/index.ts";
+import { taskBrief, uniform } from "../../packages/worker/src/index.ts";
 import { BUNDLE, CFG, PINS, freshDb, lowRiskConfirmed, seedContent } from "../helpers.ts";
-import { lowRisk, makeWorker, resolving, runToIdle, setScript, type Step } from "./setup.ts";
+import { lowRisk, makeWorker, resolving, runToIdle, setScript, type JudgeScript, type Step } from "./setup.ts";
 
 /** wraps a step factory and keeps every message list the model was sent */
 function recording(inner: FauxResponseStep, seen: unknown[][]): FauxResponseStep {
@@ -17,7 +17,8 @@ function recording(inner: FauxResponseStep, seen: unknown[][]): FauxResponseStep
 const textOf = (m: unknown): string => JSON.stringify((m as { content: unknown }).content);
 const toolResults = (msgs: unknown[]): Record<string, unknown>[] => msgs.filter((m) => (m as { role: string }).role === "toolResult").map((m) => {
   const c = (m as { content: { type: string; text?: string }[] }).content.find((x) => x.type === "text");
-  return c?.text ? (JSON.parse(c.text) as Record<string, unknown>) : {};
+  if (!c?.text) return {};
+  try { return JSON.parse(c.text) as Record<string, unknown>; } catch { return { text: c.text }; }   // tool errors are plain text
 });
 
 function suspicious(db: core.Db, id: string, reason: string): core.ReviewRow {
@@ -99,5 +100,44 @@ describe("stage ③ appeal brief", () => {
     expect(b).toContain("用户申诉：原裁决 pass");
     expect(b).toContain("申诉理由代码 misjudged");
     expect(b).toContain("申诉本身不是放行理由");
+  });
+});
+
+describe("agent-stage thresholds (dev plan §3.1 problem 1, temporary)", () => {
+  const midRisk: JudgeScript = (req) => ({ status: "ok", model: "jev-recorded", answers: uniform(req.questions, 0.3), usage: { input: 480, output: 50 }, latencyMs: 250 });
+  const withAgent: core.PolicyBundle = { ...BUNDLE, rules: BUNDLE.rules.map((r) => ({ ...r, agentThresholds: { block: 0.9, pass: 0.35 } })) };
+  const run = async (bundle: core.PolicyBundle, id: string) => {
+    const db = freshDb();
+    const r = suspicious(db, id, "suspicious_band");
+    const steps: Step[] = [
+      { tool: "get_thread_context", args: {} },
+      { tool: "judge", args: { rule_ids: [], evidence_ids: ["$E1"] } },
+      { tool: "confirm", args: { judge_call_id: "$J1", rule_ids: [], evidence_ids: ["$E1"] } },
+      { tool: "dispose", args: { action: "pass", evidence_ids: ["$E1"], rule_ids: [], reason: "p 0.30, confirmed" } },
+      { text: "done" },
+    ];
+    const fx = await makeWorker({ db, steps: [], judge: midRisk, bundle });
+    const seen: unknown[][] = [];
+    setScript(fx, recording(resolving(db, () => r.review_id, steps), seen));
+    await fx.worker.start();
+    await fx.worker.admitOnce();
+    await runToIdle(fx);
+    const results = toolResults(seen[seen.length - 1]!);
+    const state = core.requireReview(db, r.review_id).state;
+    await fx.close();
+    return { results, state };
+  };
+  it("p=0.30 confirmed: with agent lines (pass < 0.35) support says pass and the dispose goes through", async () => {
+    const { results, state } = await run(withAgent, "at1");
+    expect((results[2] as { support: { allowed_now: string[] } }).support.allowed_now).toEqual(["pass"]);
+    expect(state).toBe("disposed");
+  });
+  it("same answers without agent lines: middle band, support allows nothing and the dispose is refused", async () => {
+    const { results, state } = await run(BUNDLE, "at2");
+    const c = results[2] as { support: { allowed_now: string[]; missing: string[] } };
+    expect(c.support.allowed_now).toEqual([]);
+    expect(c.support.missing.join("")).toContain("中间带");
+    expect(JSON.stringify(results[3])).toContain("E_ACTION_NOT_SUPPORTED");
+    expect(state).not.toBe("disposed");
   });
 });

@@ -145,7 +145,7 @@ export function writeRulingChecked(ctx: Ctx, input: SubmitRulingInput, preloaded
     // stage ③: an image counts as delivered only when a cited call came from the image channel (api 'image', status ok) —
     // a text judge's image_check answer is never coverage (round-9 item 6)
     const imageDelivered = hasImages && trusted!.calls.some((c) => c.api === "image" && c.status === "ok");
-    allowed = allowedActions({ bundle, scene: content!.scene, hasImages, imageDelivered, answers: trusted!.answers });
+    allowed = allowedActions({ bundle, scene: content!.scene, hasImages, imageDelivered, answers: trusted!.answers, stage: input.actor === "agent" ? "agent" : "fast" });
     if (!allowed.allowed.has(input.action)) {
       fail("E_ACTION_NOT_SUPPORTED", 11, `${input.action} not in allowed set`, {
         allowed: [...allowed.allowed], required: allowed.required, covered: allowed.covered,
