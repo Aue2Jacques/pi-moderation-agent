@@ -44,6 +44,7 @@
 8. **评测集**：每条多了 `raw`、`text_strip`、`family_id`；`text` 改为模型视图；4 条注入样本的临时切分随去重代表改变。
 10. **图片**：配置 IMAGE_DIR + IMAGE_MODEL 时带图内容送看图判官（新转人工原因 `image_review`）；图片送达时 `image_check` 成为必答题；提交检查只把 `api=image` 的成功调用当作"图片已送达"。
 9. **强模型默认值**：`STRONG_MODEL` glm-5.3 → deepseek-v4.1-flash（升级默认关闭）。
+11. **agent 阶段阈值（临时）**：规则可选 `agent_thresholds`，只对 agent 的处置生效；现行版本 rules@1e20fa7936f8 只有 MARKETING-003 有（处置线 0.65，快判仍 0.92），线在验证集上选。`load_rule` 返回 agent 的线。
 
 ## 4. 已知不足（详见开发计划 3.1 节问题 1–9 与各报告）
 
