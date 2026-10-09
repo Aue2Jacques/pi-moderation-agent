@@ -11,11 +11,14 @@
 //   agent-lines <outDir> text [n=200]   (EVAL_SPLIT=val)
 //       temporary agent-stage thresholds: picks n items the fast path sends to the agent, then (once they carry
 //       platform labels) replays a grid of per-rule agent lines through allowedActions(stage "agent")
+//   suspects <outDir> text   (EVAL_SPLIT=train)
+//       data cleaning: items whose unified source label disagrees with a confident judge answer (primary and copy);
+//       precision / recall of that flag against the platform labels where they exist
 //   separation <outDir> [view=text]
 //       threshold-free judge comparison on the raw answers against the platform labels: AUROC per question (primary,
 //       in-call copy, their mean), primary/copy top-option agreement, mass on "unknown", allow items passed at a line
 //       that lets ≤1% of violate items through.
-// usage: node --experimental-strip-types scripts/eval-test.ts collect|score|separation|agent-lines <outDir> ...
+// usage: node --experimental-strip-types scripts/eval-test.ts collect|score|separation|agent-lines|suspects <outDir> ...
 import { execSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -32,7 +35,7 @@ for (const line of (() => { try { return readFileSync(".env", "utf8").split("\n"
 }
 const env = (k: string, d?: string): string => { const v = process.env[k] ?? d; if (v === undefined) throw new Error(`missing ${k}`); return v; };
 const [phase, outDir, viewArg, concArg] = process.argv.slice(2);
-if (!phase || !outDir) throw new Error("usage: eval-test.ts collect|score|separation|agent-lines <outDir> [view] [concurrency]");
+if (!phase || !outDir) throw new Error("usage: eval-test.ts collect|score|separation|agent-lines|suspects <outDir> [view] [concurrency]");
 const VIEW = (viewArg ?? "text") as "text" | "text_strip";
 if (VIEW !== "text" && VIEW !== "text_strip") throw new Error("view: text | text_strip");
 const JEV = env("JEV_MODEL", "jev-latest");
@@ -247,6 +250,47 @@ if (phase === "collect") {
     shared_lines: shared.filter((g) => g.abuse.pass <= 0.3 && g.abuse.block >= 0.7) };
   writeFileSync(join(outDir, `agent-lines-${VIEW}.json`), JSON.stringify({ ...summary, grid }, null, 1));
   console.log(JSON.stringify(summary, null, 1));
+} else if (phase === "suspects") {
+  // Data cleaning (owner 2026-10-09): items whose unified source label (data/eval/source-labels-v1.jsonl) disagrees with
+  // a confident judge answer — both the primary and the in-call copy, calibrated as the runtime does — on the fast
+  // path's own lines (pass < rule.thresholds.pass, block >= rule.thresholds.block). Where platform labels exist, how
+  // well the flag finds items whose source label the frozen procedure contradicts (precision / recall).
+  const cal = loadCalibrator(env("CALIB_DIR", "calib"), JEV);
+  const rows = new Map(readJsonl<Row>(OUT).filter((r) => r.ok && r.model === JEV).map((r) => [`${r.id}|${r.textSha}`, r] as const));
+  const src = new Map(readJsonl<{ id: string; cat: string; basis: string }>("data/eval/source-labels-v1.jsonl").map((r) => [r.id, r] as const));
+  const lab = (std: string) => new Map(readJsonl<{ id: string; label: string }>(`data/eval/labels-${std}.jsonl`).map((r) => [r.id, r.label] as const));
+  const LA = lab("abuse-v4.3"), LM = lab("marketing-v2");
+  const rule = (id: string) => bundle.rules.find((r) => r.ruleId === id)!;
+  const A = rule("ABUSE-001"), M = rule("MARKETING-003");
+  const both = (recs: core.AnswerRecord[], q: core.Question, f: (p: number) => boolean) => { const g = recs.filter((a) => a.questionSha === q.sha); return g.length > 0 && g.every((a) => a.p !== null && f(a.p)); };
+  const flagged: { id: string; basis: string; cat: string; reason: string }[] = [];
+  const evalC: Record<string, number> = {};
+  const bump = (k: string) => { evalC[k] = (evalC[k] ?? 0) + 1; };
+  let answered = 0;
+  for (const it of items) {
+    const r = rows.get(`${it.id}|${sha(it[VIEW])}`), s = src.get(it.id);
+    if (!r || !s) continue;
+    answered++;
+    const recs = recordsOf(cal, r);
+    const hiA = both(recs, A.question, (p) => p >= A.thresholds.block), hiM = both(recs, M.question, (p) => p >= M.thresholds.block);
+    const loA = both(recs, A.question, (p) => p < A.thresholds.pass), loM = both(recs, M.question, (p) => p < M.thresholds.pass);
+    const reason = s.cat === "SAFE" ? (hiA ? "safe_but_judge_abuse" : hiM ? "safe_but_judge_marketing" : null)
+      : s.cat === "ABUSE" ? (loA ? (hiM ? "abuse_but_judge_marketing" : "abuse_but_judge_clear") : null)
+      : s.cat === "MARKETING" ? (loM ? (hiA ? "marketing_but_judge_abuse" : "marketing_but_judge_clear") : null) : null;
+    if (reason) flagged.push({ id: it.id, basis: s.basis, cat: s.cat, reason });
+    // against the platform labels where they exist: does the platform contradict the source label?
+    const a = LA.get(it.id), m = LM.get(it.id);
+    if (a && m && !(a === "uncertain" || m === "uncertain") && (a === "violate" || a === "allow") && (m === "violate" || m === "allow")) {
+      const pc = a === "violate" ? "ABUSE" : m === "violate" ? "MARKETING" : "SAFE";
+      const contradicts = !(pc === s.cat || (a === "violate" && m === "violate" && s.cat !== "SAFE"));
+      bump(`${reason ? "flagged" : "not_flagged"}:${contradicts ? "platform_contradicts" : "platform_agrees"}`);
+    }
+  }
+  writeFileSync(join(outDir, `suspects-${VIEW}.jsonl`), flagged.map((x) => JSON.stringify(x)).join("\n") + (flagged.length ? "\n" : ""));
+  const by = (k: (x: (typeof flagged)[number]) => string) => flagged.reduce<Record<string, number>>((m2, x) => ((m2[k(x)] = (m2[k(x)] ?? 0) + 1), m2), {});
+  const tp = evalC["flagged:platform_contradicts"] ?? 0, fp = evalC["flagged:platform_agrees"] ?? 0, fn = evalC["not_flagged:platform_contradicts"] ?? 0;
+  console.log(JSON.stringify({ split: PART, view: VIEW, calibVer: cal.calibVer, items: items.length, answered, flagged: flagged.length, by_reason: by((x) => x.reason), by_basis: by((x) => x.basis),
+    vs_platform: { ...evalC, precision: tp + fp ? +(tp / (tp + fp)).toFixed(3) : null, recall: tp + fn ? +(tp / (tp + fn)).toFixed(3) : null } }, null, 1));
 } else {
-  throw new Error("phase must be collect | score | separation | agent-lines");
+  throw new Error("phase must be collect | score | separation | agent-lines | suspects");
 }
