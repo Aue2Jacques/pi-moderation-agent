@@ -78,7 +78,7 @@ async function main(): Promise<void> {
     flags: { escalation: !demo && env("FLAG_ESCALATION", "false") === "true" }, maxModelCalls: envNum("MAX_MODEL_CALLS", 20), strongModel: { provider: "a6api", modelId: strong },
     // demo mode admits more sessions at once: the scripted agent waits on timers, not on a model, and the demo traffic
     // runs at up to MAX_PER_SEC contents a second (docs/console-2026-10-09.md §6.3)
-    now: () => Date.now(), admitMax: envNum("ADMIT_MAX", demo ? 64 : 10), modelFor: () => agent, instructions: INSTRUCTIONS,
+    now: () => Date.now(), admitMax: envNum("ADMIT_MAX", demo ? 128 : 10), modelFor: () => agent, instructions: INSTRUCTIONS,
   });
   const started = await worker.start();
   console.log(JSON.stringify({ msg: "worker up", mode: demo ? "demo" : "real", workerId, ...started, agentModel, calib_mode: calibrator.mode, calib_ver: calibrator.calibVer }));

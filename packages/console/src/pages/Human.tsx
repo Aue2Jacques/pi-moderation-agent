@@ -11,6 +11,7 @@ import { useFreshIds } from "../motion.tsx";
 import { ContentHeader, ReviewCard } from "../Timeline.tsx";
 import { ActionBadge, Alert, Badge, Empty, Id, PageHead, Panel, SimTag, ago, clock, duration } from "../ui.tsx";
 
+const RENDER_MAX = 100;
 type ClaimRule = { rule_id: string; default_action: "limit" | "takedown" };
 
 function Who({ id }: { id: string | null }) {
@@ -26,9 +27,10 @@ export function Human({ selected }: { selected: string | null }) {
   const [tab, setTab] = useState<"open" | "closed">("open");
   const queue = useLiveQuery<HumanQueueItem[]>(`/api/human/queue?status=${tab}`, live.frame?.versions.human);
   const now = useNow(1000);
-  const items = queue.data ?? [];
+  const all = queue.data ?? [];
+  const items = all.slice(0, RENDER_MAX);   // a busy queue: the first rows only (the count is in the tab)
   const fresh = useFreshIds(queue.data?.map((x) => x.review_id) ?? null, queue.path ?? "");
-  const current = items.find((x) => x.review_id === selected) ?? null;
+  const current = all.find((x) => x.review_id === selected) ?? null;
   const [pinned, setPinned] = useState<HumanQueueItem | null>(null);
   useEffect(() => { if (current) setPinned(current); else if (!selected) setPinned(null); }, [current, selected]);
   const task = current ?? (pinned?.review_id === selected ? pinned : null);
@@ -43,9 +45,9 @@ export function Human({ selected }: { selected: string | null }) {
 
   return (
     <>
-      <PageHead title="人工复核" desc={<>agent 拿不准或因系统原因转人工的内容。裁决同样经过提交检查。{config.demo_traffic ? <> 演示模式下有一位模拟审核员（标 <SimTag />）按限速处理模拟任务。</> : null}</>} />
+      <PageHead title="人工复核" desc={<>agent 拿不准或因系统原因转人工的内容。裁决同样经过提交检查。{config.demo_traffic ? <> 演示模式下有一位模拟审核员（标 <SimTag />）处理模拟任务，产能随流入调整。</> : null}</>} />
       <div className="split-wide">
-        <Panel title="队列" sub={tab === "open" ? "按严重度和时限排序" : "最近完成"} flush actions={
+        <Panel title="队列" sub={`${tab === "open" ? "按严重度和时限排序" : "最近完成"}${all.length > RENDER_MAX ? `，显示前 ${RENDER_MAX} 条（共 ${all.length} 条）` : ""}`} flush actions={
           <>
             <div className="seg" role="tablist" aria-label="队列">
               <button className={tab === "open" ? "on" : ""} onClick={() => setTab("open")} role="tab" aria-selected={tab === "open"}>待处理{live.frame ? ` ${live.frame.stats.human.open}` : ""}</button>

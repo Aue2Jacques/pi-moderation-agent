@@ -147,14 +147,17 @@ export class Gateway {
   }
 
   /** Fast-path completions per second over the last 300 s (from `recent`, i.e. this process's memory). */
-  flow(): { series: number[]; at: number; per_sec: number } {
+  flow(): { series: number[]; at: number; per_sec: number; p50_ms: number | null; p95_ms: number | null } {
     const at = Math.floor(this.d.now() / 1000) * 1000;
     const series = new Array<number>(300).fill(0);
     for (const r of this.recent) {
       const i = 299 - Math.floor((at - 1 - r.at) / 1000);
       if (i >= 0 && i < 300) series[i]!++;
     }
-    return { series, at, per_sec: series.slice(-5).reduce((a, b) => a + b, 0) / 5 };
+    // fast-path time per content over the last minute (judge call + policy + write; not the wait in the intake queue)
+    const lat = this.recent.filter((r) => r.at > at - 60_000).map((r) => r.latencyMs).sort((a, b) => a - b);
+    const pc = (p: number): number | null => (lat.length ? lat[Math.min(lat.length - 1, Math.floor(lat.length * p))]! : null);
+    return { series, at, per_sec: series.slice(-5).reduce((a, b) => a + b, 0) / 5, p50_ms: pc(0.5), p95_ms: pc(0.95) };
   }
 
   tickControl(): core.control.TickResult {

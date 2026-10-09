@@ -55,28 +55,32 @@ function SignIn({ onDone }: { onDone: (r: Reviewer) => void }) {
   );
 }
 
-const RATES = [6, 12, 20, 40, 60, 120];
-
-/** Demo traffic: running / paused, contents per minute. Shown in demo mode only. */
+/** Demo traffic: pause and rate tiers (contents a second). Shown in demo mode only; a select on narrow screens. */
 function TrafficControl({ status }: { status: TrafficStatus }) {
   const [err, setErr] = useState<string | null>(null);
-  const set = (body: { per_min?: number; paused?: boolean }): void => { api.post("/api/demo/traffic", body).then(() => setErr(null)).catch((e) => setErr(errText(e))); };
-  const running = !status.paused && status.per_min > 0;
-  const rates = RATES.includes(status.per_min) || status.per_min === 0 ? RATES : [...RATES, status.per_min].sort((a, b) => a - b);
+  const set = (body: { per_sec?: number; paused?: boolean }): void => { api.post("/api/demo/traffic", body).then(() => setErr(null)).catch((e) => setErr(errText(e))); };
+  const running = !status.paused && status.per_sec > 0;
+  const tiers = status.tiers.length ? status.tiers : [1, 5, 10, 20, 50];
+  const title = err ?? `模拟流量：已生成 ${status.generated.toLocaleString("en-US")} 条，模拟审核员已处理 ${status.sim_reviewer.decided.toLocaleString("en-US")} 条`;
   return (
-    <div className={`traffic ${running ? "" : "paused"}`} title={err ?? `模拟流量：已生成 ${status.generated} 条，模拟审核员已处理 ${status.sim_reviewer.decided} 条`}>
-      <span><span className={`dot ${running ? "pulse" : ""}`} /><span className="hide-sm">模拟流量</span></span>
-      <label className="row" style={{ gap: 2, flexWrap: "nowrap" }}>
-        <span className="sr-only">每分钟条数</span>
-        <select value={status.per_min} onChange={(e) => set({ per_min: Number(e.target.value), paused: false })} aria-label="模拟流量每分钟条数">
-          {status.per_min === 0 ? <option value={0}>关</option> : null}
-          {rates.map((r) => <option key={r} value={r}>{r}</option>)}
-        </select>
-        <span className="faint">/分</span>
-      </label>
-      <button type="button" onClick={() => set(status.per_min === 0 ? { per_min: 20, paused: false } : { paused: !status.paused })} aria-label={running ? "暂停模拟流量" : "继续模拟流量"} title={running ? "暂停" : "继续"}>
+    <div className={`traffic ${running ? "" : "paused"}`} title={title}>
+      <span className="tl"><span className={`dot ${running ? "pulse" : ""}`} /><span className="hide-md">模拟流量</span></span>
+      <button type="button" className="tp" onClick={() => set(status.per_sec === 0 ? { per_sec: 10, paused: false } : { paused: !status.paused })} aria-label={running ? "暂停模拟流量" : "继续模拟流量"} title={running ? "暂停" : "继续"}>
         <Icon name={running ? "pause" : "play"} size={13} />
       </button>
+      <div className="tiers hide-sm" role="radiogroup" aria-label="模拟流量每秒条数">
+        {tiers.map((r) => (
+          <button key={r} type="button" role="radio" aria-checked={running && status.per_sec === r} className={running && status.per_sec === r ? "on" : ""} onClick={() => set({ per_sec: r, paused: false })} aria-label={`每秒 ${r} 条`} title={`每秒 ${r} 条`}>{r}</button>
+        ))}
+        <span className="u">/秒</span>
+      </div>
+      <label className="tsel show-sm">
+        <span className="sr-only">每秒条数</span>
+        <select value={tiers.includes(status.per_sec) ? status.per_sec : ""} onChange={(e) => set({ per_sec: Number(e.target.value), paused: false })} aria-label="模拟流量每秒条数（下拉）">
+          {tiers.includes(status.per_sec) ? null : <option value="">{status.per_sec === 0 ? "关" : `${status.per_sec}/秒`}</option>}
+          {tiers.map((r) => <option key={r} value={r}>{r}/秒</option>)}
+        </select>
+      </label>
     </div>
   );
 }

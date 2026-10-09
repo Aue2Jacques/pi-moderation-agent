@@ -207,6 +207,8 @@ export type Flow = {
   at: number;
   /** mean over the last 5 seconds (contents a second) */
   per_sec: number;
+  /** fast-path time per content over the last minute (judge call, policy, write; without the wait in the intake queue) */
+  p50_ms: number | null; p95_ms: number | null;
 };
 
 /** One frame of GET /api/events (SSE event "live"). */

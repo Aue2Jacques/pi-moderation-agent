@@ -77,14 +77,14 @@ export function Appeals({ preset }: { preset: string | null }) {
           </Panel>
         </div>
 
-        <Panel title="申诉记录" sub={`${appeals.data?.length ?? 0} 条`} flush>
+        <Panel title="申诉记录" sub={`${appeals.data?.length ?? 0} 条${(appeals.data?.length ?? 0) > 100 ? "，显示最近 100 条" : ""}`} flush>
           {appeals.error ? <div className="panel-b"><Alert tone="bad">{appeals.error}</Alert></div> : null}
           {!appeals.data ? <Empty>加载中…</Empty> : appeals.data.length === 0 ? <Empty>还没有申诉。对已处置的内容发起一次，可以看到新审次如何重审。</Empty> : (
             <div className="table-wrap">
               <table className="table stackable">
                 <thead><tr><th>内容</th><th>理由</th><th>原裁决 → 重审结果</th><th>状态</th><th className="num">时间</th></tr></thead>
                 <tbody>
-                  {appeals.data.map((a) => (
+                  {appeals.data.slice(0, 100).map((a) => (
                     <tr key={a.review_id} className={`click ${freshAppeals.has(a.review_id) ? "fresh" : ""}`} tabIndex={0} onClick={() => go(`/contents/${encodeURIComponent(a.content_id)}`)} onKeyDown={(e) => { if (e.key === "Enter") go(`/contents/${encodeURIComponent(a.content_id)}`); }}>
                       <td className="lead"><span className="row" style={{ gap: 6 }}><Id value={a.content_id} short />{isSim(a.content_id) ? <SimTag /> : null}</span></td>
                       <td data-label="理由" className="small">{appealReason(a.reason_code)}</td>
