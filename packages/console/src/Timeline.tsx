@@ -2,6 +2,7 @@
 // submit check, human task, ruling). Rendered from the /api/contents/:id timeline (live via SSE where it is shown).
 import type { AgentStep, ContentTimeline, JudgeRound, QuestionScore, ReviewTimeline } from "./api.ts";
 import { ACTION, ACTOR, QUESTION, ROUTE, SCENE, TOOL, TRIGGER, reasonText } from "./labels.ts";
+import { useInitialCount } from "./motion.tsx";
 import { ActionBadge, Badge, Icon, Id, PhaseBadge, RouteBadge, SimTag, StateBadge, clock, duration, p2, p3, yuan, type Tone } from "./ui.tsx";
 
 // ---------- probability rows ----------
@@ -101,14 +102,14 @@ function stepText(s: AgentStep): string {
   }
 }
 
-function StepRow({ s, t0 }: { s: AgentStep; t0: number }) {
+function StepRow({ s, t0, i }: { s: AgentStep; t0: number; i: number }) {
   const final = (s.tool === "dispose" || s.tool === "release") && s.status === "ok";
   const tone = s.status === "rejected" || s.status === "blocked" ? "bad" : s.status === "pending" ? "pending" : s.tool === "release" ? "warn" : final ? "final" : "ok";
   const chips: string[] = [];
   if (s.tool === "judge" || s.tool === "confirm" || s.tool === "dispose") for (const e of (s.args["evidence_ids"] as string[] | undefined) ?? []) chips.push(e.split("#").pop() ?? e);
   const evId = (s.result as { evidence_id?: string } | null)?.evidence_id;
   return (
-    <div className={`step ${tone}`}>
+    <div className={`step ${tone}`} style={{ ["--i" as string]: i }}>
       <div className="node"><i /></div>
       <div className="st">
         <b>{TOOL[s.tool] ?? s.tool}</b><span className="tool">{s.tool}</span>
@@ -120,6 +121,12 @@ function StepRow({ s, t0 }: { s: AgentStep; t0: number }) {
       {chips.length || evId ? <div className="chips">{evId ? <span className="chip" title={evId}>→ {evId.split("#").pop()}</span> : null}{chips.map((c) => <span className="chip" key={c}>{c}</span>)}</div> : null}
     </div>
   );
+}
+
+/** Steps present when the card opened stagger in one after another; steps arriving live appear as they come. */
+function Steps({ r }: { r: ReviewTimeline }) {
+  const n0 = useInitialCount(r.steps.length);
+  return <div className="steps">{r.steps.map((s, i) => <StepRow key={s.call_id} s={s} t0={r.created_at} i={i < n0 ? Math.min(i, 8) : 0} />)}</div>;
 }
 
 // ---------- review card ----------
@@ -160,7 +167,7 @@ export function ReviewCard({ r, restricted }: { r: ReviewTimeline; restricted: b
             <span className="sub">工具 {r.tools_used}/{r.budget_tools} 次 · 费用 {yuan(r.used_micro)}{r.cost_status === "estimated" ? "（估计）" : ""} · 模型 {r.agent_model ?? "—"}</span></div>
           {r.steps.length === 0 ? (
             <div className="small muted row">{r.state === "queued" ? <><span className="dot pulse" style={{ background: "var(--info)" }} />排队中，等待 worker 领取</> : r.state === "investigating" ? <><span className="dot pulse" style={{ background: "var(--info)" }} />已领取，agent 正在读任务说明</> : "没有工具调用"}</div>
-          ) : <div className="steps">{r.steps.map((s) => <StepRow key={s.call_id} s={s} t0={r.created_at} />)}</div>}
+          ) : <Steps r={r} />}
           {r.state === "investigating" && r.steps.length ? <div className="small muted row" style={{ marginTop: 6 }}><span className="dot pulse" style={{ background: "var(--info)" }} />等待下一步…</div> : null}
           {agentRounds.length ? (
             <details className="more" style={{ marginTop: 10 }}><summary>带证据复判明细（{agentRounds.length} 次）</summary>

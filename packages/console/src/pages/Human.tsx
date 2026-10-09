@@ -7,6 +7,7 @@ import { api, authHeaders, errText, type Action, type ContentTimeline, type Huma
 import { useEventSource, useNow } from "../hooks.ts";
 import { ACTION, QUESTION, SCENE, reasonText } from "../labels.ts";
 import { useLive, useLiveQuery } from "../live.tsx";
+import { useFreshIds } from "../motion.tsx";
 import { ContentHeader, ReviewCard } from "../Timeline.tsx";
 import { ActionBadge, Alert, Badge, Empty, Id, PageHead, Panel, SimTag, ago, clock, duration } from "../ui.tsx";
 
@@ -26,6 +27,7 @@ export function Human({ selected }: { selected: string | null }) {
   const queue = useLiveQuery<HumanQueueItem[]>(`/api/human/queue?status=${tab}`, live.frame?.versions.human);
   const now = useNow(1000);
   const items = queue.data ?? [];
+  const fresh = useFreshIds(queue.data?.map((x) => x.review_id) ?? null, queue.path ?? "");
   const current = items.find((x) => x.review_id === selected) ?? null;
   const [pinned, setPinned] = useState<HumanQueueItem | null>(null);
   useEffect(() => { if (current) setPinned(current); else if (!selected) setPinned(null); }, [current, selected]);
@@ -61,7 +63,7 @@ export function Human({ selected }: { selected: string | null }) {
                   {items.map((x) => {
                     const left = x.due_at - now;
                     return (
-                      <tr key={x.review_id} className={`click ${x.review_id === selected ? "sel" : ""}`} tabIndex={0} onClick={() => select(x.review_id)} onKeyDown={(e) => { if (e.key === "Enter") select(x.review_id); }}>
+                      <tr key={x.review_id} className={`click ${x.review_id === selected ? "sel" : ""} ${fresh.has(x.review_id) ? "fresh" : ""}`} tabIndex={0} onClick={() => select(x.review_id)} onKeyDown={(e) => { if (e.key === "Enter") select(x.review_id); }}>
                         <td className="lead"><div className="cell-2"><span className="row" style={{ gap: 6 }}><Id value={x.content_id} short />{isSim(x.content_id) ? <SimTag /> : null}</span>
                           <span className="s">{SCENE[x.scene] ?? x.scene} · {x.trigger === "appeal" ? "申诉审次" : `第 ${x.review_id.split("#").pop()} 审次`} · 严重度 {x.severity}</span></div></td>
                         <td data-label="原因" className="small" style={{ minWidth: 96 }}>{reasonText(x.reason)}</td>

@@ -405,6 +405,37 @@ details.more[open] summary::before { transform: rotate(90deg); }
 .lines .ln .v { grid-column: 2; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .ver { font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; line-height: 1.4; }
 
+/* ---------- motion ---------- */
+/* Page change: the page container is keyed by route. */
+.page { animation: page-in 0.26s var(--ease) both; }
+@keyframes page-in { from { opacity: 0; transform: translateY(6px); } }
+/* New rows in live lists: slide in and fade a short highlight. */
+.table tbody tr.fresh td, .feed-row.fresh { animation: row-in 1.4s var(--ease) both; }
+@keyframes row-in { 0% { opacity: 0; transform: translateY(-6px); background-color: var(--accent-weak); } 25% { opacity: 1; transform: none; background-color: var(--accent-weak); } 100% { background-color: transparent; } }
+/* A badge whose value changed (keyed by value) settles in. */
+.badge.swap { animation: badge-in 0.38s var(--ease) both; }
+@keyframes badge-in { from { opacity: 0; transform: scale(0.88); } }
+/* Timeline: reviews and their sections rise in; agent steps one after another (--i), live ones as they arrive. */
+.review { animation: rise 0.36s var(--ease) both; }
+.step { animation: step-in 0.42s var(--ease) both; animation-delay: calc(var(--i, 0) * 90ms); }
+@keyframes step-in { from { opacity: 0; transform: translateX(-6px); } }
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+.ev { animation: fade 0.35s var(--ease) both; }
+@keyframes fade { from { opacity: 0; } }
+/* Score bars grow from zero, then the markers drop in. */
+.track .fill { transform-origin: left center; animation: grow 0.8s var(--ease) both; }
+@keyframes grow { from { transform: scaleX(0); } }
+.track .mk { animation: fade 0.35s 0.45s var(--ease) both; }
+.prob + .prob .track .fill { animation-delay: 0.08s; }
+.prob + .prob + .prob .track .fill { animation-delay: 0.16s; }
+.share > div, .meter .fill { animation: grow 0.8s var(--ease) both; transform-origin: left center; }
+.bars .col { animation: bar-up 0.6s var(--ease) both; transform-origin: bottom; }
+@keyframes bar-up { from { transform: scaleY(0); } }
+.kpi-v .num { display: inline-block; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+
 /* ---------- responsive ---------- */
 @media (max-width: 1180px) {
   .g-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }

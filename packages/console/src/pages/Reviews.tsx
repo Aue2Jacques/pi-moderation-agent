@@ -4,6 +4,7 @@ import { useConsole } from "../App.tsx";
 import type { ReviewListItem } from "../api.ts";
 import { ACTION, ACTOR, ROUTE, ROUTES, SCENE, STATE, reasonText } from "../labels.ts";
 import { useLive, useLiveQuery } from "../live.tsx";
+import { useFreshIds } from "../motion.tsx";
 import { ActionBadge, Alert, Empty, Id, PageHead, Panel, RouteBadge, SimTag, StateBadge, dateTime, yuan } from "../ui.tsx";
 
 const PAGE = 50;
@@ -25,6 +26,7 @@ export function Reviews() {
     </label>
   );
   const total = list.data?.total ?? 0;
+  const fresh = useFreshIds(list.data?.items.map((r) => r.review_id) ?? null, list.path ?? "");
   const open = (r: ReviewListItem): void => go(`/contents/${encodeURIComponent(r.content_id)}`);
 
   return (
@@ -57,7 +59,7 @@ export function Reviews() {
               <thead><tr><th>内容</th><th>场景</th><th>路径</th><th>原因</th><th>状态</th><th>结论</th><th>处理方</th><th className="num">agent 费用</th><th className="num">创建</th></tr></thead>
               <tbody>
                 {list.data.items.map((r) => (
-                  <tr key={r.review_id} className="click" tabIndex={0} onClick={() => open(r)} onKeyDown={(e) => { if (e.key === "Enter") open(r); }}>
+                  <tr key={r.review_id} className={`click ${fresh.has(r.review_id) ? "fresh" : ""}`} tabIndex={0} onClick={() => open(r)} onKeyDown={(e) => { if (e.key === "Enter") open(r); }}>
                     <td className="lead"><div className="cell-2"><span className="row" style={{ gap: 6 }}><Id value={r.content_id} short />{isSim(r.content_id) ? <SimTag /> : null}</span>
                       <span className="s">第 {r.seq} 次 · {r.trigger === "appeal" ? "申诉" : r.trigger === "fast" ? "快判" : "疑似"}</span></div></td>
                     <td data-label="场景" className="nowrap">{SCENE[r.scene] ?? r.scene}</td>

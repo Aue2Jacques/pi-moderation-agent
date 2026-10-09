@@ -40,31 +40,36 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   return <LiveCtx.Provider value={state}>{children}</LiveCtx.Provider>;
 }
 
-export type LiveQuery<T> = { data: T | null; error: string | null; reload: () => void };
+/** `path`: the query the current `data` was read with (it lags behind a changed path until the new read lands) */
+export type LiveQuery<T> = { data: T | null; path: string | null; error: string | null; reload: () => void };
 
 /**
  * GET `path` now, and again whenever `version` changes — at most once per `minGapMs` (a burst of changes becomes one
  * read). A changed path (other filters, another page) reads at once. The last good value stays while re-reading.
  */
 export function useLiveQuery<T>(path: string | null, version: string | undefined, headers?: Record<string, string>, minGapMs = 1000): LiveQuery<T> {
-  const [data, setData] = useState<T | null>(null);
+  const [data, setData] = useState<{ v: T; path: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const last = useRef<{ path: string | null; at: number }>({ path: null, at: 0 });
+  // responses are kept unless the path moved on: a newer counter must not throw away a read already in flight, or a
+  // busy stream (a frame every second) could keep a list from ever loading
+  const seq = useRef({ path, sent: 0, applied: 0 });
+  seq.current.path = path;
   const hdr = JSON.stringify(headers ?? {});
   useEffect(() => {
     if (!path) return;
-    let alive = true;
     const load = (): void => {
+      const my = ++seq.current.sent;
       last.current = { path, at: Date.now() };
       api.get<T>(path, JSON.parse(hdr) as Record<string, string>)
-        .then((v) => { if (alive) { setData(v); setError(null); } })
-        .catch((e) => { if (alive) setError(errText(e)); });
+        .then((v) => { if (seq.current.path === path && my > seq.current.applied) { seq.current.applied = my; setData({ v, path }); setError(null); } })
+        .catch((e) => { if (seq.current.path === path) setError(errText(e)); });
     };
     const wait = last.current.path === path ? Math.max(0, minGapMs - (Date.now() - last.current.at)) : 0;
     const t = setTimeout(load, wait);
-    return () => { alive = false; clearTimeout(t); };
+    return () => clearTimeout(t);
   }, [path, version, hdr, tick, minGapMs]);
   // a reload after the user's own action reads at once
-  return { data, error, reload: () => { last.current.at = 0; setTick((x) => x + 1); } };
+  return { data: data?.v ?? null, path: data?.path ?? null, error, reload: () => { last.current.at = 0; setTick((x) => x + 1); } };
 }

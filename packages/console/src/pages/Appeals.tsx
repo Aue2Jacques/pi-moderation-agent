@@ -5,6 +5,7 @@ import { useConsole } from "../App.tsx";
 import { api, errText, type AppealItem, type ContentTimeline, type ReviewListItem } from "../api.ts";
 import { ACTOR, APPEAL_REASONS, SCENE, appealReason } from "../labels.ts";
 import { useLive, useLiveQuery } from "../live.tsx";
+import { useFreshIds } from "../motion.tsx";
 import { ActionBadge, Alert, Badge, Empty, Id, PageHead, Panel, SimTag, StateBadge, dateTime } from "../ui.tsx";
 
 export function Appeals({ preset }: { preset: string | null }) {
@@ -27,6 +28,7 @@ export function Appeals({ preset }: { preset: string | null }) {
   const appeals = useLiveQuery<AppealItem[]>("/api/appeals", live.frame?.versions.appeals);
   const disposed = useLiveQuery<{ items: ReviewListItem[] }>("/api/review-list?state=disposed&limit=8", live.frame?.versions.reviews, undefined, 3000);
   const humanDone = useLiveQuery<{ items: ReviewListItem[] }>("/api/review-list?state=human_disposed&limit=8", live.frame?.versions.reviews, undefined, 3000);
+  const freshAppeals = useFreshIds(appeals.data?.map((a) => a.review_id) ?? null, "appeals");
   const candidates = [...(disposed.data?.items ?? []), ...(humanDone.data?.items ?? [])].sort((a, b) => b.updated_at - a.updated_at).slice(0, 8);
 
   async function submit(): Promise<void> {
@@ -83,7 +85,7 @@ export function Appeals({ preset }: { preset: string | null }) {
                 <thead><tr><th>内容</th><th>理由</th><th>原裁决 → 重审结果</th><th>状态</th><th className="num">时间</th></tr></thead>
                 <tbody>
                   {appeals.data.map((a) => (
-                    <tr key={a.review_id} className="click" tabIndex={0} onClick={() => go(`/contents/${encodeURIComponent(a.content_id)}`)} onKeyDown={(e) => { if (e.key === "Enter") go(`/contents/${encodeURIComponent(a.content_id)}`); }}>
+                    <tr key={a.review_id} className={`click ${freshAppeals.has(a.review_id) ? "fresh" : ""}`} tabIndex={0} onClick={() => go(`/contents/${encodeURIComponent(a.content_id)}`)} onKeyDown={(e) => { if (e.key === "Enter") go(`/contents/${encodeURIComponent(a.content_id)}`); }}>
                       <td className="lead"><span className="row" style={{ gap: 6 }}><Id value={a.content_id} short />{isSim(a.content_id) ? <SimTag /> : null}</span></td>
                       <td data-label="理由" className="small">{appealReason(a.reason_code)}</td>
                       <td data-label="结果"><span className="row" style={{ gap: 6 }}>

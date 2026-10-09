@@ -38,20 +38,21 @@ export function Badge({ tone = "neutral", dot, pulse, children, title, className
 }
 const ACTION_TONE: Record<Action, Tone> = { pass: "good", limit: "warn", takedown: "bad" };
 export function ActionBadge({ action, big }: { action: Action | null | undefined; big?: boolean }) {
-  if (!action) return <Badge>未定</Badge>;
-  return <Badge tone={ACTION_TONE[action]} className={big ? "lg" : undefined}>{ACTION[action]}</Badge>;
+  if (!action) return <Badge key="none">未定</Badge>;
+  // keyed by value: a changed action re-mounts and plays the swap transition
+  return <Badge key={action} tone={ACTION_TONE[action]} className={`swap ${big ? "lg" : ""}`}>{ACTION[action]}</Badge>;
 }
 const STATE_TONE: Record<string, Tone> = { queued: "info", investigating: "info", disposed: "neutral", human_queue: "warn", human_disposed: "neutral" };
 export function StateBadge({ state }: { state: string }) {
   const live = state === "queued" || state === "investigating" || state === "human_queue";
-  return <Badge tone={STATE_TONE[state] ?? "neutral"} dot pulse={state === "investigating"} className={live ? "" : "quiet"}>{STATE[state] ?? state}</Badge>;
+  return <Badge key={state} tone={STATE_TONE[state] ?? "neutral"} dot pulse={state === "investigating"} className={`swap ${live ? "" : "quiet"}`}>{STATE[state] ?? state}</Badge>;
 }
 export function RouteBadge({ route }: { route: RouteKind }) {
   return <span className="route"><span className="sw" style={{ background: `var(--route-${route}, var(--text-3))` }} />{ROUTE[route]}</span>;
 }
 export function PhaseBadge({ phase }: { phase: string }) {
   const tone: Tone = phase === "done" ? "good" : phase === "human" ? "warn" : "info";
-  return <Badge tone={tone} dot pulse={phase !== "done"}>{PHASE[phase] ?? phase}</Badge>;
+  return <Badge key={phase} tone={tone} dot pulse={phase !== "done"} className="swap">{PHASE[phase] ?? phase}</Badge>;
 }
 export const ActorText = ({ actor }: { actor: string | null | undefined }) => <span>{actor ? (ACTOR[actor] ?? actor) : "—"}</span>;
 /** Marks generated demo traffic and the simulated reviewer. */

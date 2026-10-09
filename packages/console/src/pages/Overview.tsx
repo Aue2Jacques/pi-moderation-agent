@@ -6,6 +6,7 @@ import type { ReviewListItem, Stats, TrafficKind, TrafficStatus } from "../api.t
 import { useEventSource } from "../hooks.ts";
 import { ACTION, ROUTE, ROUTES, reasonText } from "../labels.ts";
 import { useLive } from "../live.tsx";
+import { AnimatedNumber, useFreshIds } from "../motion.tsx";
 import { ActionBadge, Alert, Empty, Id, Kpi, PageHead, Panel, RouteBadge, SimTag, StateBadge, clock, duration, pad2, pct, yuan } from "../ui.tsx";
 
 type Metrics = { intake_rate: number; fast_rate: number; queue_intake: number; queue_agent: number; queue_human: number; outstanding_total: number; replay_paused: boolean;
@@ -66,11 +67,12 @@ function Meter({ rows, total: t }: { rows: [string, number][]; total: number }) 
 /** The latest reviews as they arrive on the live stream. */
 function LiveFeed({ items }: { items: ReviewListItem[] }) {
   const { go, isSim } = useConsole();
+  const fresh = useFreshIds(items.map((r) => r.review_id), "feed");
   if (!items.length) return <Empty>还没有审次</Empty>;
   return (
     <div className="feed-list" aria-live="polite">
       {items.map((r) => (
-        <div key={r.review_id} className="feed-row" role="link" tabIndex={0} onClick={() => go(`/contents/${encodeURIComponent(r.content_id)}`)} onKeyDown={(e) => { if (e.key === "Enter") go(`/contents/${encodeURIComponent(r.content_id)}`); }}>
+        <div key={r.review_id} className={`feed-row ${fresh.has(r.review_id) ? "fresh" : ""}`} role="link" tabIndex={0} onClick={() => go(`/contents/${encodeURIComponent(r.content_id)}`)} onKeyDown={(e) => { if (e.key === "Enter") go(`/contents/${encodeURIComponent(r.content_id)}`); }}>
           <span className="tm">{clock(r.created_at)}</span>
           <span className="what"><RouteBadge route={r.route} />{isSim(r.content_id) ? <SimTag /> : <Id value={r.content_id} short className="faint" />}</span>
           <span className="out">{r.action ? <ActionBadge action={r.action} /> : <StateBadge state={r.state} />}</span>
@@ -88,9 +90,9 @@ function TrafficPanel({ t }: { t: TrafficStatus }) {
     <Panel title="模拟流量" sub={t.paused || t.per_min === 0 ? "已暂停" : `每分钟约 ${t.per_min} 条`}>
       <div className="stack" style={{ gap: 14 }}>
         <div className="trio">
-          <Kpi label="已生成" value={t.generated} />
-          <Kpi label="模拟审核员已处理" value={t.sim_reviewer.decided} />
-          <Kpi label="模拟申诉" value={t.appeals} />
+          <Kpi label="已生成" value={<AnimatedNumber value={t.generated} />} />
+          <Kpi label="模拟审核员已处理" value={<AnimatedNumber value={t.sim_reviewer.decided} />} />
+          <Kpi label="模拟申诉" value={<AnimatedNumber value={t.appeals} />} />
         </div>
         <div className="meter two">
           {(Object.keys(KIND) as TrafficKind[]).map((k) => (
@@ -122,11 +124,11 @@ export function Overview() {
       {head}
       {d.contents === 0 ? <Alert tone="info">还没有内容。到“提交与追踪”提交一条{config.mode === "demo" ? "，或点演示示例；开启顶栏的模拟流量后数字会持续变化" : ""}。</Alert> : null}
       <div className="kpis" style={{ ["--n" as string]: 5 }}>
-        <Kpi label="已接入内容" value={d.contents} foot={`已快判 ${d.judged} · 审次 ${d.reviews}`} />
-        <Kpi label="自动完成率" value={pct(auto, finished)} foot={`快判 ${d.routes.fast_pass + d.routes.fast_block} · agent 处置 ${d.agent.disposed} / 已结束 ${finished}`} />
-        <Kpi label="agent 处理中" value={d.agent.open} foot={`已处置 ${d.agent.disposed} · 交人工 ${d.agent.released}`} />
-        <Kpi label="人工队列" value={d.human.open} tone={d.human.overdue ? "warn" : undefined} foot={`已领取 ${d.human.claimed} · 超时 ${d.human.overdue} · 已完成 ${d.human.closed}`} />
-        <Kpi label="每条平均费用" value={yuan(d.cost.per_content_micro, 5)} foot={`快判 ${yuan(d.cost.fast_micro)} · 审次 ${yuan(d.cost.review_micro)}`} />
+        <Kpi label="已接入内容" value={<AnimatedNumber value={d.contents} />} foot={`已快判 ${d.judged} · 审次 ${d.reviews}`} />
+        <Kpi label="自动完成率" value={finished ? <AnimatedNumber value={(100 * auto) / finished} format={(x) => `${Math.round(x)}%`} /> : "—"} foot={`快判 ${d.routes.fast_pass + d.routes.fast_block} · agent 处置 ${d.agent.disposed} / 已结束 ${finished}`} />
+        <Kpi label="agent 处理中" value={<AnimatedNumber value={d.agent.open} />} foot={`已处置 ${d.agent.disposed} · 交人工 ${d.agent.released}`} />
+        <Kpi label="人工队列" value={<AnimatedNumber value={d.human.open} />} tone={d.human.overdue ? "warn" : undefined} foot={`已领取 ${d.human.claimed} · 超时 ${d.human.overdue} · 已完成 ${d.human.closed}`} />
+        <Kpi label="每条平均费用" value={<AnimatedNumber value={d.cost.per_content_micro} format={(x) => yuan(x, 5)} />} foot={`快判 ${yuan(d.cost.fast_micro)} · 审次 ${yuan(d.cost.review_micro)}`} />
       </div>
 
       <div className="grid g-main">
@@ -167,9 +169,9 @@ export function Overview() {
         <div className="stack" style={{ gap: 16 }}>
           <Panel title="申诉">
             <div className="trio">
-              <Kpi label="申诉总数" value={d.appeals.total} />
-              <Kpi label="处理中" value={d.appeals.open} />
-              <Kpi label="改判" value={d.appeals.changed} />
+              <Kpi label="申诉总数" value={<AnimatedNumber value={d.appeals.total} />} />
+              <Kpi label="处理中" value={<AnimatedNumber value={d.appeals.open} />} />
+              <Kpi label="改判" value={<AnimatedNumber value={d.appeals.changed} />} />
             </div>
           </Panel>
           <Panel title="网关窗口指标" sub={connected ? "内存窗口，每秒推送" : "未连接"}>
