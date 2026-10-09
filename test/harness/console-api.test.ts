@@ -72,6 +72,7 @@ beforeAll(async () => {
     ...process.env, DEMO: "1", APP_DB: join(dir, "app.db"), SESSION_DB: join(dir, "session.sqlite"), W_LOCK: join(dir, "w.lock.db"),
     G_PORT: String(gp), W_PORT: String(wp), CONSOLE_DIR: consoleDir, HUMAN_REVIEW_TOKEN: TOKEN,
     DEMO_JUDGE_MS: "20", DEMO_AGENT_MS: "40", INTAKE_MS: "100", ADMIT_MS: "150", STREAM_POLL_MS: "100",
+    DEMO_TRAFFIC_PER_MIN: "0",   // exact counts below: no generated traffic (test/harness/demo-traffic.test.ts covers it)
   };
   g = (await startProc("packages/gateway/src/main.ts", env, "gateway up")).proc;
   w = (await startProc("packages/worker/src/main.ts", env, "worker up")).proc;

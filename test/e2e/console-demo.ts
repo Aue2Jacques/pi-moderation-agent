@@ -2,7 +2,7 @@
 // (and builds the console if needed); then submit -> timeline -> human decision -> appeal, checking each state change.
 // usage: node --experimental-strip-types --no-warnings test/e2e/console-demo.ts   (pnpm run e2e:console)
 // Exit code 0 = every check passed; the checks print as they run.
-import type { ConsoleConfig, ContentTimeline, HumanQueueItem, AppealItem, Stats } from "../../packages/gateway/src/console-types.ts";
+import type { ConsoleConfig, ContentTimeline, HumanQueueItem, AppealItem, ReviewListItem, Stats, TrafficStatus } from "../../packages/gateway/src/console-types.ts";
 import { launchDemo } from "./launch.ts";
 
 let failed = 0, passed = 0;
@@ -84,8 +84,16 @@ try {
   const missing = await post("/api/human/claim", { review_id: "nope#suspicious#1" }, H);
   check("claim of an unknown task -> 404", missing.status === 404);
 
+  // the demo traffic runs alongside (default rate): count only this script's contents, then check the traffic itself
+  const all = await get<{ items: ReviewListItem[] }>("/api/review-list?limit=200");
+  const own = all.items.filter((r) => !r.content_id.startsWith(cfg.demo_traffic!.sim_prefix));
+  const humanClosed = (await get<HumanQueueItem[]>("/api/human/queue?status=closed")).filter((x) => !x.content_id.startsWith(cfg.demo_traffic!.sim_prefix));
+  const ownAppeals = (await get<AppealItem[]>("/api/appeals")).filter((x) => !x.content_id.startsWith(cfg.demo_traffic!.sim_prefix));
+  check(`own reviews add up (reviews ${own.length}, human closed ${humanClosed.length}, appeals ${ownAppeals.length})`, own.length === 7 && humanClosed.length === 1 && ownAppeals.length === 1);
+  let tr = await get<TrafficStatus>("/api/demo/traffic");
+  for (let i = 0; i < 60 && tr.generated === 0; i++) { await new Promise((r) => setTimeout(r, 250)); tr = await get<TrafficStatus>("/api/demo/traffic"); }
   const s = await get<Stats>("/api/stats");
-  check(`stats add up (reviews ${s.reviews}, human closed ${s.human.closed}, appeals ${s.appeals.total})`, s.reviews === 7 && s.human.closed === 1 && s.appeals.total === 1);
+  check(`demo traffic is running (${tr.per_min}/min, generated ${tr.generated})`, tr.per_min > 0 && !tr.paused && tr.generated > 0 && s.contents > 6);
 } catch (e) {
   failed++;
   console.error("FAIL unexpected error", e);

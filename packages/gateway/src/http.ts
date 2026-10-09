@@ -8,8 +8,9 @@ import * as core from "@mod/core";
 import type { Db, PolicyBundle } from "@mod/core";
 import type { Gateway } from "./gateway.ts";
 import { DASHBOARD_HTML, HUMAN_HTML } from "./pages.ts";
+import { ActionError, claimTask, pinnedBundle, humanRule, intakeContent, openAppeal, unclaimTask } from "./console-actions.ts";
 import { buildTimeline, humanQueue, listAppeals, listReviews, rulesInfo, stats, type CalibFileInfo } from "./console-api.ts";
-import type { ConsoleConfig, DemoSampleInfo } from "./console-types.ts";
+import type { ConsoleConfig, DemoSampleInfo, TrafficStatus } from "./console-types.ts";
 
 /** What the console needs beyond the core HTTP deps. All optional: without it the API still works, with real-mode defaults. */
 export type ConsoleDeps = {
@@ -21,6 +22,10 @@ export type ConsoleDeps = {
   calibFiles?: readonly CalibFileInfo[];
   /** how often a timeline stream re-reads app.db (ms) */
   streamPollMs?: number;
+  /** demo mode only: the traffic generator behind /api/demo/traffic, and how its contents / reviewer are named */
+  traffic?: { status(): TrafficStatus; set(o: { perMin?: number; paused?: boolean }): void };
+  simPrefix?: string;
+  simReviewer?: string;
 };
 
 export type HttpDeps = { db: Db; gateway: Gateway; bundle: PolicyBundle; humanAuth: core.HumanAuth; now: () => number; console?: ConsoleDeps };
@@ -86,8 +91,7 @@ export function createHttpServer(d: HttpDeps): Server {
   const { db, gateway } = d;
   // dev plan R7: human work on a review uses the rules version the review is pinned to — the gateway's own bundle, or
   // the copy stored when that version was in use. undefined: that version was never stored here.
-  const bundleOf = (r: core.ReviewRow): core.PolicyBundle | undefined =>
-    r.rules_ver === d.bundle.rulesVer ? d.bundle : (core.loadStoredBundle(db, r.rules_ver)?.bundle as core.PolicyBundle | undefined);
+  const bundleOf = (r: core.ReviewRow): core.PolicyBundle | undefined => pinnedBundle(d, r);
   const stored = new Map<string, PolicyBundle>();
   const bundleByVer = (v: string): PolicyBundle | undefined => {
     if (v === d.bundle.rulesVer) return d.bundle;
@@ -136,6 +140,7 @@ export function createHttpServer(d: HttpDeps): Server {
           reviewers: [...d.humanAuth.reviewers],
           demo_auth: cons.mode === "demo" ? { reviewer: d.humanAuth.reviewers[0] ?? "rev1", token: d.humanAuth.token } : null,
           samples: [...(cons.samples ?? [])],
+          demo_traffic: cons.mode === "demo" && cons.traffic ? { sim_prefix: cons.simPrefix ?? "sim-", sim_reviewer: cons.simReviewer ?? "sim-reviewer" } : null,
         };
         return json(res, 200, cfg);
       }
@@ -171,23 +176,11 @@ export function createHttpServer(d: HttpDeps): Server {
         const parentAccount = parent && typeof parent["account_id"] === "string" && parent["account_id"] ? String(parent["account_id"]) : undefined;
         if (parentAccount !== undefined && !ID_RE.test(parentAccount)) return bad(res, `parent.account_id must match ${ID_RE.source}`);
         if (parent && opt("reply_to")) return bad(res, "give either parent or reply_to, not both");
-        const contentId = opt("content_id") ?? `c-${d.now().toString(36)}-${core.uuid().slice(0, 6)}`;
-        // idempotent by content id: the same text and scene again is a duplicate (200), anything else is a conflict
-        const existing = core.readContent(db, contentId);
-        if (existing) {
-          if (existing.scene === scene && existing.text_sha === core.sha256(text)) return json(res, 200, { content_id: contentId, duplicate: true });
-          return json(res, 409, { code: "E_REQUEST_CONFLICT", message: `content ${contentId} exists with a different payload` });
-        }
-        if (gateway.replayPaused) return json(res, 429, { code: "E_BACKPRESSURE", message: "intake paused by backpressure" });
-        const at = d.now();
-        const threadId = opt("thread_id") ?? (parent ? `t-${contentId}` : undefined);
-        let replyTo = opt("reply_to");
-        if (parent) {
-          // the parent existed before this content (context only: never judged itself; the agent's context tool reads it)
-          replyTo = `${contentId}.parent`;
-          core.contextInsert(db, { contentId: replyTo, scene: scene as core.Scene, text: parentText, ...(parentAccount ? { accountId: parentAccount } : {}), ...(threadId ? { threadId } : {}), eventTime: at - 60_000 }, at);
-        }
-        core.intakeInsert(db, { contentId, scene: scene as core.Scene, text, ...(opt("account_id") ? { accountId: opt("account_id")! } : {}), ...(threadId ? { threadId } : {}), ...(replyTo ? { replyTo } : {}), eventTime: at }, at);
+        const out = intakeContent(d, { text, scene: scene as core.Scene, ...(opt("content_id") ? { contentId: opt("content_id")! } : {}), ...(opt("account_id") ? { accountId: opt("account_id")! } : {}),
+          ...(opt("thread_id") ? { threadId: opt("thread_id")! } : {}), ...(opt("reply_to") ? { replyTo: opt("reply_to")! } : {}), ...(parent ? { parent: { text: parentText, ...(parentAccount ? { accountId: parentAccount } : {}) } } : {}) });
+        if (out.status === 409 || out.status === 429) return json(res, out.status, { code: out.code, message: out.message });
+        const contentId = out.contentId;
+        if (out.duplicate) return json(res, 200, { content_id: contentId, duplicate: true });
         return json(res, 201, { content_id: contentId, duplicate: false, timeline: `/api/contents/${encodeURIComponent(contentId)}`, stream: `/api/contents/${encodeURIComponent(contentId)}/stream` });
       }
       if (req.method === "GET" && (mm0 = m(/^\/api\/contents\/([^/]+)\/stream$/))) {
@@ -254,23 +247,9 @@ export function createHttpServer(d: HttpDeps): Server {
         const b = await readJson(req);
         // with review_id: claim that item (console); without: the next one by severity and due time (original behaviour)
         const wanted = b["review_id"] === undefined ? undefined : String(b["review_id"]);
-        type Claim = { review_id: string } | { error: number; code: string; message: string } | undefined;
-        const row: Claim = core.tx(db, (): Claim => {
-          if (wanted !== undefined) {
-            const q = db.prepare("SELECT review_id, claimed_by, closed_at FROM human_queue WHERE review_id=?").get(wanted) as { review_id: string; claimed_by: string | null; closed_at: number | null } | undefined;
-            if (!q) return { error: 404, code: "E_REVIEW_NOT_FOUND", message: `no human task for ${wanted}` };
-            if (q.closed_at !== null) return { error: 409, code: "E_STATE_INVALID", message: "task already closed" };
-            if (q.claimed_by && q.claimed_by !== who.reviewerId) return { error: 409, code: "E_LEASE_HELD", message: `claimed by ${q.claimed_by}` };
-            db.prepare("UPDATE human_queue SET claimed_by=?, claimed_at=? WHERE review_id=?").run(who.reviewerId, d.now(), q.review_id);
-            return { review_id: q.review_id };
-          }
-          const r = db.prepare("SELECT review_id FROM human_queue WHERE closed_at IS NULL AND (claimed_by IS NULL OR claimed_by=?) ORDER BY severity DESC, due_at LIMIT 1").get(who.reviewerId) as { review_id: string } | undefined;
-          if (r) db.prepare("UPDATE human_queue SET claimed_by=?, claimed_at=? WHERE review_id=?").run(who.reviewerId, d.now(), r.review_id);
-          return r;
-        });
-        if (row && "error" in row) return json(res, row.error, { code: row.code, message: row.message });
+        const row = claimTask(d, who.reviewerId, wanted);
         if (!row) return json(res, 200, { review: null });
-        const r = core.readReview(db, row.review_id)!;
+        const r = core.readReview(db, row.reviewId)!;
         const pinned = bundleOf(r);
         if (!pinned) return json(res, 409, { code: "E_BUNDLE_MISSING", message: `rules ${r.rules_ver} not stored` });
         return json(res, 200, { review: pick(r, REVIEW_PUBLIC), rules: core.rulesFor(pinned, core.readContent(db, r.content_id)!.scene).map((x) => ({ rule_id: x.ruleId, default_action: x.defaultAction })) });
@@ -279,26 +258,18 @@ export function createHttpServer(d: HttpDeps): Server {
         const who = auth(d, req);
         if (!who) return json(res, 401, { code: "E_HUMAN_AUTH" });
         const b = await readJson(req);
-        const n = core.tx(db, () => db.prepare("UPDATE human_queue SET claimed_by=NULL, claimed_at=NULL WHERE review_id=? AND claimed_by=? AND closed_at IS NULL").run(String(b["review_id"] ?? ""), who.reviewerId).changes);
-        return n === 1 ? json(res, 200, { released: true }) : json(res, 409, { code: "E_STATE_INVALID", message: "not claimed by you or already closed" });
+        return unclaimTask(d, who.reviewerId, String(b["review_id"] ?? "")) ? json(res, 200, { released: true }) : json(res, 409, { code: "E_STATE_INVALID", message: "not claimed by you or already closed" });
       }
       if (req.method === "POST" && path === "/api/human/submit") {
         const who = auth(d, req);
         if (!who) return json(res, 401, { code: "E_HUMAN_AUTH" });
         const b = await readJson(req);
-        const r = core.readReview(db, String(b["review_id"]));
-        if (!r) return json(res, 404, { code: "E_REVIEW_NOT_FOUND" });
-        // a task claimed by someone else is theirs to decide (an unclaimed one can still be decided directly)
-        const holder = (db.prepare("SELECT claimed_by FROM human_queue WHERE review_id=? AND closed_at IS NULL").get(r.review_id) as { claimed_by: string | null } | undefined)?.claimed_by;
-        if (holder && holder !== who.reviewerId) return json(res, 409, { code: "E_LEASE_HELD", message: `claimed by ${holder}` });
-        const pinned = bundleOf(r);
-        if (!pinned) return json(res, 409, { code: "E_BUNDLE_MISSING", message: `rules ${r.rules_ver} not stored` });
         try {
-          const out = core.submitRuling(db, pinned, { reviewId: r.review_id, actor: "human", action: b["action"] as core.Action, evidenceIds: [], ruleIds: (b["rule_ids"] as string[] | undefined) ?? [], judgeCallIds: [],
-            pins: { rulesVer: r.rules_ver, calibVer: r.calib_ver, evidenceVer: r.evidence_ver }, reason: String(b["reason"] ?? ""), humanAuth: { reviewerId: who.reviewerId, token: String(req.headers["authorization"]).slice(7) } }, d.now(), d.humanAuth);
-          if (b["rule_id"] && typeof b["label"] === "string") core.tx(db, () => db.prepare("INSERT INTO feedback(feedback_id, review_id, rule_id, human_label, machine_prob, created_at) VALUES (?,?,?,?,?,?)").run(core.uuid(), r.review_id, String(b["rule_id"]), String(b["label"]), null, d.now()));
-          return json(res, 200, { ruling: { action: out.ruling.action, duplicate: out.duplicate } });
+          const out = humanRule(d, { reviewId: String(b["review_id"]), reviewerId: who.reviewerId, token: String(req.headers["authorization"]).slice(7), action: b["action"] as core.Action,
+            ruleIds: (b["rule_ids"] as string[] | undefined) ?? [], reason: String(b["reason"] ?? ""), ...(b["rule_id"] && typeof b["label"] === "string" ? { feedback: { ruleId: String(b["rule_id"]), label: b["label"] } } : {}) });
+          return json(res, 200, { ruling: out });
         } catch (e) {
+          if (e instanceof ActionError) return json(res, e.status, { code: e.code, ...(e.message !== e.code ? { message: e.message } : {}) });
           if (core.isCoreError(e)) return json(res, e.http, { code: e.code, message: e.message, detail: e.detail });
           throw e;
         }
@@ -307,21 +278,25 @@ export function createHttpServer(d: HttpDeps): Server {
         const b = await readJson(req);
         if (typeof b["content_id"] !== "string" || typeof b["trigger_request_id"] !== "string" || !b["trigger_request_id"]) return bad(res, "content_id and trigger_request_id are required");
         if (b["reason_code"] !== undefined && b["reason_code"] !== null && (typeof b["reason_code"] !== "string" || !/^[a-z_]{1,32}$/.test(b["reason_code"]))) return bad(res, "reason_code must match ^[a-z_]{1,32}$");
-        const contentId = String(b["content_id"]);
-        const scene = core.readContent(db, contentId)?.scene;
-        if (!scene) return json(res, 404, { code: "E_REVIEW_NOT_FOUND" });
-        const sc = d.bundle.scenes[scene];
         try {
-          const out = core.createFollowupReview(db, { contentId, trigger: "appeal", triggerRequestId: String(b["trigger_request_id"]), payloadSha: core.sha256(core.canonical({ reason_code: b["reason_code"] ?? null })), pins: gateway.pins, judgeModel: d.gateway.d.judgeModel, deadlineMs: sc.deadlineMs, budgetTools: d.gateway.d.cfg.budgetTools, budgetMicro: d.gateway.d.cfg.budgetMicro, pendingVisibility: sc.pendingVisibility }, d.now());
-          // stage ③: the appeal is also an account-history event (the agent's history tool counts appeals) and keeps the
-          // reason code, which the review row only holds as a hash; one event per appeal review (idempotent)
-          // content without an account still keeps its appeal reason ("(none)" never matches an account-history query)
-          const account = core.readContent(db, contentId)?.account_id ?? "(none)";
-          if (!out.duplicate) core.synthEventInsert(db, { eventId: `appeal:${out.review.review_id}`, accountId: account, kind: "appeal", payload: { content_id: contentId, review_id: out.review.review_id, reason_code: b["reason_code"] ?? null }, eventTime: d.now() });
-          return json(res, out.duplicate ? 200 : 201, { review_id: out.review.review_id, duplicate: out.duplicate });
+          const out = openAppeal(d, { contentId: String(b["content_id"]), triggerRequestId: String(b["trigger_request_id"]), reasonCode: (b["reason_code"] as string | null | undefined) ?? null });
+          if (!out) return json(res, 404, { code: "E_REVIEW_NOT_FOUND" });
+          return json(res, out.duplicate ? 200 : 201, { review_id: out.reviewId, duplicate: out.duplicate });
         } catch (e) {
           if (core.isCoreError(e)) return json(res, e.http, { code: e.code, message: e.message });
           throw e;
+        }
+      }
+      // demo traffic: status and control (rate, pause); absent outside demo mode
+      if (path === "/api/demo/traffic" && cons.mode === "demo" && cons.traffic) {
+        if (req.method === "GET") return json(res, 200, cons.traffic.status());
+        if (req.method === "POST") {
+          const b = await readJson(req);
+          const perMin = b["per_min"];
+          if (perMin !== undefined && (typeof perMin !== "number" || !Number.isFinite(perMin) || perMin < 0 || perMin > 600)) return bad(res, "per_min must be a number in 0..600");
+          if (b["paused"] !== undefined && typeof b["paused"] !== "boolean") return bad(res, "paused must be a boolean");
+          cons.traffic.set({ ...(perMin !== undefined ? { perMin: perMin as number } : {}), ...(b["paused"] !== undefined ? { paused: b["paused"] as boolean } : {}) });
+          return json(res, 200, cons.traffic.status());
         }
       }
       if (req.method === "POST" && path === "/api/replay/pause") { gateway.replayPaused = true; return json(res, 200, { paused: true }); }
@@ -329,6 +304,7 @@ export function createHttpServer(d: HttpDeps): Server {
       json(res, 404, { code: "NOT_FOUND" });
     } catch (e) {
       if (e instanceof BadRequest) return bad(res, e.message, "E_BAD_JSON");
+      if (e instanceof ActionError) return json(res, e.status, { code: e.code, message: e.message });
       console.error("http error", core.redact(e));
       json(res, 500, { code: "INTERNAL" });
     }

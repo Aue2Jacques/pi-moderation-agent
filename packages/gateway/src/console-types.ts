@@ -172,4 +172,17 @@ export type ConsoleConfig = {
   /** demo mode only: the reviewer credentials the console uses, so nobody has to type a token on stage */
   demo_auth: { reviewer: string; token: string } | null;
   samples: DemoSampleInfo[];
+  /** demo mode with the traffic generator: how simulated contents and the simulated reviewer are named */
+  demo_traffic: { sim_prefix: string; sim_reviewer: string } | null;
 };
+
+export type TrafficKind = "normal" | "marketing" | "abuse" | "mild" | "banter" | "repeat" | "injection";
+
+/** GET /api/demo/traffic (demo mode only) */
+export type TrafficStatus = {
+  per_min: number; paused: boolean; started_at: number;
+  generated: number; by_kind: Record<TrafficKind, number>; appeals: number;
+  sim_reviewer: { id: string; per_min: number; claimed: number; decided: number; open_sim_tasks: number; current: string | null };
+  intake_skipped: number;
+};
+

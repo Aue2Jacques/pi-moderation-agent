@@ -6,3 +6,5 @@ export * from "./pages.ts";
 export * from "./image.ts";
 export * from "./console-api.ts";
 export type * from "./console-types.ts";
+export * from "./console-actions.ts";
+export * from "./demo-traffic.ts";

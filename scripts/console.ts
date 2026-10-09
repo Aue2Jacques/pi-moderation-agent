@@ -1,7 +1,9 @@
 // One command for the web console: build it if needed, start G (which serves it) and W, stop both on Ctrl-C.
 // usage: node --experimental-strip-types scripts/console.ts [--demo] [--keep] [--build] [--port 8080] [--data dir]
+//                                                            [--traffic N | --no-traffic]
 //   --demo   demo mode (DEMO=1): scripted judge and agent, no .env, no API key; its own app.db under data/demo/
 //            (or --data dir), emptied on every start unless --keep
+//   --traffic N / --no-traffic   demo mode only: generated contents per minute (DEMO_TRAFFIC_PER_MIN, default 20) / none
 //   (none)   real mode: G and W read .env as usual (JEV_BASE_URL may point at Jev or kevfast; RELAY_* for the agent)
 //   --build  rebuild the console even when packages/console/dist exists
 // pnpm run demo / pnpm run console are the short forms.
@@ -15,6 +17,7 @@ const has = (f: string): boolean => args.includes(f);
 const opt = (f: string, d: string): string => { const i = args.indexOf(f); return i >= 0 && args[i + 1] ? args[i + 1]! : d; };
 const demo = has("--demo");
 const port = Number(opt("--port", process.env["G_PORT"] ?? "8080"));
+if (!demo && (has("--traffic") || has("--no-traffic"))) { console.error("[console] --traffic / --no-traffic only apply to --demo"); process.exit(2); }
 
 const dist = join(ROOT, "packages", "console", "dist");
 if (has("--build") || !existsSync(join(dist, "index.html"))) {
@@ -28,6 +31,8 @@ if (demo) {
   const dir = resolve(opt("--data", join(ROOT, "data", "demo")));
   if (!has("--keep")) rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
+  if (has("--no-traffic")) env["DEMO_TRAFFIC_PER_MIN"] = "0";
+  else if (has("--traffic")) env["DEMO_TRAFFIC_PER_MIN"] = opt("--traffic", "20");
   Object.assign(env, { DEMO: "1", APP_DB: join(dir, "app.db"), SESSION_DB: join(dir, "session.sqlite"), W_LOCK: join(dir, "w.lock.db"), HUMAN_REVIEW_TOKEN: env["HUMAN_REVIEW_TOKEN"] ?? "demo-token" });
 }
 
