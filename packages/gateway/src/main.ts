@@ -82,7 +82,7 @@ async function main(): Promise<void> {
     console: {
       mode: demo ? "demo" : "real", dir: resolve(env("CONSOLE_DIR", "packages/console/dist")), agentModel: demo ? DEMO_AGENT_MODEL : env("AGENT_MODEL", "qwen3.8-flash"),
       samples: demo ? DEMO_SAMPLES.map((x) => ({ id: x.id, title: x.title, route: x.route, scene: x.scene, text: x.text, account_id: x.accountId, parent: x.parent ? { text: x.parent.text, account_id: x.parent.accountId } : null })) : [],
-      calibFiles: readCalibFiles(env("CALIB_DIR", "calib"), calibJudge), streamPollMs: envNum("STREAM_POLL_MS", 250),
+      calibFiles: readCalibFiles(env("CALIB_DIR", "calib"), calibJudge), streamPollMs: envNum("STREAM_POLL_MS", 250), livePollMs: envNum("LIVE_POLL_MS", 500),
       ...(traffic ? { traffic, simPrefix: SIM_PREFIX, simReviewer: SIM_REVIEWER } : {}),
     } });
   const port = envNum("G_PORT", 8080);

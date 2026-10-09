@@ -238,7 +238,11 @@ export function buildTimeline(db: Db, contentId: string, bundleOf: BundleOf, o: 
 
 // ---------- lists ----------
 
-export type ReviewFilter = { state?: string; trigger?: string; route?: string; scene?: string; action?: string; actor?: string; q?: string; limit: number; offset: number };
+export type ReviewFilter = {
+  state?: string; trigger?: string; route?: string; scene?: string; action?: string; actor?: string; q?: string; limit: number; offset: number;
+  /** incremental read: only reviews created or updated at or after this time (ms), newest change first */
+  updatedSince?: number;
+};
 
 export function listReviews(db: Db, f: ReviewFilter): { items: ReviewListItem[]; total: number } {
   const where: string[] = [];
@@ -250,10 +254,11 @@ export function listReviews(db: Db, f: ReviewFilter): { items: ReviewListItem[];
   if (f.actor) { where.push("ru.actor=?"); args.push(f.actor); }
   if (f.q) { where.push("(r.content_id LIKE ? OR r.review_id LIKE ?)"); args.push(`%${f.q}%`, `%${f.q}%`); }
   if (f.route && ROUTE_SQL[f.route]) where.push(ROUTE_SQL[f.route]!);
+  if (f.updatedSince !== undefined) { where.push("r.updated_at>=?"); args.push(f.updatedSince); }
   const from = "FROM review r JOIN content c ON c.content_id=r.content_id LEFT JOIN ruling ru ON ru.review_id=r.review_id";
   const w = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const total = (db.prepare(`SELECT COUNT(*) AS n ${from} ${w}`).get(...args) as { n: number }).n;
-  const rows = db.prepare(`SELECT r.*, c.scene AS scene, ru.action AS action, ru.actor AS actor ${from} ${w} ORDER BY r.created_at DESC, r.review_id LIMIT ? OFFSET ?`).all(...args, f.limit, f.offset) as (core.ReviewRow & { scene: string; action: core.Action | null; actor: string | null })[];
+  const rows = db.prepare(`SELECT r.*, c.scene AS scene, ru.action AS action, ru.actor AS actor ${from} ${w} ORDER BY ${f.updatedSince !== undefined ? "r.updated_at DESC" : "r.created_at DESC"}, r.review_id LIMIT ? OFFSET ?`).all(...args, f.limit, f.offset) as (core.ReviewRow & { scene: string; action: core.Action | null; actor: string | null })[];
   return {
     total,
     items: rows.map((r) => ({

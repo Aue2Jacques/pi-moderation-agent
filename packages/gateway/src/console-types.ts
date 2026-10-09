@@ -186,3 +186,15 @@ export type TrafficStatus = {
   intake_skipped: number;
 };
 
+/** One frame of GET /api/events (SSE event "live"). */
+export type LiveFrame = {
+  seq: number; at: number;
+  /** the first frame a subscriber gets: `changed` holds the latest reviews instead of the changes */
+  snapshot: boolean;
+  stats: Stats;
+  /** reviews created or updated since the previous frame, newest change first (at most 100) */
+  changed: ReviewListItem[];
+  /** change counters: a list re-reads when its counter differs from the one it was read at */
+  versions: { reviews: string; human: string; appeals: string; contents: string; traffic: string };
+  traffic: TrafficStatus | null;
+};

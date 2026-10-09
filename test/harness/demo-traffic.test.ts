@@ -11,7 +11,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { ConsoleConfig, ContentTimeline, HumanQueueItem, AppealItem, Stats, TrafficStatus } from "../../packages/gateway/src/console-types.ts";
+import type { ConsoleConfig, ContentTimeline, HumanQueueItem, AppealItem, LiveFrame, Stats, TrafficStatus } from "../../packages/gateway/src/console-types.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const TOKEN = "test-token";
@@ -34,6 +34,28 @@ function startProc(entry: string, env: NodeJS.ProcessEnv, ready: string, cwd = R
   });
 }
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** Read `live` frames from GET /api/events for `ms` milliseconds. */
+async function liveFrames(base: string, ms: number): Promise<LiveFrame[]> {
+  const ac = new AbortController();
+  const res = await fetch(`${base}/api/events`, { signal: ac.signal });
+  const frames: LiveFrame[] = [];
+  const t = setTimeout(() => ac.abort(), ms);
+  let buf = "";
+  try {
+    for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+      buf += Buffer.from(chunk).toString("utf8");
+      let i: number;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const block = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        const data = block.split("\n").find((l) => l.startsWith("data: "));
+        if (block.includes("event: live") && data) frames.push(JSON.parse(data.slice(6)) as LiveFrame);
+      }
+    }
+  } catch { /* aborted */ } finally { clearTimeout(t); }
+  return frames;
+}
 
 describe("demo traffic with real G and W", () => {
   let base = "";
@@ -111,6 +133,23 @@ describe("demo traffic with real G and W", () => {
     const mineAfter = await get<HumanQueueItem[]>("/api/human/queue?status=open");
     expect(mineAfter.some((x) => x.content_id === mine)).toBe(true);
   }, 90_000);
+
+  it("the global live stream pushes stats, changed reviews and traffic status while the traffic runs", async () => {
+    await (await post("/api/demo/traffic", { paused: false, per_min: 240 })).json();
+    const frames = await liveFrames(base, 5000);
+    expect(frames[0]?.snapshot).toBe(true);
+    expect(frames.length).toBeGreaterThanOrEqual(3);
+    const later = frames.slice(1);
+    expect(later.every((f) => !f.snapshot)).toBe(true);
+    expect(later.some((f) => f.changed.length > 0)).toBe(true);
+    expect(frames.at(-1)!.stats.contents).toBeGreaterThan(frames[0]!.stats.contents);
+    expect(frames.at(-1)!.traffic?.generated).toBeGreaterThan(frames[0]!.traffic!.generated);
+    for (let i = 1; i < frames.length; i++) expect(frames[i]!.seq).toBeGreaterThan(frames[i - 1]!.seq);
+    // a changed row carries the list fields the console shows
+    const row = later.flatMap((f) => f.changed)[0]!;
+    expect(row).toMatchObject({ review_id: expect.any(String), content_id: expect.stringMatching(/^sim-/), route: expect.any(String), state: expect.any(String) });
+    await post("/api/demo/traffic", { paused: true });
+  }, 30_000);
 
   it("the control endpoint validates its input and changes the rate", async () => {
     expect((await post("/api/demo/traffic", { per_min: -1 })).status).toBe(400);

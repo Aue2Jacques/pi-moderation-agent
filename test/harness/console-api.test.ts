@@ -295,6 +295,12 @@ describe("console API on real G + W processes (demo mode)", () => {
     const paged = await getJson<{ items: ReviewListItem[] }>("/api/review-list?limit=2&offset=1");
     expect(paged.items.map((x) => x.review_id)).toEqual(all.items.slice(1, 3).map((x) => x.review_id));
     expect(JSON.stringify(all)).not.toContain("这期讲得很清楚");   // lists carry no text
+    // incremental read: changed at or after a time, newest change first
+    const newest = Math.max(...all.items.map((x) => x.updated_at));
+    const inc = await getJson<{ items: ReviewListItem[] }>(`/api/review-list?updated_since=${newest}`);
+    expect(inc.items.length).toBeGreaterThanOrEqual(1);
+    expect(inc.items.every((x) => x.updated_at >= newest)).toBe(true);
+    expect((await getJson<{ items: ReviewListItem[] }>(`/api/review-list?updated_since=${newest + 1}`)).items).toEqual([]);
 
     const s = await getJson<Stats>("/api/stats");
     expect(s.routes.fast_pass).toBeGreaterThanOrEqual(1);

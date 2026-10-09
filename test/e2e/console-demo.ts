@@ -1,8 +1,9 @@
 // End-to-end run of the core interaction in demo mode, over HTTP only: `scripts/console.ts --demo` starts G + W
-// (and builds the console if needed); then submit -> timeline -> human decision -> appeal, checking each state change.
+// (and builds the console if needed); then submit -> timeline -> human decision -> appeal, checking each state change,
+// with the demo traffic running alongside; then the global live stream (/api/events) while the traffic runs.
 // usage: node --experimental-strip-types --no-warnings test/e2e/console-demo.ts   (pnpm run e2e:console)
 // Exit code 0 = every check passed; the checks print as they run.
-import type { ConsoleConfig, ContentTimeline, HumanQueueItem, AppealItem, ReviewListItem, Stats, TrafficStatus } from "../../packages/gateway/src/console-types.ts";
+import type { ConsoleConfig, ContentTimeline, HumanQueueItem, AppealItem, LiveFrame, ReviewListItem, Stats, TrafficStatus } from "../../packages/gateway/src/console-types.ts";
 import { launchDemo } from "./launch.ts";
 
 let failed = 0, passed = 0;
@@ -16,6 +17,27 @@ const { base } = app;
 const get = async <T>(p: string, h: Record<string, string> = {}): Promise<T> => (await (await fetch(base + p, { headers: h })).json()) as T;
 const post = (p: string, body: unknown, h: Record<string, string> = {}): Promise<Response> => fetch(base + p, { method: "POST", headers: { "content-type": "application/json", ...h }, body: JSON.stringify(body) });
 const timeline = (id: string): Promise<ContentTimeline> => get<ContentTimeline>(`/api/contents/${encodeURIComponent(id)}`);
+/** Read `live` frames from GET /api/events for `ms` milliseconds. */
+async function liveFrames(ms: number): Promise<LiveFrame[]> {
+  const ac = new AbortController();
+  const res = await fetch(`${base}/api/events`, { signal: ac.signal });
+  const out: LiveFrame[] = [];
+  const t = setTimeout(() => ac.abort(), ms);
+  let buf = "";
+  try {
+    for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+      buf += Buffer.from(chunk).toString("utf8");
+      let i: number;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const block = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        const data = block.split("\n").find((l) => l.startsWith("data: "));
+        if (block.includes("event: live") && data) out.push(JSON.parse(data.slice(6)) as LiveFrame);
+      }
+    }
+  } catch { /* aborted */ } finally { clearTimeout(t); }
+  return out;
+}
 async function until(id: string, ok: (t: ContentTimeline) => boolean, ms = 30_000): Promise<ContentTimeline> {
   const end = Date.now() + ms;
   for (;;) {
@@ -94,6 +116,15 @@ try {
   for (let i = 0; i < 60 && tr.generated === 0; i++) { await new Promise((r) => setTimeout(r, 250)); tr = await get<TrafficStatus>("/api/demo/traffic"); }
   const s = await get<Stats>("/api/stats");
   check(`demo traffic is running (${tr.per_min}/min, generated ${tr.generated})`, tr.per_min > 0 && !tr.paused && tr.generated > 0 && s.contents > 6);
+
+  // 5. the global live stream: with the traffic turned up, frames arrive on their own with new reviews and moving counts
+  await post("/api/demo/traffic", { per_min: 120 });
+  const frames = await liveFrames(6000);
+  const later = frames.slice(1);
+  check(`live stream: snapshot then ${later.length} frames without polling`, frames[0]?.snapshot === true && later.length >= 2);
+  check("live stream: new reviews arrive as changed rows", later.some((f) => f.changed.some((r) => r.content_id.startsWith(cfg.demo_traffic!.sim_prefix))));
+  check(`live stream: content count moves (${frames[0]?.stats.contents} -> ${frames.at(-1)?.stats.contents})`, (frames.at(-1)?.stats.contents ?? 0) > (frames[0]?.stats.contents ?? 0));
+  check("live stream: traffic status rides along", (frames.at(-1)?.traffic?.generated ?? 0) > (frames[0]?.traffic?.generated ?? 0));
 } catch (e) {
   failed++;
   console.error("FAIL unexpected error", e);

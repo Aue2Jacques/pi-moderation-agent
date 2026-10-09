@@ -8,6 +8,7 @@ import * as core from "@mod/core";
 import type { Db, PolicyBundle } from "@mod/core";
 import type { Gateway } from "./gateway.ts";
 import { DASHBOARD_HTML, HUMAN_HTML } from "./pages.ts";
+import { LiveHub } from "./live.ts";
 import { ActionError, claimTask, pinnedBundle, humanRule, intakeContent, openAppeal, unclaimTask } from "./console-actions.ts";
 import { buildTimeline, humanQueue, listAppeals, listReviews, rulesInfo, stats, type CalibFileInfo } from "./console-api.ts";
 import type { ConsoleConfig, DemoSampleInfo, TrafficStatus } from "./console-types.ts";
@@ -22,6 +23,8 @@ export type ConsoleDeps = {
   calibFiles?: readonly CalibFileInfo[];
   /** how often a timeline stream re-reads app.db (ms) */
   streamPollMs?: number;
+  /** how often the global live stream (/api/events) reads app.db's counters (ms) */
+  livePollMs?: number;
   /** demo mode only: the traffic generator behind /api/demo/traffic, and how its contents / reviewer are named */
   traffic?: { status(): TrafficStatus; set(o: { perMin?: number; paused?: boolean }): void };
   simPrefix?: string;
@@ -103,6 +106,7 @@ export function createHttpServer(d: HttpDeps): Server {
   const cons: ConsoleDeps = d.console ?? { mode: "real" };
   const consoleDir = cons.dir && existsSync(join(cons.dir, "index.html")) ? cons.dir : undefined;
   const bad = (res: ServerResponse, message: string, code = "E_BAD_REQUEST"): void => json(res, 400, { code, message });
+  const live = new LiveHub({ db, now: d.now, pollMs: cons.livePollMs ?? 500, ...(cons.traffic ? { traffic: () => cons.traffic!.status() } : {}) });
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
@@ -144,12 +148,21 @@ export function createHttpServer(d: HttpDeps): Server {
         };
         return json(res, 200, cfg);
       }
+      if (req.method === "GET" && path === "/api/events") {
+        // the console's global live stream: stats, changed reviews, list counters, demo traffic (see live.ts)
+        res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", connection: "keep-alive", "x-accel-buffering": "no" });
+        const off = live.subscribe((f) => res.write(`event: live\nid: ${f.seq}\ndata: ${JSON.stringify(f)}\n\n`));
+        const beat = setInterval(() => res.write(": keep-alive\n\n"), 15_000);
+        req.on("close", () => { off(); clearInterval(beat); });
+        return;
+      }
       if (req.method === "GET" && path === "/api/review-list") {
         const g = (k: string): string | undefined => url.searchParams.get(k) || undefined;
         const limit = Math.max(1, Math.min(200, Number(g("limit") ?? 50) || 50));
         const offset = Math.max(0, Number(g("offset") ?? 0) || 0);
         return json(res, 200, listReviews(db, { ...(g("state") ? { state: g("state")! } : {}), ...(g("trigger") ? { trigger: g("trigger")! } : {}), ...(g("route") ? { route: g("route")! } : {}),
-          ...(g("scene") ? { scene: g("scene")! } : {}), ...(g("action") ? { action: g("action")! } : {}), ...(g("actor") ? { actor: g("actor")! } : {}), ...(g("q") ? { q: g("q")! } : {}), limit, offset }));
+          ...(g("scene") ? { scene: g("scene")! } : {}), ...(g("action") ? { action: g("action")! } : {}), ...(g("actor") ? { actor: g("actor")! } : {}), ...(g("q") ? { q: g("q")! } : {}), limit, offset,
+          ...(g("updated_since") !== undefined && Number.isFinite(Number(g("updated_since"))) ? { updatedSince: Number(g("updated_since")) } : {}) }));
       }
       if (req.method === "GET" && path === "/api/stats") return json(res, 200, stats(db, d.now()));
       if (req.method === "GET" && path === "/api/rules") {
