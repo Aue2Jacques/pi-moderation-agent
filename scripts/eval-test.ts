@@ -228,7 +228,20 @@ if (phase === "collect") {
   const ok = grid.filter((g) => g.violate_passed <= maxMiss && g.allow_acted <= maxWrong)
     .sort((x, y) => y.auto_pass_correct + y.auto_act_correct - (x.auto_pass_correct + x.auto_act_correct) || x.violate_passed + x.allow_acted - (y.violate_passed + y.allow_acted) || dist(x) - dist(y));
   const shared = PASS.flatMap((ps) => BLOCK.map((bk) => evalLines({ pass: ps, block: bk }, { pass: ps, block: bk })));
-  const summary = { split: PART, view: VIEW, calibVer: cal.calibVer, rulesVer: bundle.rulesVer, agent_population: agentPop.length, picked: ids.size, labels: counts, scored: scored.length, violate_n: vN, allow_n: aN,
+  // why these items left the fast path, and where their calibrated p sits per rule (primary answer)
+  const reasons = scored.reduce<Record<string, number>>((m, x) => { const d = decide({ bundle, scene, hasImages: false, answers: x.answers, judgeOk: true }); const k = `${d.state}:${d.reason ?? ""}`; m[k] = (m[k] ?? 0) + 1; return m; }, {});
+  const bands = [0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.01];
+  const pBands = Object.fromEntries(["ABUSE-001", "MARKETING-003"].map((rid) => {
+    const qs = bundle.rules.find((r) => r.ruleId === rid)!.question.sha;
+    const h: Record<string, number> = {};
+    for (const x of scored) {
+      const a = x.answers.find((r) => r.questionSha === qs && r.confirmsCallId === null);
+      const k = a?.p == null ? "none" : `${bands.find((b, i) => a.p! < bands[i + 1]!)}-${bands[bands.findIndex((b, i) => a.p! < bands[i + 1]!) + 1]}|${x.truth}`;
+      h[k] = (h[k] ?? 0) + 1;
+    }
+    return [rid, h];
+  }));
+  const summary = { split: PART, view: VIEW, calibVer: cal.calibVer, rulesVer: bundle.rulesVer, agent_population: agentPop.length, fast_reasons: reasons, p_bands: pBands, picked: ids.size, labels: counts, scored: scored.length, violate_n: vN, allow_n: aN,
     bound: { max_violate_passed: maxMiss, max_allow_acted: maxWrong }, current: evalLines(bundle.rules.find((r) => r.ruleId === "ABUSE-001")!.thresholds, bundle.rules.find((r) => r.ruleId === "MARKETING-003")!.thresholds), chosen: ok[0] ?? null, next_best: ok.slice(1, 6),
     shared_lines: shared.filter((g) => g.abuse.pass <= 0.3 && g.abuse.block >= 0.7) };
   writeFileSync(join(outDir, `agent-lines-${VIEW}.json`), JSON.stringify({ ...summary, grid }, null, 1));
