@@ -1,0 +1,20 @@
+{
+  "name": "@mod/console",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "web console (Vite + React): submit and track, reviews, human desk, appeals, overview, rules; built into dist/ and served by G",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "vite": "7.3.7"
+  }
+}

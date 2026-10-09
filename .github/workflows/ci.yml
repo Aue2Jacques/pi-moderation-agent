@@ -16,6 +16,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm run check
+      - run: pnpm run console:build   # the web console must build (G serves packages/console/dist)
       - run: pnpm run test:unit
       - run: pnpm run test:harness
       - run: pnpm run redact-scan

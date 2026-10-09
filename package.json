@@ -9,7 +9,7 @@
   },
   "packageManager": "pnpm@12.9.1",
   "scripts": {
-    "check": "tsc -b tsconfig.json && tsc -p tsconfig.test.json",
+    "check": "tsc -b tsconfig.json && tsc -p tsconfig.test.json && tsc -p packages/console",
     "test": "pnpm run test:unit && pnpm run test:harness",
     "test:unit": "vitest run test/unit",
     "test:harness": "vitest run test/harness",
@@ -17,6 +17,9 @@
     "redact-scan": "node scripts/redact-scan.mjs",
     "g": "node --experimental-strip-types packages/gateway/src/main.ts",
     "w": "node --experimental-strip-types packages/worker/src/main.ts",
+    "demo": "node --experimental-strip-types --no-warnings scripts/console.ts --demo",
+    "console": "node --experimental-strip-types --no-warnings scripts/console.ts",
+    "console:build": "pnpm --filter @mod/console run build",
     "fixtures-check": "node --experimental-strip-types --no-warnings scripts/fixtures-check.ts"
   },
   "devDependencies": {
