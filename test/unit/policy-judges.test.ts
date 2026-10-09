@@ -273,3 +273,23 @@ describe("parent missing (dev plan §3.1 problem 3, temporary)", () => {
     }
   });
 });
+
+describe("rules-first judge layout", () => {
+  const q = (key: string, criteria: Record<string, string>) => ({ key, sha: `sha-${key}`, instructions: `规则 ${key} 的全文`, criteria } as unknown as Parameters<typeof judges.buildQuestions>[0][number]);
+  const asked = [q("ABUSE-001", { violate: "包含辱骂", none: "不包含", unknown: "无法判断" }), q("injection_guard", { violate: "是", none: "否", unknown: "无法判断" })];
+  it("moves rule text and option descriptions to one rules block and keeps short questions with the copy's option order", () => {
+    const built = judges.buildQuestions(asked, true).questions;
+    const rf = judges.rulesFirst(built);
+    expect(Object.keys(rf.rules)).toEqual(["ABUSE-001", "injection_guard"]);
+    expect(rf.rules["ABUSE-001"]).toEqual({ instructions: "规则 ABUSE-001 的全文", options: { violate: "包含辱骂", none: "不包含", unknown: "无法判断" } });
+    expect(Object.keys(rf.questions)).toEqual(Object.keys(built));
+    const copy = rf.questions["ABUSE-001#confirm"] as { instructions: string; criteria: Record<string, string> };
+    expect(Object.keys(copy.criteria)).toEqual(Object.keys((built["ABUSE-001#confirm"] as { criteria: Record<string, string> }).criteria));   // shuffled order kept
+    expect(Object.values(copy.criteria).sort()).toEqual(["不违规", "无法判断", "违规"]);
+    expect(copy.instructions).not.toContain("全文");
+  });
+  it("gives the same rules block for every item (the cacheable part) and rejects non-choice questions", () => {
+    expect(JSON.stringify(judges.rulesFirst(judges.buildQuestions(asked, true).questions).rules)).toBe(JSON.stringify(judges.rulesFirst(judges.buildQuestions(asked, true, 99).questions).rules));
+    expect(() => judges.rulesFirst({ x: { type: "score", criteria: ["a"] } as never })).toThrow(/choice/);
+  });
+});

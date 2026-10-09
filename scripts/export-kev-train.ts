@@ -7,11 +7,14 @@
 // carry dataset text: servers only, never committed) and a manifest with counts per label source.
 // EXCLUDE=<file>[,<file>]: ids to leave out (a .txt of ids or a .jsonl with an `id` field), e.g. the calibration rows
 // data/calib/platform-input.jsonl, so the judge is not calibrated on items it was trained on.
-// usage: [EXCLUDE=...] node --experimental-strip-types scripts/export-kev-train.ts <split=train|val> <out.jsonl> [limit]
+// LAYOUT=rules-first: the request layout of eval-test / fit-calib with JEV_LAYOUT=rules-first (packages/judges rulesFirst):
+// the state starts with every question the comment scene asks (rules, exceptions, injection guard), in the order the fast
+// path asks them, and each labelled question is a short line; the state is byte-identical to what the judge is later sent.
+// usage: [EXCLUDE=...] [LAYOUT=content-first|rules-first] node --experimental-strip-types scripts/export-kev-train.ts <split=train|val> <out.jsonl> [limit]
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import * as core from "../packages/core/src/index.ts";
-import { buildQuestions, wireKey } from "../packages/judges/src/index.ts";
+import { buildQuestions, rulesFirst, wireKey, type JudgeLayout } from "../packages/judges/src/index.ts";
 import { loadBundle } from "../packages/policy/src/index.ts";
 
 const [split, out, limitArg] = process.argv.slice(2);
@@ -20,7 +23,12 @@ const jsonl = <T>(p: string): T[] => readFileSync(p, "utf8").split("\n").filter(
 const sha = (t: string | Buffer) => createHash("sha256").update(t).digest("hex").slice(0, 16);
 const { bundle } = loadBundle("rules", "config/scenes.yaml");
 const rules = ["ABUSE-001", "MARKETING-003"].map((id) => bundle.rules.find((r) => r.ruleId === id)!);
-const { questions: wire } = buildQuestions(rules.map((r) => r.question), false);
+const LAYOUT = (process.env.LAYOUT ?? "content-first") as JudgeLayout;
+if (LAYOUT !== "content-first" && LAYOUT !== "rules-first") throw new Error(`unknown LAYOUT ${LAYOUT}`);
+// the scene's full question list, as eval-test.ts builds it (so the rules block matches the requests exactly)
+const sceneQs = [...core.rulesFor(bundle, "comment").flatMap((r) => [r.question, ...r.exceptions.map((x) => x.question)]), ...(bundle.scenes.comment.injectionGuard ? [bundle.scenes.comment.injectionGuard.question] : [])];
+const rf = LAYOUT === "rules-first" ? rulesFirst(buildQuestions(sceneQs, true).questions) : undefined;
+const wire = rf ? rf.questions : buildQuestions(rules.map((r) => r.question), false).questions;
 const ids = new Set(jsonl<{ id: string; split: string }>("data/eval/split-v1.jsonl").filter((r) => r.split === split).map((r) => r.id));
 const exclude = new Set((process.env.EXCLUDE ?? "").split(",").filter(Boolean).flatMap((f) => f.endsWith(".jsonl") ? jsonl<{ id: string }>(f).map((r) => r.id) : readFileSync(f, "utf8").split(/\s+/).filter(Boolean)));
 const items = jsonl<{ id: string; text: string; text_strip: string }>("data/eval/eval20k.jsonl").filter((x) => ids.has(x.id));
@@ -52,10 +60,11 @@ for (const it of items) {
     if (label) questions[key] = { ...(q as object), label };
   }
   if (!Object.keys(questions).length) { bump("skip:no_question"); continue; }
-  lines.push(JSON.stringify({ state: { content: { text: it.text, scene: "comment" }, evidence: [] }, questions, _meta: { id: it.id } }));
+  const content = { content: { text: it.text, scene: "comment" }, evidence: [] };
+  lines.push(JSON.stringify({ state: rf ? { rules: rf.rules, ...content } : content, questions, _meta: { id: it.id } }));
   if (limitArg && lines.length >= Number(limitArg)) break;
 }
 writeFileSync(out, lines.join("\n") + "\n");
-const manifest = { split, out, records: lines.length, exclude: process.env.EXCLUDE ?? "", excluded: exclude.size, rulesVer: bundle.rulesVer, sourceMap: "source-label-map-v1", outputSha: sha(readFileSync(out)), counts };
+const manifest = { split, out, layout: LAYOUT, records: lines.length, exclude: process.env.EXCLUDE ?? "", excluded: exclude.size, rulesVer: bundle.rulesVer, sourceMap: "source-label-map-v1", outputSha: sha(readFileSync(out)), counts };
 writeFileSync(`${out}.manifest.json`, JSON.stringify(manifest, null, 1));
 console.log(JSON.stringify(manifest, null, 1));

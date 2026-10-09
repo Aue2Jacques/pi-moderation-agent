@@ -1,9 +1,9 @@
 // JudgeClient backed by pi-ai classify() (Jev or any registered classifier model). Phase 3a.
 import type { ClassifierModel, ClassifierApi, JsonObject, Models } from "@earendil-works/pi-ai";
-import { CONFIRM_SUFFIX, buildQuestions } from "@mod/judges";
+import { CONFIRM_SUFFIX, buildQuestions, rulesFirst, type JudgeLayout } from "@mod/judges";
 import type { JudgeClient, JudgeRequest, JudgeResponse } from "./judge-client.ts";
 
-export type PiJudgeOptions = { inCallConfirm: boolean; timeoutMs?: number; shuffleSeed?: number };
+export type PiJudgeOptions = { inCallConfirm: boolean; timeoutMs?: number; shuffleSeed?: number; layout?: JudgeLayout };
 
 export function piJudge(models: Models, model: ClassifierModel<ClassifierApi>, o: PiJudgeOptions): JudgeClient {
   const seed = o.shuffleSeed ?? 17;
@@ -19,8 +19,10 @@ export function piJudge(models: Models, model: ClassifierModel<ClassifierApi>, o
       const questions = explicitConfirm
         ? Object.fromEntries(Object.entries(built.questions).filter(([k]) => k.endsWith(CONFIRM_SUFFIX)).map(([k, v]) => [k.slice(0, -CONFIRM_SUFFIX.length), v]))
         : built.questions;
-      const state = JSON.parse(JSON.stringify({ content: { text: req.text, scene: req.scene }, evidence: req.evidence.map((e) => ({ evidence_id: e.evidenceId, kind: e.kind, untrusted: true, model_view: e.modelView })) })) as JsonObject;
-      const result = await models.classify(model, { state, questions }, { ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}) });
+      const content = { content: { text: req.text, scene: req.scene }, evidence: req.evidence.map((e) => ({ evidence_id: e.evidenceId, kind: e.kind, untrusted: true, model_view: e.modelView })) };
+      const rf = o.layout === "rules-first" ? rulesFirst(questions) : undefined;   // rules at the front of the state, short questions
+      const state = JSON.parse(JSON.stringify(rf ? { rules: rf.rules, ...content } : content)) as JsonObject;
+      const result = await models.classify(model, { state, questions: rf ? rf.questions : questions }, { ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}) });
       const latencyMs = Date.now() - t0;
       if (result.stopReason !== "stop") {
         const timeout = /timed out/i.test(result.errorMessage ?? "");

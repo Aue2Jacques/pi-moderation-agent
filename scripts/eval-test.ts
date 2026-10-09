@@ -25,7 +25,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { createModels } from "@earendil-works/pi-ai/models";
 import * as core from "../packages/core/src/index.ts";
-import { jevModel, jevProvider, loadCalibrator } from "../packages/judges/src/index.ts";
+import { jevModel, jevProvider, loadCalibrator, type JudgeLayout } from "../packages/judges/src/index.ts";
 import { decide, loadBundle } from "../packages/policy/src/index.ts";
 import { piJudge } from "../packages/worker/src/pi-judge.ts";
 
@@ -55,9 +55,10 @@ const items = readFileSync("data/eval/eval20k.jsonl", "utf8").split("\n").filter
 mkdirSync(outDir, { recursive: true });
 const OUT = join(outDir, `answers-${VIEW}.jsonl`), REQ = join(outDir, `requests-${VIEW}.jsonl`);
 type Probs = Record<string, number>;
-type Row = { id: string; view: string; textSha: string; rulesVer: string; model: string; ok: boolean; primary?: Record<string, Probs>; copy?: Record<string, Probs>; tries: number };
+type Row = { id: string; view: string; textSha: string; rulesVer: string; model: string; layout?: JudgeLayout; ok: boolean; primary?: Record<string, Probs>; copy?: Record<string, Probs>; tries: number };
 const readJsonl = <T>(p: string): T[] => existsSync(p) ? readFileSync(p, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as T) : [];
-const identity = (it: Item) => `${it.id}|${VIEW}|${sha(it[VIEW])}|${bundle.rulesVer}|${JEV}`;
+const LAYOUT = env("JEV_LAYOUT", "content-first") as JudgeLayout;   // rules-first: rules at the front of the state (an open judge trained on it)
+const identity = (it: Item) => `${it.id}|${VIEW}|${sha(it[VIEW])}|${bundle.rulesVer}|${JEV}|${LAYOUT}`;
 
 // calibrated answer records for one row (primary, then the in-call copy confirming it), exactly as the runtime builds them
 const recordsOf = (cal: core.Calibrator, r: Row): core.AnswerRecord[] => {
@@ -78,8 +79,8 @@ const fastRoute = (cal: core.Calibrator, r: Row): string => {
 if (phase === "collect") {
   const models = createModels();
   models.setProvider(jevProvider({ baseUrl: env("JEV_BASE_URL"), apiKey: env("JEV_API_KEY"), modelId: JEV }));
-  const judge = piJudge(models, jevModel(models, JEV), { inCallConfirm: true, timeoutMs: 30_000 });
-  const done = new Set(readJsonl<Row>(OUT).filter((r) => r.ok).map((r) => `${r.id}|${r.view}|${r.textSha}|${r.rulesVer}|${r.model}`));
+  const judge = piJudge(models, jevModel(models, JEV), { inCallConfirm: true, timeoutMs: 30_000, layout: LAYOUT });
+  const done = new Set(readJsonl<Row>(OUT).filter((r) => r.ok).map((r) => `${r.id}|${r.view}|${r.textSha}|${r.rulesVer}|${r.model}|${r.layout ?? "content-first"}`));
   const todo = items.filter((it) => !done.has(identity(it)));
   const t0 = Date.now();
   let next = 0, ok = 0, failed = 0, requests = 0;
@@ -94,14 +95,14 @@ if (phase === "collect") {
         appendFileSync(REQ, JSON.stringify({ id: it.id, view: VIEW, try: tries + 1, status: res.status, latency_ms: Date.now() - s, reported_latency_ms: res.latencyMs, ...(res.status === "ok" ? { input: res.usage.input, output: res.usage.output, model: res.model } : {}) }) + "\n");
       }
       const byK = (a: Record<string, { probs: Probs }>) => Object.fromEntries(Object.entries(a).map(([q, x]) => [keyOf.get(q) ?? q, x.probs]));
-      const row: Row = { id: it.id, view: VIEW, textSha: sha(it[VIEW]), rulesVer: bundle.rulesVer, model: JEV, ok: res!.status === "ok", tries,
+      const row: Row = { id: it.id, view: VIEW, textSha: sha(it[VIEW]), rulesVer: bundle.rulesVer, model: JEV, ...(LAYOUT !== "content-first" ? { layout: LAYOUT } : {}), ok: res!.status === "ok", tries,
         ...(res!.status === "ok" ? { primary: byK(res!.answers), ...(res!.variant ? { copy: byK(res!.variant.answers) } : {}) } : {}) };
       if (row.ok) ok++; else failed++;
       appendFileSync(OUT, JSON.stringify(row) + "\n");
     }
   }));
   const manifest = { phase, view: VIEW, gitHead: (() => { try { return execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim(); } catch { return "unknown"; } })(),
-    scriptSha: sha(readFileSync("scripts/eval-test.ts")), rulesVer: bundle.rulesVer, judge: JEV, split: "split-v1", splitPart: PART, splitManifestSha: sha(readFileSync("eval/split-v1.manifest.jsonl")),
+    scriptSha: sha(readFileSync("scripts/eval-test.ts")), rulesVer: bundle.rulesVer, judge: JEV, layout: LAYOUT, split: "split-v1", splitPart: PART, splitManifestSha: sha(readFileSync("eval/split-v1.manifest.jsonl")),
     evalSha: sha(readFileSync("data/eval/eval20k.jsonl")), items: items.length, todo: todo.length, ok, failed, requests, concurrency: Number(concArg ?? 16), retries: "up to 3 tries per item",
     started: new Date(t0).toISOString(), ended: new Date().toISOString(), outputSha: sha(readFileSync(OUT)) };
   writeFileSync(join(outDir, `manifest-collect-${VIEW}-${Date.now()}.json`), JSON.stringify(manifest, null, 1));

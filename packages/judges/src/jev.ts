@@ -73,3 +73,26 @@ export function buildQuestions(questions: readonly Question[], inCallConfirm: bo
   }
   return { questions: out, toSha };
 }
+
+/**
+ * Request layout for an open judge that caches the start of its state (Kev's state-prefix cache): "content-first" is the
+ * layout Jev gets (state = the content, each question carries its full rule text); "rules-first" moves every asked rule's
+ * text and option descriptions to the front of the state, identical for every item with the same questions, and leaves
+ * each question a short line with short option labels, so the per-item part is the content plus a few tokens per question.
+ * A judge must be trained on the layout it is asked in (Kev fine-tune report, 2026-10-09).
+ */
+export type JudgeLayout = "content-first" | "rules-first";
+export const SHORT_OPTION_LABELS: Record<string, string> = { violate: "违规", none: "不违规", unknown: "无法判断" };
+
+export function rulesFirst(questions: Record<string, ClassifierQuestion>): { rules: Record<string, { instructions: string; options: Record<string, string> }>; questions: Record<string, ClassifierQuestion> } {
+  const rules: Record<string, { instructions: string; options: Record<string, string> }> = {};
+  const out: Record<string, ClassifierQuestion> = {};
+  for (const [k, q] of Object.entries(questions)) {
+    if (q.type !== "choice") throw new Error(`rules-first layout supports choice questions only (${k})`);
+    const base = k.endsWith(CONFIRM_SUFFIX) ? k.slice(0, -CONFIRM_SUFFIX.length) : k;
+    const criteria = q.criteria as Record<string, string>;
+    if (!rules[base]) rules[base] = { instructions: String(q.instructions ?? ""), options: { ...criteria } };
+    out[k] = { type: "choice", instructions: `按上面的规则 ${base} 判断这条内容`, criteria: Object.fromEntries(Object.keys(criteria).map((o) => [o, SHORT_OPTION_LABELS[o] ?? o])) };
+  }
+  return { rules, questions: out };
+}
