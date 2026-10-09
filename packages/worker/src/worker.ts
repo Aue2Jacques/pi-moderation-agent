@@ -298,6 +298,20 @@ export class Worker {
         else throw e;
       }
     }
+    // A conversation can stop without a ruling: e.g. the main model errored, Pi's retries ran out and the generation
+    // ended. Nothing would ever move the review again — the lease keeps being renewed and it holds an admission slot
+    // until the deadline (test-v1 end-to-end, 2026-10-09: 6 reviews sat 40–90 min after relay errors). Release it.
+    const active = [...this.grants.entries()].filter(([, g]) => g.mode === "active");
+    if (active.length > 0) {
+      const ins = await this.harness.inspect(ctx);
+      const live = new Set([...ins.tasks.map((t) => String(t.record.conversationId)), ...ins.submissions.map((s) => String(s.conversationId))]);
+      const now = this.#o.now(), stallMs = this.#o.cfg.agentStallMs ?? 30_000;
+      for (const [conv, g] of active) {
+        if (live.has(conv) || core.hasTerminal(this.#o.db, g.reviewId)) { delete g.idleSince; continue; }
+        g.idleSince ??= now;
+        if (now - g.idleSince >= stallMs) this.hostLoop.request({ conversationId: conv, kind: "release", reason: "agent_stalled" });
+      }
+    }
     await this.pumpHost();
   }
 

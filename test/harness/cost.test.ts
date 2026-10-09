@@ -45,3 +45,24 @@ describe("R5a every physical model response is billed", () => {
     await fx.close();
   }, 30_000);
 });
+
+describe("agent_stalled (test-v1 end-to-end 2026-10-09: reviews sat until the deadline after relay errors)", () => {
+  it("the model keeps erroring, Pi's retries run out and the conversation stops: the review is not left investigating — the heartbeat releases it once idle for agentStallMs", async () => {
+    const db = freshDb();
+    const r = queuedReview(db, "st1", { thread: "t1", at: Date.now() });
+    let clock = Date.now();
+    const fx = await makeWorker({ db, steps: [], now: () => clock, cfg: { ...core.DEFAULT_CONFIG, agentStallMs: 1_000 } });
+    setScript(fx, () => fauxAssistantMessage("", { stopReason: "error", errorMessage: "relay 502" }));
+    await fx.worker.start();
+    await fx.worker.admitOnce();
+    await runToIdle(fx);
+    expect(core.requireReview(db, r.review_id).state).toBe("investigating");        // the bug: nothing moves it any more
+    await fx.worker.heartbeat();                                                     // first sight of the idle conversation
+    expect(core.requireReview(db, r.review_id).state).toBe("investigating");
+    clock += 1_500;
+    await fx.worker.heartbeat();
+    expect(core.requireReview(db, r.review_id)).toMatchObject({ state: "human_queue", release_reason: "agent_stalled" });
+    expect(fx.worker.grants.count()).toBe(0);                                        // the admission slot is free again
+    await fx.close();
+  }, 30_000);
+});

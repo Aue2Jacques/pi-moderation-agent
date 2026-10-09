@@ -14,7 +14,8 @@ export type ReleaseReason =
   | "calib_missing"    // §2.2 system cause: a required question has answers but none calibrated (strict mode without a fitted bucket)
   | "judge_incomplete" // §2.2 system cause: the judge returned no answer for a required question
   | "image_unsupported"   // content carries images and no image channel to the judge exists (text MVP): never auto-disposed
-  | "bundle_missing";     // the policy bundle version pinned on the review is not available to this worker
+  | "bundle_missing"      // the policy bundle version pinned on the review is not available to this worker
+  | "agent_stalled";      // the agent's conversation stopped with no work left and no ruling (e.g. the model kept erroring)
 
 export type Pins = { rulesVer: string; calibVer: string; evidenceVer: string; pricesVer: string };
 

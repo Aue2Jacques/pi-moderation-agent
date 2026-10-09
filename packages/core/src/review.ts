@@ -16,6 +16,9 @@ export type Config = {
   scanMs: number;
   budgetTools: number;
   budgetMicro: number;
+  /** an admitted review whose conversation has had no unfinished task or submission for this long is released to a
+   *  human as agent_stalled (e.g. the main model kept failing and the generation gave up); default 30 s */
+  agentStallMs?: number;
 };
 
 export const DEFAULT_CONFIG: Config = { leaseTtlMs: 30_000, deadlineMs: 60_000, maxAttempts: 3, scanMs: 2_000, budgetTools: 12, budgetMicro: 50_000 };

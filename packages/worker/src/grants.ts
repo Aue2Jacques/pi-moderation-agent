@@ -19,6 +19,8 @@ export type Grant = {
   roundStartedAt: number;
   /** model requests seen by afterResponse in this attempt */
   modelCalls: number;
+  /** wall clock when the heartbeat first saw this conversation with no unfinished work (agent_stalled) */
+  idleSince?: number;
 };
 
 export class Grants {
