@@ -1,9 +1,13 @@
-"""GPU check: kevfast in native/full mode against kev's own path (DecisionModel.probs on kev.model.encode), same
-checkpoint, same texts. Prints max / mean |dp| and changed top choices; bf16 noise is the expected level.
+"""GPU checks against kev's own path (DecisionModel.probs on kev.model.encode), same checkpoint, same texts:
+  native  kevfast native/full vs kev on the native record: must agree to bf16 noise
+  *-rows  the same with branch_mode=rows (one pass, the comment recomputed per question), 16 requests per call
+  rules-rows-graph  one request per call: the padded rows path replayed from CUDA graphs
+  rules   kevfast rules_first/full vs kev on the same tokens as one state ([<state>] rules + "\\n" + content): the cached
+          prefix + per-segment attention path must agree to bf16 noise too (the checkpoint is not trained on this layout,
+          so only agreement is meaningful, not the answers)
+Prints max / mean |dp| and changed top choices per check.
 usage (kev venv): python -m kevfast.check_parity <run> <wire questions json> <texts jsonl with "text"> [n=48]"""
 import json, statistics as st, sys
-
-import torch
 
 from kevfast.common import load, to_engine_request
 from kevfast.engine import Engine, Options
@@ -13,19 +17,53 @@ n = int(sys.argv[4]) if len(sys.argv) > 4 else 48
 tok, model = load(run)
 wire = json.load(open(wire_path))
 texts = [json.loads(l)["text"] for l, _ in zip(open(texts_path), range(n))]
-eng = Engine(tok, model, Options())
-from kev.model import encode
+from kev.model import encode, user_tokens, SPECIAL, rows_of
 from kev.api import render, option_text
-dps, flips, total = [], 0, 0
-for s in range(0, len(texts), 16):
-    batch = texts[s:s + 16]
-    reqs = [to_engine_request({"content": {"text": t, "scene": "comment"}, "evidence": []}, wire, "native", True)[0] for t in batch]
-    got = eng.answer(reqs)
-    for t, g in zip(batch, got):
-        rec = {"state": render({"content": {"text": t, "scene": "comment"}, "evidence": []}),
-               "questions": [{"instr": render(q["instructions"]), "options": [option_text(k, v) for k, v in q["criteria"].items()], "label": 0} for q in wire.values()]}
-        ref = model.probs(encode(tok, rec))
-        for a, b in zip(ref, g):
-            a, b = a.float().cpu(), b.float().cpu()
-            dps.append(float((a - b).abs().max())); flips += int(a.argmax() != b.argmax()); total += 1
-print(json.dumps({"questions": total, "max_dp": round(max(dps), 4), "mean_dp": round(st.mean(dps), 5), "top_choice_changed": flips}))
+rules = {k: {"instructions": q["instructions"], "options": q["criteria"]} for k, q in wire.items() if "#" not in k}
+
+
+def kev_rows_first(t):
+    """kev's own row computation on exactly the token sequence kevfast builds for rules_first."""
+    import torch, torch.nn.functional as F
+    content = {"content": {"text": t, "scene": "comment"}, "evidence": []}
+    er = to_engine_request({"rules": rules, **content}, wire, "rules_first", True)[0]
+    eng0 = engines["rules"]
+    S = [tok.convert_tokens_to_ids(SPECIAL[0])] + user_tokens(tok, er["prefix"] + "\n") + user_tokens(tok, er["content"])
+    rows = []
+    for q in er["questions"]:
+        b = eng0.branch_tokens(q)
+        rows.append(b)
+    with torch.no_grad():
+        Ls, cache, _ = model.prefix({"ids": S, "pos": list(range(len(S))), "seg": [0] * len(S)})
+        hs = model._rows_hidden([(b, list(range(Ls, Ls + len(b)))) for b in rows], cache=cache, prefix_len=Ls)
+    out = []
+    for h, b in zip(hs, rows):
+        oe = [j for j, x in enumerate(b) if x == eng0.c_id]
+        out.append(F.softmax(model.head(h[len(b) - 1], h[torch.tensor(oe, device=h.device)]), -1).cpu())
+    return out
+
+
+engines = {"native": Engine(tok, model, Options(branch_mode="two_pass")), "rules": Engine(tok, model, Options(layout="rules_first", branch_mode="two_pass")),
+           "native-rows": Engine(tok, model, Options(branch_mode="rows")), "rules-rows": Engine(tok, model, Options(layout="rules_first", branch_mode="rows"))}
+for check in ("native", "rules", "native-rows", "rules-rows", "rules-rows-graph"):
+    eng = engines["rules-rows" if check == "rules-rows-graph" else check]; name = check.split("-")[0]
+    step = 1 if check == "rules-rows-graph" else 16          # one request per call: the CUDA-graph path
+    dps, flips, total = [], 0, 0
+    for s in range(0, len(texts) if step == 16 else 16, step):
+        batch = texts[s:s + step]
+        if name == "native":
+            reqs = [to_engine_request({"content": {"text": t, "scene": "comment"}, "evidence": []}, wire, "native", True)[0] for t in batch]
+        else:
+            reqs = [to_engine_request({"rules": rules, "content": {"text": t, "scene": "comment"}, "evidence": []}, wire, "rules_first", True)[0] for t in batch]
+        got = eng.answer(reqs)
+        for t, g in zip(batch, got):
+            if name == "native":
+                rec = {"state": render({"content": {"text": t, "scene": "comment"}, "evidence": []}),
+                       "questions": [{"instr": render(q["instructions"]), "options": [option_text(k, v) for k, v in q["criteria"].items()], "label": 0} for q in wire.values()]}
+                ref = model.probs(encode(tok, rec))
+            else:
+                ref = kev_rows_first(t)
+            for a, b in zip(ref, g):
+                a, b = a.float().cpu(), b.float().cpu()
+                dps.append(float((a - b).abs().max())); flips += int(a.argmax() != b.argmax()); total += 1
+    print(json.dumps({"check": check, "questions": total, "max_dp": round(max(dps), 4), "mean_dp": round(st.mean(dps), 5), "top_choice_changed": flips}), flush=True)
