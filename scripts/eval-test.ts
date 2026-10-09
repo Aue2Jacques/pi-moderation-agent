@@ -40,7 +40,10 @@ const keyOf = new Map(questions.map((q) => [q.sha, core.questionKey(q)] as const
 const byKey = new Map(questions.map((q) => [core.questionKey(q), q] as const));
 const sha = (t: string | Buffer) => createHash("sha256").update(t).digest("hex").slice(0, 16);
 type Item = { id: string; text: string; text_strip: string; group: string; slice: string; source: string; label_bin: number };
-const testIds = new Set(readFileSync("data/eval/split-v1.jsonl", "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { id: string; split: string }).filter((r) => r.split === "test").map((r) => r.id));
+// EVAL_SPLIT=val only for choosing settings (e.g. agent-stage thresholds); judges are scored on test (the default).
+const PART = process.env.EVAL_SPLIT ?? "test";
+if (PART !== "test" && PART !== "val") throw new Error("EVAL_SPLIT: test | val");
+const testIds = new Set(readFileSync("data/eval/split-v1.jsonl", "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { id: string; split: string }).filter((r) => r.split === PART).map((r) => r.id));
 const items = readFileSync("data/eval/eval20k.jsonl", "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Item).filter((x) => testIds.has(x.id));
 mkdirSync(outDir, { recursive: true });
 const OUT = join(outDir, `answers-${VIEW}.jsonl`), REQ = join(outDir, `requests-${VIEW}.jsonl`);
@@ -75,7 +78,7 @@ if (phase === "collect") {
     }
   }));
   const manifest = { phase, view: VIEW, gitHead: (() => { try { return execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim(); } catch { return "unknown"; } })(),
-    scriptSha: sha(readFileSync("scripts/eval-test.ts")), rulesVer: bundle.rulesVer, judge: JEV, split: "split-v1", splitManifestSha: sha(readFileSync("eval/split-v1.manifest.jsonl")),
+    scriptSha: sha(readFileSync("scripts/eval-test.ts")), rulesVer: bundle.rulesVer, judge: JEV, split: "split-v1", splitPart: PART, splitManifestSha: sha(readFileSync("eval/split-v1.manifest.jsonl")),
     evalSha: sha(readFileSync("data/eval/eval20k.jsonl")), items: items.length, todo: todo.length, ok, failed, requests, concurrency: Number(concArg ?? 16), retries: "up to 3 tries per item",
     started: new Date(t0).toISOString(), ended: new Date().toISOString(), outputSha: sha(readFileSync(OUT)) };
   writeFileSync(join(outDir, `manifest-collect-${VIEW}-${Date.now()}.json`), JSON.stringify(manifest, null, 1));
