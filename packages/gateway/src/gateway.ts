@@ -13,6 +13,8 @@ export type GatewayConfig = {
   /** fast-path tries per intake item before it goes to a human as fastpath_error (dev plan R4) */
   intakeMaxAttempts: number;
   blacklist: string[]; rateMaxPerMinute: number;
+  /** size of the in-memory near-duplicate index (a linear scan per content; demo mode keeps it small) */
+  simhashMax?: number;
 };
 
 export const DEFAULT_GATEWAY_CONFIG: GatewayConfig = {
@@ -51,7 +53,7 @@ export type Metrics = {
 export class Gateway {
   readonly d: GatewayDeps;
   readonly blacklist: Blacklist;
-  readonly index = new SimhashIndex();
+  readonly index: SimhashIndex;
   readonly rate: RateLimit;
   readonly recent: { at: number; decision: FastpathOutcome["decision"]; latencyMs: number }[] = [];
   replayPaused = false;
@@ -67,6 +69,7 @@ export class Gateway {
     }
     this.d = d;
     this.blacklist = new Blacklist(d.cfg.blacklist);
+    this.index = new SimhashIndex(d.cfg.simhashMax ?? 50_000);
     this.rate = new RateLimit(d.cfg.rateMaxPerMinute, 60_000);
     // round-9 item 12: every bundle version G runs with is stored so W can continue reviews pinned to older versions
     core.storeBundle(d.db, d.bundle, d.ruleTexts ?? {}, d.now());
@@ -135,11 +138,23 @@ export class Gateway {
           }
         }
       }));
-      while (this.recent.length && this.recent[0]!.at < this.d.now() - 300_000) this.recent.shift();
+      const old = this.recent.findIndex((r) => r.at >= this.d.now() - 300_000);
+      this.recent.splice(0, old < 0 ? this.recent.length : old);
       return out;
     } finally {
       this.#busy = false;
     }
+  }
+
+  /** Fast-path completions per second over the last 300 s (from `recent`, i.e. this process's memory). */
+  flow(): { series: number[]; at: number; per_sec: number } {
+    const at = Math.floor(this.d.now() / 1000) * 1000;
+    const series = new Array<number>(300).fill(0);
+    for (const r of this.recent) {
+      const i = 299 - Math.floor((at - 1 - r.at) / 1000);
+      if (i >= 0 && i < 300) series[i]!++;
+    }
+    return { series, at, per_sec: series.slice(-5).reduce((a, b) => a + b, 0) / 5 };
   }
 
   tickControl(): core.control.TickResult {

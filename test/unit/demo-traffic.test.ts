@@ -9,8 +9,10 @@ import { describe, expect, it } from "vitest";
 import * as core from "../../packages/core/src/index.ts";
 import { loadBundle } from "../../packages/policy/src/index.ts";
 import { Blacklist, Gateway, DEFAULT_GATEWAY_CONFIG } from "../../packages/gateway/src/index.ts";
-import { DemoTraffic, SIM_PREFIX, SIM_REVIEWER, TRAFFIC_MIX, TRAFFIC_POOL, makeContent, pickKind, rng, type TrafficKind } from "../../packages/gateway/src/demo-traffic.ts";
-import { intakeContent } from "../../packages/gateway/src/console-actions.ts";
+import { DemoTraffic, MAX_PER_SEC, SIM_PREFIX, SIM_REVIEWER, TRAFFIC_MIX, TRAFFIC_POOL, makeContent, pickKind, rng, type TrafficKind } from "../../packages/gateway/src/demo-traffic.ts";
+import { DemoRetention } from "../../packages/gateway/src/demo-retention.ts";
+import { stats } from "../../packages/gateway/src/console-api.ts";
+import { humanRule, intakeContent } from "../../packages/gateway/src/console-actions.ts";
 import { DEMO_JUDGE_MODEL, demoCalibrator, demoJudge, demoPrices, demoScore } from "../../packages/worker/src/index.ts";
 import { freshDb } from "../helpers.ts";
 
@@ -121,7 +123,7 @@ describe("DemoTraffic", () => {
 
   it("contents go through intake and the fast path; each kind ends on its route", async () => {
     const s = setup();
-    const tr = new DemoTraffic({ ...s.deps, mode: "demo" }, { perMin: 0, seed: 3, appealPct: 0 });
+    const tr = new DemoTraffic({ ...s.deps, mode: "demo" }, { perSec: 0, seed: 3, appealPct: 0 });
     const kinds = new Map<string, TrafficKind>();
     for (let i = 0; i < 160; i++) { s.tick(250); const c = tr.contentTick(); if (c) kinds.set(c.contentId, c.kind); }
     expect(kinds.size).toBe(160);
@@ -142,7 +144,7 @@ describe("DemoTraffic", () => {
 
   it("paused or under backpressure: nothing is generated", () => {
     const s = setup();
-    const tr = new DemoTraffic({ ...s.deps, mode: "demo" }, { perMin: 0, seed: 1 });
+    const tr = new DemoTraffic({ ...s.deps, mode: "demo" }, { perSec: 0, seed: 1 });
     tr.set({ paused: true });
     expect(tr.contentTick()).toBeUndefined();
     tr.set({ paused: false });
@@ -154,7 +156,7 @@ describe("DemoTraffic", () => {
 
   it("the simulated reviewer waits, respects its rate and the cap, and leaves people's tasks alone", () => {
     const s = setup();
-    const tr = new DemoTraffic({ ...s.deps, mode: "demo" }, { perMin: 0, seed: 1, simReviewsPerMin: 6, simMinAgeMs: 30_000, simThinkMs: 4_000, humanCap: 3 });
+    const tr = new DemoTraffic({ ...s.deps, mode: "demo" }, { perSec: 0, seed: 1, simReviewsPerMin: 6, simMinAgeMs: 30_000, simThinkMs: 4_000, humanCap: 3 });
     const sim = [humanTask(s, `${SIM_PREFIX}a`), humanTask(s, `${SIM_PREFIX}b`)];
     const mine = humanTask(s, "c-person-1");
     const held = humanTask(s, `${SIM_PREFIX}held`);
@@ -183,7 +185,7 @@ describe("DemoTraffic", () => {
 
   it("over the cap the simulated reviewer does not wait for the minimum age; the queue drains to the cap and stays bounded", () => {
     const s = setup();
-    const tr = new DemoTraffic({ ...s.deps, mode: "demo" }, { perMin: 0, seed: 1, simReviewsPerMin: 30, simMinAgeMs: 600_000, simThinkMs: 1_000, humanCap: 3 });
+    const tr = new DemoTraffic({ ...s.deps, mode: "demo" }, { perSec: 0, seed: 1, simReviewsPerMin: 30, simMinAgeMs: 600_000, simThinkMs: 1_000, humanCap: 3 });
     for (let i = 0; i < 10; i++) humanTask(s, `${SIM_PREFIX}q${i}`);
     const openSim = (): number => (s.db.prepare(`SELECT COUNT(*) AS n FROM human_queue h JOIN review r ON r.review_id=h.review_id WHERE h.closed_at IS NULL AND r.content_id LIKE '${SIM_PREFIX}%'`).get() as { n: number }).n;
     for (let i = 0; i < 120; i++) { s.tick(1000); tr.reviewerTick(); }
@@ -192,7 +194,7 @@ describe("DemoTraffic", () => {
 
   it("appeals a recent simulated limit / takedown once", async () => {
     const s = setup();
-    const tr = new DemoTraffic({ ...s.deps, mode: "demo" }, { perMin: 0, seed: 11, appealPct: 0 });
+    const tr = new DemoTraffic({ ...s.deps, mode: "demo" }, { perSec: 0, seed: 11, appealPct: 0 });
     expect(tr.appealOne()).toBeUndefined();   // nothing to appeal yet
     intakeContent(s.deps, { text: "加V领优惠券，私聊发链接", scene: "comment", contentId: `${SIM_PREFIX}m1`, accountId: "u_sim_promo_1" });
     await s.gateway.processIntakeOnce();
@@ -201,5 +203,112 @@ describe("DemoTraffic", () => {
     expect(core.readReview(s.db, id!)!.trigger).toBe("appeal");
     expect(tr.appealOne()).toBeUndefined();   // the latest review is the appeal now
     expect(tr.status().appeals).toBe(1);
+  });
+
+  it("the content stream is a Poisson stream at perSec, clamped to maxPerSec, silent when paused or at 0", () => {
+    const s = setup();
+    const tr = new DemoTraffic({ ...s.deps, mode: "demo" }, { perSec: 20, seed: 9, appealPct: 0 });
+    tr.set({ perSec: 20 });
+    let n = 0;
+    for (let i = 0; i < 100; i++) { s.tick(100); n += tr.pumpContent(); }   // 10 s
+    expect(n).toBeGreaterThan(150);
+    expect(n).toBeLessThan(250);
+    expect(tr.status().generated).toBe(n);
+    tr.set({ paused: true });
+    for (let i = 0; i < 20; i++) { s.tick(100); expect(tr.pumpContent()).toBe(0); }
+    tr.set({ paused: false, perSec: 0 });
+    for (let i = 0; i < 20; i++) { s.tick(100); expect(tr.pumpContent()).toBe(0); }
+    tr.set({ perSec: 10_000 });
+    expect(tr.status().per_sec).toBe(MAX_PER_SEC);
+    expect(tr.status()).toMatchObject({ per_min: MAX_PER_SEC * 60, max_per_sec: MAX_PER_SEC, tiers: [1, 5, 10, 20, 50] });
+    // a stall (no wake-up for a minute) skips ahead instead of bursting a minute of contents at once
+    s.tick(60_000);
+    expect(tr.pumpContent()).toBeLessThanOrEqual(400);
+  });
+
+  it("the simulated reviewer scales with the inflow and works on several tasks at once", () => {
+    const s = setup();
+    const tr = new DemoTraffic({ ...s.deps, mode: "demo" }, { perSec: 0, seed: 1, simReviewsPerMin: 6, simMinAgeMs: 600_000, simThinkMs: 4_000, humanCap: 3 });
+    for (let i = 0; i < 40; i++) humanTask(s, `${SIM_PREFIX}t${i}`);
+    let maxThinking = 0;
+    for (let i = 0; i < 40; i++) { s.tick(1000); tr.reviewerTick(); maxThinking = Math.max(maxThinking, tr.status().sim_reviewer.thinking); }
+    const st = tr.status().sim_reviewer;
+    expect(maxThinking).toBeGreaterThan(1);   // overlapping claims
+    expect(st.per_min).toBeGreaterThan(6);     // capacity followed the inflow
+    expect(st.open_sim_tasks).toBeLessThanOrEqual(3 + st.thinking);
+    expect(st.decided).toBeGreaterThanOrEqual(30);
+  });
+});
+
+describe("DemoRetention", () => {
+  /** the cumulative part of Stats (what must survive pruning unchanged) */
+  const cumulative = (x: ReturnType<typeof stats>) => ({ contents: x.contents, judged: x.judged, reviews: x.reviews, routes: x.routes, effective: x.effective, release_reasons: x.release_reasons,
+    agent: { disposed: x.agent.disposed, released: x.agent.released }, human_closed: x.human.closed, appeals: { total: x.appeals.total, changed: x.appeals.changed }, cost: x.cost, series: x.series });
+  const count = (db: core.Db, sql: string): number => (db.prepare(sql).get() as { n: number }).n;
+
+  it("refuses real mode", () => {
+    const s = setup();
+    expect(() => new DemoRetention({ db: s.db, now: s.now, mode: "real" })).toThrow(/demo mode only/);
+  });
+
+  it("removes old finished simulated contents with everything under them, keeps the totals exact and continuous", async () => {
+    const s = setup();
+    const tr = new DemoTraffic({ ...s.deps, mode: "demo" }, { perSec: 0, seed: 21, appealPct: 0 });
+    const ret = new DemoRetention({ db: s.db, now: s.now, mode: "demo" }, { keep: 50, batch: 1000, quietMs: 0 });
+    for (let i = 0; i < 200; i++) { s.tick(50); tr.contentTick(); }
+    for (let i = 0; i < 40 && count(s.db, "SELECT COUNT(*) AS n FROM intake WHERE status<>'judged'") > 0; i++) await s.gateway.processIntakeOnce();
+    // a simulated human task decided by a person, an appeal, and a person's own content that must never be removed
+    const h = humanTask(s, `${SIM_PREFIX}human-1`);
+    humanRule(s.deps, { reviewId: h, reviewerId: "rev1", token: "t", action: "pass", ruleIds: [], reason: "看过了", feedback: { ruleId: "ABUSE-001", label: "allow" } });
+    expect(tr.appealOne()).toBeTruthy();
+    intakeContent(s.deps, { text: "这期讲得很清楚，收藏了", scene: "comment", contentId: "c-person-keep" });
+    await s.gateway.processIntakeOnce();
+    s.gateway.dispatchOutbox(10_000);   // delivered: an undelivered outbox event keeps its content
+    s.tick(1000);
+    const before = cumulative(stats(s.db, s.now()));
+    expect(before.contents).toBe(202);
+    const removed = ret.runOnce();
+    expect(removed).toBeGreaterThan(100);
+    const after = cumulative(stats(s.db, s.now()));
+    expect(after).toEqual(before);
+    // only unfinished simulated contents (queued for an agent, no worker here) and the kept newest remain
+    const left = count(s.db, `SELECT COUNT(*) AS n FROM intake WHERE content_id LIKE '${SIM_PREFIX}%'`);
+    const unfinished = count(s.db, `SELECT COUNT(DISTINCT content_id) AS n FROM review WHERE content_id LIKE '${SIM_PREFIX}%' AND state NOT IN ('disposed','human_disposed')`);
+    expect(left).toBeLessThanOrEqual(50 + unfinished);
+    expect(core.readContent(s.db, "c-person-keep")).toBeTruthy();
+    // nothing left dangling
+    for (const sql of [
+      "SELECT COUNT(*) AS n FROM judge_call j WHERE NOT EXISTS (SELECT 1 FROM content c WHERE c.content_id=j.content_id)",
+      "SELECT COUNT(*) AS n FROM review r WHERE NOT EXISTS (SELECT 1 FROM content c WHERE c.content_id=r.content_id)",
+      "SELECT COUNT(*) AS n FROM outbox o WHERE NOT EXISTS (SELECT 1 FROM review r WHERE r.review_id=o.review_id)",
+      "SELECT COUNT(*) AS n FROM content_state x WHERE NOT EXISTS (SELECT 1 FROM content c WHERE c.content_id=x.content_id)",
+      "SELECT COUNT(*) AS n FROM content c WHERE c.content_id LIKE '%.parent' AND NOT EXISTS (SELECT 1 FROM content p WHERE p.content_id || '.parent' = c.content_id)",
+    ]) expect(count(s.db, sql), sql).toBe(0);
+    expect(count(s.db, "SELECT COUNT(*) AS n FROM pragma_foreign_key_check")).toBe(0);
+    // the audit log is append-only: untouched
+    expect(core.verifyAuditChain(s.db)).toBeNull();
+    // more traffic, another pass: totals keep counting from where they were
+    for (let i = 0; i < 60; i++) { s.tick(50); tr.contentTick(); }
+    for (let i = 0; i < 20 && count(s.db, "SELECT COUNT(*) AS n FROM intake WHERE status<>'judged'") > 0; i++) await s.gateway.processIntakeOnce();
+    s.gateway.dispatchOutbox(10_000);
+    s.tick(1000);
+    const mid = cumulative(stats(s.db, s.now()));
+    expect(mid.contents).toBe(262);
+    ret.runOnce();
+    expect(cumulative(stats(s.db, s.now()))).toEqual(mid);
+    expect(ret.status()).toMatchObject({ keep: 50, runs: 2 });
+    expect(ret.status().pruned).toBeGreaterThan(removed);
+  });
+
+  it("keeps contents that changed within quietMs", async () => {
+    const s = setup();
+    const tr = new DemoTraffic({ ...s.deps, mode: "demo" }, { perSec: 0, seed: 4, appealPct: 0 });
+    const ret = new DemoRetention({ db: s.db, now: s.now, mode: "demo" }, { keep: 1, quietMs: 60_000 });
+    for (let i = 0; i < 30; i++) tr.contentTick();
+    for (let i = 0; i < 10; i++) await s.gateway.processIntakeOnce();
+    s.gateway.dispatchOutbox(10_000);
+    expect(ret.runOnce()).toBe(0);
+    s.tick(61_000);
+    expect(ret.runOnce()).toBeGreaterThan(0);
   });
 });

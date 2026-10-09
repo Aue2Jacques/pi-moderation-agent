@@ -1,7 +1,7 @@
 // Start the console the way a person does (scripts/console.ts --demo) on a free port and a temporary data dir, and
 // stop it again. Shared by the end-to-end scripts in this directory.
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,6 +43,7 @@ export async function launchDemo(env: NodeJS.ProcessEnv = {}): Promise<Launched>
     try { process.kill(-proc.pid!, "SIGTERM"); } catch { /* already gone */ }
     await new Promise((r) => setTimeout(r, 800));
     try { process.kill(-proc.pid!, "SIGKILL"); } catch { /* already gone */ }
+    rmSync(data, { recursive: true, force: true });
   };
   return { base: `http://127.0.0.1:${port}`, proc, log, stop };
 }

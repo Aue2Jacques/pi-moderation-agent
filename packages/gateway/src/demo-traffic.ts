@@ -1,10 +1,12 @@
 // Demo traffic (demo mode only): keeps the console moving like a running system. Three parts, all through the same
 // write paths as a person's actions (console-actions.ts), so nothing here decides a route by itself:
 // - a content stream of made-up, mild texts mixed by kind (mostly ordinary, some marketing, some abuse, a few that
-//   need thread context or account history, the odd injection), at DEMO_TRAFFIC_PER_MIN with random spacing;
-// - a simulated reviewer (SIM_REVIEWER) that claims and decides part of the human queue at a capped rate, so the queue
-//   has items to show but cannot grow without bound; it only touches simulated contents (SIM_PREFIX), never a
-//   person's submissions;
+//   need thread context or account history, the odd injection), a Poisson stream at `perSec` contents a second
+//   (DEMO_TRAFFIC_PER_SEC, default 10; tiers in the console: 1 / 5 / 10 / 20 / 50);
+// - a simulated reviewer (SIM_REVIEWER, a team under one id) that claims and decides the simulated part of the human
+//   queue; its capacity follows the inflow (at least DEMO_SIM_REVIEWS_PER_MIN, else 1.3x the simulated tasks of the
+//   last minute), so the queue has items to show but cannot grow without bound; it only touches simulated contents
+//   (SIM_PREFIX), never a person's submissions;
 // - an occasional appeal on a recent simulated limit / takedown.
 // The constructor refuses any mode but "demo": real mode never generates traffic.
 import * as core from "@mod/core";
@@ -21,7 +23,16 @@ export const SIM_REVIEWER = "sim-reviewer";
 export type PoolItem = { text: string; scene?: Scene; parent?: string };
 
 /** Share of each kind, in percent. */
-export const TRAFFIC_MIX: Readonly<Record<TrafficKind, number>> = { normal: 58, marketing: 15, abuse: 6, mild: 8, banter: 5, repeat: 5, injection: 3 };
+export const TRAFFIC_MIX: Readonly<Record<TrafficKind, number>> = { normal: 66, marketing: 12, abuse: 5, mild: 4, banter: 5, repeat: 5, injection: 3 };
+
+/** Highest rate the control accepts (contents a second): the measured ceiling of one G + W pair in demo mode on the
+ *  reference machine (docs/console-2026-10-09.md §6.3), not a property of the real system. */
+export const MAX_PER_SEC = 50;
+/** Rate tiers offered by the console's traffic control (contents a second). */
+export const RATE_TIERS: readonly number[] = [1, 5, 10, 20, 50];
+/** Ordinary accounts drawn from this many (G rate-limits one account to 30 contents a minute; a small pool would turn
+ *  ordinary contents into rate_limited suspicions at high rates). */
+const NORMAL_ACCOUNTS = 5000;
 
 /**
  * Made-up, mild texts. Which way each kind goes follows from the scripted judge's surface signals (worker demo.ts):
@@ -105,7 +116,6 @@ export function makeContent(next: () => number, now: number, n: number): Generat
   const pool = TRAFFIC_POOL[kind];
   const item = pool[Math.floor(next() * pool.length)]!;
   const k = (m: number): number => 1 + Math.floor(next() * m);
-  const pad = (x: number): string => String(x).padStart(2, "0");
   const contentId = `${SIM_PREFIX}${now.toString(36)}-${n.toString(36)}`;
   let accountId: string;
   let parentAccount = "";
@@ -116,30 +126,37 @@ export function makeContent(next: () => number, now: number, n: number): Generat
     case "banter": { const i = k(8); accountId = `u_sim_mate_${i}`; parentAccount = `u_sim_player_${i}`; break; }
     case "repeat": accountId = `u_sim_repeat_${k(REPEAT_ACCOUNTS)}`; parentAccount = `u_sim_creator_${k(8)}`; break;
     case "injection": accountId = `u_sim_trick_${k(4)}`; break;
-    default: accountId = `u_sim_${pad(k(40))}`;
+    default: accountId = `u_sim_${String(k(NORMAL_ACCOUNTS)).padStart(4, "0")}`;
   }
   return { kind, contentId, scene: item.scene ?? "comment", text: item.text, accountId, ...(item.parent ? { parent: { text: item.parent, accountId: parentAccount } } : {}) };
 }
 
 export type TrafficConfig = {
-  /** contents per minute; 0 = no content stream */
-  perMin: number;
-  /** simulated reviewer decisions per minute at most; 0 = no simulated reviewer */
+  /** contents a second (fractions allowed); 0 = no content stream */
+  perSec: number;
+  /** the simulated reviewer's capacity at least this many decisions a minute; 0 = no simulated reviewer */
   simReviewsPerMin: number;
   /** a simulated task waits at least this long in the queue before the simulated reviewer takes it */
   simMinAgeMs: number;
-  /** time between the simulated claim and its ruling (the claim is visible meanwhile) */
+  /** time between a simulated claim and its ruling (the claim is visible meanwhile); claims overlap */
   simThinkMs: number;
-  /** more open simulated tasks than this: the simulated reviewer ignores simMinAgeMs */
+  /** more free simulated tasks than this: the simulated reviewer ignores simMinAgeMs */
   humanCap: number;
   /** percent of new contents accompanied by an appeal on an earlier simulated limit / takedown */
   appealPct: number;
+  /** highest accepted rate (contents a second); above MAX_PER_SEC only for capacity measurements */
+  maxPerSec: number;
   seed?: number;
 };
 
-export const DEFAULT_TRAFFIC: TrafficConfig = { perMin: 20, simReviewsPerMin: 6, simMinAgeMs: 30_000, simThinkMs: 4_000, humanCap: 8, appealPct: 3 };
+export const DEFAULT_TRAFFIC: TrafficConfig = { perSec: 10, simReviewsPerMin: 6, simMinAgeMs: 30_000, simThinkMs: 4_000, humanCap: 12, appealPct: 0.5, maxPerSec: MAX_PER_SEC };
 
 const APPEAL_REASONS = ["disagree", "context_missing", "misread", "other"] as const;
+/** how often the content stream and the simulated reviewer wake up (ms) */
+const PUMP_MS = 100;
+const REVIEWER_MS = 1000;
+/** at most this many contents per wake-up: after a stall (GC, a slow tick) the stream skips instead of bursting */
+const MAX_BURST = 400;
 
 export class DemoTraffic {
   readonly d: ActionDeps;
@@ -153,10 +170,14 @@ export class DemoTraffic {
   #skipped = 0;
   #claimed = 0;
   #decided = 0;
-  #lastSimAt = 0;
-  #pending: { reviewId: string; decideAt: number } | null = null;
+  /** reviewer capacity: claims allowed now (refilled at the current capacity, at most one wake-up's worth) */
+  #tokens = 1;
+  #tokensAt = 0;
+  #capacity = 0;
+  readonly #pending = new Map<string, number>();   // review id -> decide at
   readonly #failed = new Set<string>();
-  #contentTimer: NodeJS.Timeout | undefined;
+  #nextAt = 0;
+  #pump: NodeJS.Timeout | undefined;
   #simTimer: NodeJS.Timeout | undefined;
   readonly #startedAt: number;
 
@@ -165,42 +186,55 @@ export class DemoTraffic {
     if (!d.humanAuth.reviewers.includes(SIM_REVIEWER)) throw new Error(`reviewer list must include ${SIM_REVIEWER} for the simulated reviewer`);
     this.d = d;
     this.cfg = { ...DEFAULT_TRAFFIC, ...cfg };
+    this.cfg.perSec = this.#clamp(this.cfg.perSec);
     this.#next = rng(this.cfg.seed ?? (d.now() & 0x7fffffff));
     this.#startedAt = d.now();
+    this.#tokensAt = d.now();
+    this.#capacity = this.cfg.simReviewsPerMin;
     seedTrafficHistory(d.db, d.now());
   }
 
   start(): void {
-    this.#scheduleContent();
-    if (!this.#simTimer) { this.#simTimer = setInterval(() => this.#guard(() => this.reviewerTick()), 1000); this.#simTimer.unref(); }
+    this.#nextAt = this.d.now() + this.#gap();
+    if (!this.#pump) { this.#pump = setInterval(() => this.#guard(() => this.pumpContent()), PUMP_MS); this.#pump.unref(); }
+    if (!this.#simTimer) { this.#simTimer = setInterval(() => this.#guard(() => this.reviewerTick()), REVIEWER_MS); this.#simTimer.unref(); }
   }
 
   stop(): void {
-    clearTimeout(this.#contentTimer);
+    clearInterval(this.#pump);
     clearInterval(this.#simTimer);
-    this.#contentTimer = this.#simTimer = undefined;
+    this.#pump = this.#simTimer = undefined;
   }
 
-  /** Change the rate or pause / resume (POST /api/demo/traffic). */
-  set(o: { perMin?: number; paused?: boolean }): void {
-    if (o.perMin !== undefined) this.cfg.perMin = Math.max(0, Math.min(600, o.perMin));
-    if (o.paused !== undefined) this.paused = o.paused;
-    if (this.#simTimer) this.#scheduleContent();
+  /** Change the rate (contents a second) or pause / resume (POST /api/demo/traffic). */
+  set(o: { perSec?: number; paused?: boolean }): void {
+    if (o.perSec !== undefined) { this.cfg.perSec = this.#clamp(o.perSec); this.#nextAt = this.d.now() + this.#gap(); }
+    if (o.paused !== undefined) { this.paused = o.paused; if (!o.paused) this.#nextAt = this.d.now() + this.#gap(); }
   }
+
+  #clamp(x: number): number { return Number.isFinite(x) ? Math.max(0, Math.min(this.cfg.maxPerSec, x)) : 0; }
 
   #guard(f: () => void): void {
     try { f(); } catch (e) { console.error("demo traffic", core.redact(e)); }
   }
 
-  #scheduleContent(): void {
-    clearTimeout(this.#contentTimer);
-    this.#contentTimer = undefined;
-    if (this.cfg.perMin <= 0) return;
-    // exponential spacing around the mean, clamped so the stream neither bunches up nor stalls
-    const mean = 60_000 / this.cfg.perMin;
-    const gap = Math.min(3 * mean, Math.max(0.2 * mean, -Math.log(1 - this.#next()) * mean));
-    this.#contentTimer = setTimeout(() => { this.#guard(() => this.contentTick()); this.#scheduleContent(); }, gap);
-    this.#contentTimer.unref();
+  /** Exponential gap of a Poisson stream at the current rate (ms); Infinity when the stream is off. */
+  #gap(): number {
+    if (this.cfg.perSec <= 0) return Infinity;
+    return -Math.log(1 - this.#next()) * (1000 / this.cfg.perSec);
+  }
+
+  /** Generate every content whose arrival time has come (called every PUMP_MS). Returns how many were put on intake. */
+  pumpContent(): number {
+    const now = this.d.now();
+    if (this.paused || this.cfg.perSec <= 0) return 0;
+    let n = 0;
+    while (this.#nextAt <= now && n < MAX_BURST) {
+      if (this.contentTick()) n++;
+      this.#nextAt += this.#gap();
+    }
+    if (this.#nextAt <= now) this.#nextAt = now + this.#gap();   // fell behind: skip ahead instead of bursting
+    return n;
   }
 
   /** Put one generated content on the intake queue, and now and then appeal an earlier one. */
@@ -237,37 +271,45 @@ export class DemoTraffic {
        WHERE h.closed_at IS NULL AND r.content_id LIKE '${SIM_PREFIX}%' ORDER BY h.created_at`).all() as { review_id: string; created_at: number; claimed_by: string | null }[];
   }
 
-  /** One step of the simulated reviewer: finish the task it is thinking about, or claim the next one when allowed. */
+  /** Simulated tasks that entered the human queue in the last minute. */
+  #inflowPerMin(now: number): number {
+    return (this.d.db.prepare(`SELECT COUNT(*) AS n FROM human_queue h JOIN review r ON r.review_id=h.review_id WHERE h.created_at>? AND r.content_id LIKE '${SIM_PREFIX}%'`).get(now - 60_000) as { n: number }).n;
+  }
+
+  /** One step of the simulated reviewer: decide the tasks whose think time is over, then claim as many as its capacity
+   *  allows (oldest first; young tasks wait for simMinAgeMs unless more than humanCap are free). */
   reviewerTick(): void {
     if (this.cfg.simReviewsPerMin <= 0) return;
     const now = this.d.now();
-    const open = this.#openSim();
-    if (!this.#pending) {
-      // a task this reviewer claimed before a restart is finished first
-      const mine = open.find((x) => x.claimed_by === SIM_REVIEWER && !this.#failed.has(x.review_id));
-      if (mine) this.#pending = { reviewId: mine.review_id, decideAt: now + this.cfg.simThinkMs };
-    }
-    if (this.#pending) {
-      if (now < this.#pending.decideAt) return;
-      const id = this.#pending.reviewId;
-      this.#pending = null;
-      this.#decide(id);
-      return;
-    }
-    if (now - this.#lastSimAt < 60_000 / this.cfg.simReviewsPerMin) return;
+    let open = this.#openSim();
+    // tasks this reviewer claimed before a restart are finished first
+    for (const x of open) if (x.claimed_by === SIM_REVIEWER && !this.#pending.has(x.review_id) && !this.#failed.has(x.review_id)) this.#pending.set(x.review_id, now + this.cfg.simThinkMs);
+    let decided = false;
+    for (const [id, at] of [...this.#pending]) if (at <= now) { this.#pending.delete(id); this.#decide(id); decided = true; }
+    if (decided) open = this.#openSim();
+    // capacity follows the inflow (plus a catch-up share of what is above the cap), so the simulated queue stays near
+    // humanCap whatever the traffic rate
+    const backlog = Math.max(0, open.filter((x) => !x.claimed_by).length - this.cfg.humanCap);
+    this.#capacity = Math.max(this.cfg.simReviewsPerMin, Math.ceil(1.3 * this.#inflowPerMin(now) + 2 * backlog));
+    const perMs = this.#capacity / 60_000;
+    this.#tokens = Math.min(Math.max(1, perMs * REVIEWER_MS), this.#tokens + (now - this.#tokensAt) * perMs);
+    this.#tokensAt = now;
     const free = open.filter((x) => !x.claimed_by && !this.#failed.has(x.review_id));
-    const next = free[0];
-    if (!next) return;
-    if (now - next.created_at < this.cfg.simMinAgeMs && free.length <= this.cfg.humanCap) return;
-    try {
-      claimTask(this.d, SIM_REVIEWER, next.review_id);
-    } catch {
-      this.#failed.add(next.review_id);   // taken by a person in the meantime: leave it to them
-      return;
+    let left = free.length;
+    for (const next of free) {
+      if (this.#tokens < 1) break;
+      if (now - next.created_at < this.cfg.simMinAgeMs && left <= this.cfg.humanCap) break;
+      try {
+        claimTask(this.d, SIM_REVIEWER, next.review_id);
+      } catch {
+        this.#failed.add(next.review_id);   // taken by a person in the meantime: leave it to them
+        continue;
+      }
+      this.#tokens -= 1;
+      this.#claimed++;
+      left--;
+      this.#pending.set(next.review_id, now + this.cfg.simThinkMs);
     }
-    this.#claimed++;
-    this.#lastSimAt = now;
-    this.#pending = { reviewId: next.review_id, decideAt: now + this.cfg.simThinkMs };
   }
 
   /** The simulated decision: the rule the judge leaned on most, its default action about half the time, else pass. */
@@ -300,9 +342,10 @@ export class DemoTraffic {
   status(): TrafficStatus {
     const open = this.#openSim();
     return {
-      per_min: this.cfg.perMin, paused: this.paused, started_at: this.#startedAt,
+      per_sec: this.cfg.perSec, per_min: Math.round(this.cfg.perSec * 60), max_per_sec: this.cfg.maxPerSec, tiers: [...RATE_TIERS], paused: this.paused, started_at: this.#startedAt,
       generated: this.#generated, by_kind: { ...this.#byKind }, appeals: this.#appeals, intake_skipped: this.#skipped,
-      sim_reviewer: { id: SIM_REVIEWER, per_min: this.cfg.simReviewsPerMin, claimed: this.#claimed, decided: this.#decided, open_sim_tasks: open.length, current: this.#pending?.reviewId ?? null },
+      sim_reviewer: { id: SIM_REVIEWER, per_min: this.#capacity, claimed: this.#claimed, decided: this.#decided, open_sim_tasks: open.length, thinking: this.#pending.size,
+        current: this.#pending.keys().next().value ?? null },
     };
   }
 }

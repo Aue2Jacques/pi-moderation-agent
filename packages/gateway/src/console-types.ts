@@ -180,10 +180,33 @@ export type TrafficKind = "normal" | "marketing" | "abuse" | "mild" | "banter" |
 
 /** GET /api/demo/traffic (demo mode only) */
 export type TrafficStatus = {
-  per_min: number; paused: boolean; started_at: number;
+  /** contents a second (the control's unit); per_min is the same rate a minute */
+  per_sec: number; per_min: number; max_per_sec: number; tiers: number[];
+  paused: boolean; started_at: number;
   generated: number; by_kind: Record<TrafficKind, number>; appeals: number;
-  sim_reviewer: { id: string; per_min: number; claimed: number; decided: number; open_sim_tasks: number; current: string | null };
+  /** the simulated reviewer (a team under one id): capacity a minute (follows the inflow), tasks claimed and not yet decided */
+  sim_reviewer: { id: string; per_min: number; claimed: number; decided: number; open_sim_tasks: number; thinking: number; current: string | null };
   intake_skipped: number;
+  /** demo retention (old simulated contents removed, their counts kept in a rollup); null when off */
+  retention?: RetentionStatus | null;
+};
+
+export type RetentionStatus = {
+  /** simulated contents kept in app.db (the newest ones); older finished ones are removed */
+  keep: number; every_ms: number;
+  /** simulated contents removed so far, and the last run */
+  pruned: number; runs: number; last_at: number | null; last_ms: number | null;
+  /** size of app.db (+ WAL) in bytes at the last run */
+  db_bytes: number | null;
+};
+
+/** Fast-path throughput from G's memory (not affected by demo retention). */
+export type Flow = {
+  /** contents through the fast path in each of the last 300 seconds, oldest first; the last entry is the second that ended at `at` */
+  series: number[];
+  at: number;
+  /** mean over the last 5 seconds (contents a second) */
+  per_sec: number;
 };
 
 /** One frame of GET /api/events (SSE event "live"). */
@@ -197,4 +220,6 @@ export type LiveFrame = {
   /** change counters: a list re-reads when its counter differs from the one it was read at */
   versions: { reviews: string; human: string; appeals: string; contents: string; traffic: string };
   traffic: TrafficStatus | null;
+  /** fast-path contents a second (G's in-memory window); null when the gateway does not report it */
+  flow: Flow | null;
 };

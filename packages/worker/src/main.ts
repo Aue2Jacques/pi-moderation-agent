@@ -12,7 +12,7 @@ import * as core from "@mod/core";
 import { identityCalibrator, jevModel, jevProvider, loadCalibrator } from "@mod/judges";
 import { loadBundle } from "@mod/policy";
 import { piJudge } from "./pi-judge.ts";
-import { demoAgentProvider, demoCalibrator, demoJudge, demoPrices } from "./demo.ts";
+import { DemoSessionRetention, demoAgentProvider, demoCalibrator, demoJudge, demoPrices } from "./demo.ts";
 import type { JudgeClient } from "./judge-client.ts";
 import { relayProvider } from "./relay.ts";
 import { Worker } from "./worker.ts";
@@ -76,18 +76,24 @@ async function main(): Promise<void> {
     db, storage: await openNodeSqliteStorage(sessionDb), models, bundle, ruleTexts: texts, workerId, judge, prices, calibrator,
     cfg: { ...core.DEFAULT_CONFIG, leaseTtlMs: envNum("LEASE_TTL_MS", 30_000), deadlineMs: envNum("DEADLINE_MS_SHORT", 60_000), maxAttempts: envNum("MAX_ATTEMPTS", 3) },
     flags: { escalation: !demo && env("FLAG_ESCALATION", "false") === "true" }, maxModelCalls: envNum("MAX_MODEL_CALLS", 20), strongModel: { provider: "a6api", modelId: strong },
-    now: () => Date.now(), admitMax: envNum("ADMIT_MAX", 10), modelFor: () => agent, instructions: INSTRUCTIONS,
+    // demo mode admits more sessions at once: the scripted agent waits on timers, not on a model, and the demo traffic
+    // runs at up to MAX_PER_SEC contents a second (docs/console-2026-10-09.md §6.3)
+    now: () => Date.now(), admitMax: envNum("ADMIT_MAX", demo ? 64 : 10), modelFor: () => agent, instructions: INSTRUCTIONS,
   });
   const started = await worker.start();
   console.log(JSON.stringify({ msg: "worker up", mode: demo ? "demo" : "real", workerId, ...started, agentModel, calib_mode: calibrator.mode, calib_ver: calibrator.calibVer }));
   worker.startLoops();
-  const admit = setInterval(() => { worker.admitOnce().catch((e) => console.error("admit error", core.redact(e))); }, envNum("ADMIT_MS", 1000));
+  const admit = setInterval(() => { worker.admitOnce().catch((e) => console.error("admit error", core.redact(e))); }, envNum("ADMIT_MS", demo ? 500 : 1000));
   admit.unref();
+  // demo retention, W's half: conversations whose review G removed (DEMO_KEEP_CONTENTS=0 turns both halves off)
+  const sessions = demo && envNum("DEMO_KEEP_CONTENTS", 4000) > 0 ? new DemoSessionRetention({ sessionDb, appDb: db, held: () => new Set(worker.grants.entries().map(([c]) => c)), mode: "demo" }) : undefined;
+  const prune = sessions ? setInterval(() => { try { sessions.runOnce(); } catch (e) { console.error("session retention", core.redact(e)); } }, envNum("DEMO_PRUNE_MS", 5_000)) : undefined;
+  prune?.unref();
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     const json = (status: number, body: unknown) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
     try {
-      if (url.pathname === "/health") return json(200, { worker_id: workerId, grants: worker.grants.count(), active: worker.grants.count("active"), resumed_at: worker.resumedAt });
+      if (url.pathname === "/health") return json(200, { worker_id: workerId, grants: worker.grants.count(), active: worker.grants.count("active"), resumed_at: worker.resumedAt, ...(sessions ? { sessions_pruned: sessions.pruned } : {}) });
       if (url.pathname === "/sessions") return json(200, await worker.sessions());
       if (url.pathname === "/usage") return json(200, await worker.usageReconcile());   // ledger vs Pi's pi.usage
       if (url.pathname === "/abort" && req.method === "POST") { const n = await worker.pollCommands(); return json(200, { polled: n }); }
@@ -95,7 +101,7 @@ async function main(): Promise<void> {
     } catch (e) { json(500, { code: "INTERNAL", message: core.redact(String(e)) }); }
   });
   server.listen(envNum("W_PORT", 8081), "127.0.0.1");
-  const stop = async () => { clearInterval(admit); server.close(); await worker.close(); process.exit(0); };   // exiting releases the single-instance lock
+  const stop = async () => { clearInterval(admit); clearInterval(prune); sessions?.close(); server.close(); await worker.close(); process.exit(0); };   // exiting releases the single-instance lock
   process.on("SIGINT", () => void stop());
   process.on("SIGTERM", () => void stop());
 }

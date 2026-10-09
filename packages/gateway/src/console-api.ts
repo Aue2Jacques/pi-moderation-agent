@@ -290,50 +290,88 @@ export function listAppeals(db: Db): AppealItem[] {
 
 const pct = (xs: number[], p: number): number => { if (!xs.length) return 0; const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(s.length * p))]!; };
 
+/** Additive counters behind Stats, as flat keys: everything that only grows (the numbers of open work, latency and the
+ *  per-minute series window are read live). Demo retention computes them for the contents it removes and adds them to
+ *  `console_rollup`, so the totals stay continuous after old rows are gone. */
+export type StatCounts = Record<string, number>;
+
+/** The counters over every content, or only over the content ids in temp table `scope` (column content_id). */
+export function statCounts(db: Db, now: number, scope?: string): StatCounts {
+  const inC = (col: string): string => (scope ? ` AND ${col} IN (SELECT content_id FROM ${scope})` : "");
+  const n = (sql: string, ...a: (string | number)[]): number => (db.prepare(sql).get(...a) as { n: number | null }).n ?? 0;
+  const out: StatCounts = {
+    contents: n(`SELECT COUNT(*) AS n FROM intake WHERE 1=1${inC("content_id")}`),
+    judged: n(`SELECT COUNT(*) AS n FROM intake WHERE status='judged'${inC("content_id")}`),
+    reviews: n(`SELECT COUNT(*) AS n FROM review WHERE 1=1${inC("content_id")}`),
+    agent_disposed: n(`SELECT COUNT(*) AS n FROM review r JOIN ruling ru ON ru.review_id=r.review_id WHERE ru.actor='agent'${inC("r.content_id")}`),
+    agent_released: n(`SELECT COUNT(*) AS n FROM review WHERE conversation_id IS NOT NULL AND release_reason IS NOT NULL${inC("content_id")}`),
+    human_closed: n(`SELECT COUNT(*) AS n FROM human_queue h JOIN review r ON r.review_id=h.review_id WHERE h.closed_at IS NOT NULL${inC("r.content_id")}`),
+    appeals_total: n(`SELECT COUNT(*) AS n FROM review WHERE trigger='appeal'${inC("content_id")}`),
+    appeals_changed: n(`SELECT COUNT(*) AS n FROM review r JOIN ruling ru ON ru.review_id=r.review_id WHERE r.trigger='appeal' AND ru.action <> (SELECT p.action FROM ruling p WHERE p.content_id=r.content_id AND p.seq<r.seq ORDER BY p.seq DESC LIMIT 1)${inC("r.content_id")}`),
+    fast_micro: n(`SELECT COALESCE(SUM(cost_micro),0) AS n FROM judge_call WHERE attempt IS NULL${inC("content_id")}`),
+    review_micro: n(`SELECT COALESCE(SUM(used_micro),0) AS n FROM review WHERE 1=1${inC("content_id")}`),
+    estimated_reviews: n(`SELECT COUNT(*) AS n FROM review WHERE cost_status='estimated'${inC("content_id")}`),
+  };
+  for (const [k, sql] of Object.entries(ROUTE_SQL)) out[`route:${k}`] = n(`SELECT COUNT(*) AS n FROM review r LEFT JOIN ruling ru ON ru.review_id=r.review_id WHERE ${sql}${inC("r.content_id")}`);
+  for (const r of db.prepare(`SELECT COALESCE(effective_action,'pending') AS a, COUNT(*) AS n FROM content_state WHERE 1=1${inC("content_id")} GROUP BY 1`).all() as { a: string; n: number }[]) out[`eff:${r.a}`] = r.n;
+  for (const r of db.prepare(`SELECT release_reason AS k, COUNT(*) AS n FROM review WHERE release_reason IS NOT NULL${inC("content_id")} GROUP BY 1`).all() as { k: string; n: number }[]) out[`rel:${r.k}`] = r.n;
+  // the per-minute series of the last 30 minutes
+  const minute = Math.floor(now / 60_000);
+  const rows = db.prepare(`SELECT r.trigger, r.suspect_reason, r.state, r.created_at, ru.action FROM review r LEFT JOIN ruling ru ON ru.review_id=r.review_id WHERE r.created_at >= ?${inC("r.content_id")}`).all((minute - 29) * 60_000) as { trigger: string; suspect_reason: string | null; state: core.ReviewState; created_at: number; action: string | null }[];
+  for (const r of rows) {
+    const k = routeOf({ trigger: r.trigger as core.Trigger, suspect_reason: r.suspect_reason, state: r.state }, r.action);
+    if (k === "other") continue;
+    const key = `series:${Math.floor(r.created_at / 60_000)}:${k}`;
+    out[key] = (out[key] ?? 0) + 1;
+  }
+  return out;
+}
+
+/** Counters of removed rows (demo retention); empty when the table does not exist (real mode never creates it). */
+export function readRollup(db: Db): StatCounts {
+  try {
+    return Object.fromEntries((db.prepare("SELECT key, n FROM console_rollup").all() as { key: string; n: number }[]).map((r) => [r.key, r.n]));
+  } catch {
+    return {};
+  }
+}
+
 export function stats(db: Db, now: number): Stats {
   const n = (sql: string, ...a: (string | number)[]): number => (db.prepare(sql).get(...a) as { n: number | null }).n ?? 0;
+  const live = statCounts(db, now);
+  const roll = readRollup(db);
+  const c = (k: string): number => (live[k] ?? 0) + (roll[k] ?? 0);
+  const prefixed = (p: string): Record<string, number> => {
+    const o: Record<string, number> = {};
+    for (const src of [live, roll]) for (const [k, v] of Object.entries(src)) if (k.startsWith(p) && v) o[k.slice(p.length)] = (o[k.slice(p.length)] ?? 0) + v;
+    return o;
+  };
   const routes: Stats["routes"] = { fast_pass: 0, fast_block: 0, agent: 0, human_direct: 0, appeal: 0, other: 0 };
-  for (const [k, sql] of Object.entries(ROUTE_SQL)) routes[k as RouteKind] = n(`SELECT COUNT(*) AS n FROM review r LEFT JOIN ruling ru ON ru.review_id=r.review_id WHERE ${sql}`);
-  const effective: Record<string, number> = {};
-  for (const r of db.prepare("SELECT COALESCE(effective_action,'pending') AS a, COUNT(*) AS n FROM content_state GROUP BY 1").all() as { a: string; n: number }[]) effective[r.a] = r.n;
-  const releaseReasons: Record<string, number> = {};
-  for (const r of db.prepare("SELECT release_reason AS k, COUNT(*) AS n FROM review WHERE release_reason IS NOT NULL GROUP BY 1").all() as { k: string; n: number }[]) releaseReasons[r.k] = r.n;
+  for (const k of Object.keys(ROUTE_SQL)) routes[k as RouteKind] = c(`route:${k}`);
   const fastLat = (db.prepare("SELECT r.created_at - c.created_at AS ms FROM review r JOIN content c ON c.content_id=r.content_id WHERE r.seq=(SELECT MIN(seq) FROM review x WHERE x.content_id=r.content_id) AND r.trigger IN ('fast','suspicious') ORDER BY r.created_at DESC LIMIT 2000").all() as { ms: number }[]).map((x) => x.ms);
   const agentLat = (db.prepare("SELECT COALESCE(ru.created_at, r.updated_at) - r.created_at AS ms FROM review r LEFT JOIN ruling ru ON ru.review_id=r.review_id WHERE r.conversation_id IS NOT NULL AND r.state<>'queued' AND r.state<>'investigating' ORDER BY r.created_at DESC LIMIT 2000").all() as { ms: number }[]).map((x) => x.ms);
   const humanLat = (db.prepare("SELECT closed_at - created_at AS ms FROM human_queue WHERE closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT 2000").all() as { ms: number }[]).map((x) => x.ms);
-  const fastMicro = n("SELECT COALESCE(SUM(cost_micro),0) AS n FROM judge_call WHERE attempt IS NULL");
-  const reviewMicro = n("SELECT COALESCE(SUM(used_micro),0) AS n FROM review");
-  const contents = n("SELECT COUNT(*) AS n FROM intake");
-  const judged = n("SELECT COUNT(*) AS n FROM intake WHERE status='judged'");
+  const judged = c("judged");
+  const fastMicro = c("fast_micro"), reviewMicro = c("review_micro");
   const minute = Math.floor(now / 60_000);
-  const series: Stats["series"] = Array.from({ length: 30 }, (_, i) => ({ minute: minute - 29 + i, fast_pass: 0, fast_block: 0, agent: 0, human_direct: 0, appeal: 0 }));
-  const rows = db.prepare("SELECT r.trigger, r.suspect_reason, r.state, r.created_at, ru.action FROM review r LEFT JOIN ruling ru ON ru.review_id=r.review_id WHERE r.created_at >= ?").all((minute - 29) * 60_000) as { trigger: string; suspect_reason: string | null; state: core.ReviewState; created_at: number; action: string | null }[];
-  for (const r of rows) {
-    const k = routeOf({ trigger: r.trigger as core.Trigger, suspect_reason: r.suspect_reason, state: r.state }, r.action);
-    const b = series[Math.floor(r.created_at / 60_000) - (minute - 29)];
-    if (b && k !== "other") b[k]++;
-  }
+  const series: Stats["series"] = Array.from({ length: 30 }, (_, i) => {
+    const m = minute - 29 + i;
+    const v = (k: string): number => c(`series:${m}:${k}`);
+    return { minute: m, fast_pass: v("fast_pass"), fast_block: v("fast_block"), agent: v("agent"), human_direct: v("human_direct"), appeal: v("appeal") };
+  });
   return {
-    at: now, contents, judged, reviews: n("SELECT COUNT(*) AS n FROM review"),
-    routes, effective,
-    agent: {
-      disposed: n("SELECT COUNT(*) AS n FROM review r JOIN ruling ru ON ru.review_id=r.review_id WHERE ru.actor='agent'"),
-      released: n("SELECT COUNT(*) AS n FROM review WHERE conversation_id IS NOT NULL AND release_reason IS NOT NULL"),
-      open: n("SELECT COUNT(*) AS n FROM review WHERE state IN ('queued','investigating')"),
-    },
-    release_reasons: releaseReasons,
+    at: now, contents: c("contents"), judged, reviews: c("reviews"),
+    routes, effective: prefixed("eff:"),
+    agent: { disposed: c("agent_disposed"), released: c("agent_released"), open: n("SELECT COUNT(*) AS n FROM review WHERE state IN ('queued','investigating')") },
+    release_reasons: prefixed("rel:"),
     human: {
       open: n("SELECT COUNT(*) AS n FROM human_queue WHERE closed_at IS NULL"),
       claimed: n("SELECT COUNT(*) AS n FROM human_queue WHERE closed_at IS NULL AND claimed_by IS NOT NULL"),
-      closed: n("SELECT COUNT(*) AS n FROM human_queue WHERE closed_at IS NOT NULL"),
+      closed: c("human_closed"),
       overdue: n("SELECT COUNT(*) AS n FROM human_queue WHERE closed_at IS NULL AND due_at < ?", now),
     },
-    appeals: {
-      total: n("SELECT COUNT(*) AS n FROM review WHERE trigger='appeal'"),
-      open: n("SELECT COUNT(*) AS n FROM review WHERE trigger='appeal' AND state IN ('queued','investigating','human_queue')"),
-      changed: n("SELECT COUNT(*) AS n FROM review r JOIN ruling ru ON ru.review_id=r.review_id WHERE r.trigger='appeal' AND ru.action <> (SELECT p.action FROM ruling p WHERE p.content_id=r.content_id AND p.seq<r.seq ORDER BY p.seq DESC LIMIT 1)"),
-    },
-    cost: { fast_micro: fastMicro, review_micro: reviewMicro, per_content_micro: judged ? Math.round((fastMicro + reviewMicro) / judged) : 0, estimated_reviews: n("SELECT COUNT(*) AS n FROM review WHERE cost_status='estimated'") },
+    appeals: { total: c("appeals_total"), open: n("SELECT COUNT(*) AS n FROM review WHERE trigger='appeal' AND state IN ('queued','investigating','human_queue')"), changed: c("appeals_changed") },
+    cost: { fast_micro: fastMicro, review_micro: reviewMicro, per_content_micro: judged ? Math.round((fastMicro + reviewMicro) / judged) : 0, estimated_reviews: c("estimated_reviews") },
     latency_ms: { fast_p50: pct(fastLat, 0.5), fast_p95: pct(fastLat, 0.95), agent_p50: pct(agentLat, 0.5), agent_p95: pct(agentLat, 0.95), human_p50: pct(humanLat, 0.5) },
     series,
   };

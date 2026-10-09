@@ -6,6 +6,7 @@
 // Calibration uses the repository's fitted temperatures (calib/<judge>/*.json) per question; prices are the real
 // price table plus two demo entries. None of this is a model; the numbers it produces are illustrations, not results.
 import { readdirSync, readFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseFactory } from "@earendil-works/pi-ai/providers/faux";
 import * as core from "@mod/core";
@@ -257,4 +258,72 @@ export function seedDemoHistory(db: core.Db, now: number): void {
   core.synthEventInsert(db, { eventId: "demo:u_repeat:1", accountId: "u_repeat", kind: "prior_ruling", payload: { action: "takedown", rule_ids: ["ABUSE-001"] }, eventTime: now - 2 * day });
   core.synthEventInsert(db, { eventId: "demo:u_repeat:2", accountId: "u_repeat", kind: "prior_ruling", payload: { action: "takedown", rule_ids: ["ABUSE-001"] }, eventTime: now - 4 * day });
   core.synthEventInsert(db, { eventId: "demo:u_repeat:3", accountId: "u_repeat", kind: "warning", payload: { note: "demo" }, eventTime: now - 5 * day });
+}
+
+// ---------- session retention ----------
+
+/**
+ * Demo retention, W's half (G's half is packages/gateway/src/demo-retention.ts): Pi's session store keeps every agent
+ * conversation, about 20 KB each, so a demo running for hours grows it without bound. This removes conversations that
+ * no review in app.db points at any more (G removed the review), that this worker does not hold, whose tasks are all
+ * terminal and that own no other conversation. Pi has no delete API, so the rows are removed by conversation id from
+ * the store's tables (entries, submissions, tasks, documents and their revisions, record ids). Demo mode only.
+ */
+export class DemoSessionRetention {
+  readonly #s: DatabaseSync;
+  readonly #app: core.Db;
+  readonly #held: () => Set<string>;
+  #pruned = 0;
+
+  constructor(o: { sessionDb: string; appDb: core.Db; held: () => Set<string>; mode: "demo" | "real" }) {
+    if (o.mode !== "demo") throw new Error("session retention runs in demo mode only");
+    this.#s = new DatabaseSync(o.sessionDb);
+    this.#s.exec("PRAGMA busy_timeout=2000");
+    this.#app = o.appDb;
+    this.#held = o.held;
+  }
+
+  get pruned(): number { return this.#pruned; }
+
+  /** One pass; returns how many conversations were removed (at most `batch`). */
+  runOnce(batch = 2000): number {
+    const referenced = new Set((this.#app.prepare("SELECT conversation_id FROM review WHERE conversation_id IS NOT NULL").all() as { conversation_id: string }[]).map((r) => r.conversation_id));
+    const held = this.#held();
+    const s = this.#s;
+    const rows = s.prepare(`SELECT c.id FROM conversations c
+      WHERE c.owner_conversation_id IS NULL AND c.owner_task_id IS NULL
+        AND EXISTS (SELECT 1 FROM tasks t WHERE t.conversation_id=c.id)
+        AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.conversation_id=c.id AND t.status<>'terminal')
+        AND NOT EXISTS (SELECT 1 FROM conversations x WHERE x.owner_conversation_id=c.id)
+      ORDER BY c.id`).all() as { id: number }[];
+    const ids = rows.map((r) => r.id).filter((id) => !referenced.has(String(id)) && !held.has(String(id))).slice(0, batch);
+    if (!ids.length) return 0;
+    s.exec("BEGIN IMMEDIATE");
+    try {
+      s.exec("CREATE TEMP TABLE IF NOT EXISTS pc (id INTEGER PRIMARY KEY); CREATE TEMP TABLE IF NOT EXISTS pt (id INTEGER PRIMARY KEY); CREATE TEMP TABLE IF NOT EXISTS pd (id INTEGER PRIMARY KEY); DELETE FROM pc; DELETE FROM pt; DELETE FROM pd;");
+      const ins = s.prepare("INSERT OR IGNORE INTO pc(id) VALUES (?)");
+      for (const id of ids) ins.run(id);
+      s.exec(`
+        INSERT OR IGNORE INTO pt(id) SELECT id FROM tasks WHERE conversation_id IN (SELECT id FROM pc);
+        INSERT OR IGNORE INTO pd(id) SELECT id FROM documents WHERE (scope_kind='conversation' AND owner_id IN (SELECT id FROM pc)) OR (scope_kind='task' AND owner_id IN (SELECT id FROM pt));
+        DELETE FROM record_ids WHERE id IN (SELECT id FROM entries WHERE conversation_id IN (SELECT id FROM pc));
+        DELETE FROM record_ids WHERE id IN (SELECT id FROM submissions WHERE conversation_id IN (SELECT id FROM pc));
+        DELETE FROM record_ids WHERE id IN (SELECT id FROM pt) OR id IN (SELECT id FROM pd) OR id IN (SELECT id FROM pc);
+        DELETE FROM document_revisions WHERE document_id IN (SELECT id FROM pd);
+        DELETE FROM documents WHERE id IN (SELECT id FROM pd);
+        DELETE FROM entries WHERE conversation_id IN (SELECT id FROM pc);
+        DELETE FROM submissions WHERE conversation_id IN (SELECT id FROM pc);
+        DELETE FROM tasks WHERE id IN (SELECT id FROM pt);
+        DELETE FROM conversations WHERE id IN (SELECT id FROM pc);
+        DELETE FROM pc; DELETE FROM pt; DELETE FROM pd;`);
+      s.exec("COMMIT");
+    } catch (e) {
+      s.exec("ROLLBACK");
+      throw e;
+    }
+    this.#pruned += ids.length;
+    return ids.length;
+  }
+
+  close(): void { this.#s.close(); }
 }

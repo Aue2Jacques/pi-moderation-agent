@@ -7,7 +7,7 @@
 import * as core from "@mod/core";
 import type { Db } from "@mod/core";
 import { listReviews, stats } from "./console-api.ts";
-import type { LiveFrame, ReviewListItem, TrafficStatus } from "./console-types.ts";
+import type { Flow, LiveFrame, ReviewListItem, TrafficStatus } from "./console-types.ts";
 
 export type LiveDeps = {
   db: Db; now: () => number;
@@ -18,6 +18,8 @@ export type LiveDeps = {
   /** at most one frame per this many ms (changes in between go out with the next frame) */
   minGapMs?: number;
   traffic?: () => TrafficStatus | null;
+  /** fast-path throughput (G's memory) */
+  flow?: () => Flow;
 };
 
 type Sub = (f: LiveFrame) => void;
@@ -65,13 +67,13 @@ export class LiveHub {
       human: `${h["c"]}.${h["x"]}.${h["y"]}.${h["a"] ?? 0}.${h["b"] ?? 0}.${h["d"] ?? 0}`,
       appeals: `${a["c"]}.${a["u"] ?? 0}`,
       contents: `${i["c"]}.${i["j"] ?? 0}`,
-      traffic: t ? `${t.per_min}.${t.paused ? 1 : 0}.${t.generated}.${t.sim_reviewer.decided}.${t.sim_reviewer.claimed}` : "",
+      traffic: t ? `${t.per_sec}.${t.paused ? 1 : 0}.${t.generated}.${t.sim_reviewer.decided}.${t.sim_reviewer.claimed}` : "",
     };
   }
 
   #frame(versions: LiveFrame["versions"], changed: ReviewListItem[], snapshot: boolean): LiveFrame {
     const now = this.d.now();
-    return { seq: ++this.#seq, at: now, snapshot, stats: stats(this.d.db, now), changed, versions, traffic: this.d.traffic?.() ?? null };
+    return { seq: ++this.#seq, at: now, snapshot, stats: stats(this.d.db, now), changed, versions, traffic: this.d.traffic?.() ?? null, flow: this.d.flow?.() ?? null };
   }
 
   /** Reviews changed since the cursor (newest change first), advancing the cursor. */

@@ -26,7 +26,7 @@ export type ConsoleDeps = {
   /** how often the global live stream (/api/events) reads app.db's counters (ms) */
   livePollMs?: number;
   /** demo mode only: the traffic generator behind /api/demo/traffic, and how its contents / reviewer are named */
-  traffic?: { status(): TrafficStatus; set(o: { perMin?: number; paused?: boolean }): void };
+  traffic?: { status(): TrafficStatus; set(o: { perSec?: number; paused?: boolean }): void };
   simPrefix?: string;
   simReviewer?: string;
 };
@@ -106,7 +106,7 @@ export function createHttpServer(d: HttpDeps): Server {
   const cons: ConsoleDeps = d.console ?? { mode: "real" };
   const consoleDir = cons.dir && existsSync(join(cons.dir, "index.html")) ? cons.dir : undefined;
   const bad = (res: ServerResponse, message: string, code = "E_BAD_REQUEST"): void => json(res, 400, { code, message });
-  const live = new LiveHub({ db, now: d.now, pollMs: cons.livePollMs ?? 500, ...(cons.traffic ? { traffic: () => cons.traffic!.status() } : {}) });
+  const live = new LiveHub({ db, now: d.now, pollMs: cons.livePollMs ?? 500, flow: () => gateway.flow(), ...(cons.traffic ? { traffic: () => cons.traffic!.status() } : {}) });
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
@@ -304,11 +304,21 @@ export function createHttpServer(d: HttpDeps): Server {
       if (path === "/api/demo/traffic" && cons.mode === "demo" && cons.traffic) {
         if (req.method === "GET") return json(res, 200, cons.traffic.status());
         if (req.method === "POST") {
+          // per_sec (the console's unit) or per_min (the older form); at most one of them
           const b = await readJson(req);
-          const perMin = b["per_min"];
-          if (perMin !== undefined && (typeof perMin !== "number" || !Number.isFinite(perMin) || perMin < 0 || perMin > 600)) return bad(res, "per_min must be a number in 0..600");
+          const max = cons.traffic.status().max_per_sec;
+          const num = (k: string, hi: number): number | undefined | null => {
+            const v = b[k];
+            if (v === undefined) return undefined;
+            return typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= hi ? v : null;
+          };
+          const perSec = num("per_sec", max), perMin = num("per_min", max * 60);
+          if (perSec === null) return bad(res, `per_sec must be a number in 0..${max}`);
+          if (perMin === null) return bad(res, `per_min must be a number in 0..${max * 60}`);
+          if (perSec !== undefined && perMin !== undefined) return bad(res, "give per_sec or per_min, not both");
           if (b["paused"] !== undefined && typeof b["paused"] !== "boolean") return bad(res, "paused must be a boolean");
-          cons.traffic.set({ ...(perMin !== undefined ? { perMin: perMin as number } : {}), ...(b["paused"] !== undefined ? { paused: b["paused"] as boolean } : {}) });
+          const rate = perSec ?? (perMin !== undefined ? perMin / 60 : undefined);
+          cons.traffic.set({ ...(rate !== undefined ? { perSec: rate } : {}), ...(b["paused"] !== undefined ? { paused: b["paused"] as boolean } : {}) });
           return json(res, 200, cons.traffic.status());
         }
       }

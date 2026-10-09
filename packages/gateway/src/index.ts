@@ -9,3 +9,4 @@ export type * from "./console-types.ts";
 export * from "./console-actions.ts";
 export * from "./demo-traffic.ts";
 export * from "./live.ts";
+export * from "./demo-retention.ts";
