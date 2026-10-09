@@ -88,7 +88,10 @@ export function duration(ms: number | null | undefined): string {
   if (ms === null || ms === undefined) return "—";
   if (ms < 1000) return `${Math.round(ms)} ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
-  return `${Math.floor(ms / 60_000)} 分 ${Math.round((ms % 60_000) / 1000)} 秒`;
+  const s = Math.round(ms / 1000);
+  if (s < 3600) return s % 60 ? `${Math.floor(s / 60)} 分 ${s % 60} 秒` : `${s / 60} 分钟`;
+  const m = Math.round(s / 60);
+  return m % 60 ? `${Math.floor(m / 60)} 小时 ${m % 60} 分` : `${m / 60} 小时`;
 }
 /** micro-yuan -> yuan text */
 export function yuan(micro: number | null | undefined, digits = 4): string { return micro === null || micro === undefined ? "—" : `¥${(micro / 1e6).toFixed(digits)}`; }

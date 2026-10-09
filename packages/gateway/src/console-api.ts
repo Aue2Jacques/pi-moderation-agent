@@ -175,7 +175,9 @@ function reviewTimeline(db: Db, r: core.ReviewRow, bundleOf: BundleOf, scene: co
   return {
     review_id: r.review_id, seq: r.seq, trigger: r.trigger, state: r.state, attempt: r.attempt,
     created_at: r.created_at, updated_at: r.updated_at, deadline_at: r.deadline_at,
-    rules_ver: r.rules_ver, calib_ver: r.calib_ver, judge_model: r.judge_model, agent_model: r.agent_model,
+    rules_ver: r.rules_ver, calib_ver: r.calib_ver, judge_model: r.judge_model,
+    // review.agent_model is only written on escalation; otherwise the model is the one W ran the session with
+    agent_model: r.agent_model ?? (db.prepare("SELECT model FROM model_call WHERE review_id=? ORDER BY created_at LIMIT 1").get(r.review_id) as { model: string } | undefined)?.model ?? null,
     budget_tools: r.budget_tools, budget_micro: r.budget_micro, used_micro: r.used_micro, cost_status: r.cost_status, tools_used: tools,
     route: { kind: routeOf(r, rul?.action ?? null), reason: r.trigger === "fast" ? (rul?.reason ?? null) : (r.suspect_reason ?? r.release_reason) },
     suspect_reason: r.suspect_reason, release_reason: r.release_reason,
@@ -211,7 +213,7 @@ function eventsOf(content: { content_id: string; created_at: number }, reviews: 
       ev.push({ id: `${rid}:human`, at: r.human.queued_at, review_id: rid, kind: "human_queue", title: "进入人工队列", detail: r.human.reason });
       if (r.human.claimed_at) ev.push({ id: `${rid}:claim`, at: r.human.claimed_at, review_id: rid, kind: "human_claim", title: `审核员 ${r.human.claimed_by} 领取` });
     }
-    if (r.ruling) ev.push({ id: `${rid}:ruling`, at: r.ruling.created_at, review_id: rid, kind: "ruling", title: `${r.ruling.actor === "fastpath" ? "快判" : r.ruling.actor === "agent" ? "agent" : "人工"}裁决：${ACTION_ZH[r.ruling.action] ?? r.ruling.action}`, ...(r.ruling.rule_ids.length ? { detail: r.ruling.rule_ids.join(", ") } : {}) });
+    if (r.ruling) ev.push({ id: `${rid}:ruling`, at: r.ruling.created_at, review_id: rid, kind: "ruling", title: `${r.ruling.actor === "fastpath" ? "快判" : r.ruling.actor === "agent" ? "agent " : "人工"}裁决：${ACTION_ZH[r.ruling.action] ?? r.ruling.action}`, ...(r.ruling.rule_ids.length ? { detail: r.ruling.rule_ids.join(", ") } : {}) });
   }
   const rank: Record<string, number> = { intake: 0, appeal: 1, fast_judge: 2, route: 3, tool: 4, judge: 4, rejected: 5, human_queue: 6, human_claim: 7, ruling: 8 };
   return ev.sort((a, b) => a.at - b.at || (rank[a.kind] ?? 9) - (rank[b.kind] ?? 9));

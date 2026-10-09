@@ -23,8 +23,8 @@
   --info: #175cd3;
   --info-weak: #eff8ff;
   --neutral-weak: #f2f4f7;
-  --zone-pass: rgba(6, 118, 71, 0.10);
-  --zone-block: rgba(180, 35, 24, 0.10);
+  --zone-pass: rgba(6, 118, 71, 0.16);
+  --zone-block: rgba(180, 35, 24, 0.15);
   --route-fast_pass: #2a78d6;
   --route-fast_block: #eb6834;
   --route-agent: #1baf7a;
@@ -57,7 +57,7 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #root { height: 100%; }
+html, body, #root { min-height: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--text);
   font: 13.5px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
@@ -75,8 +75,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- shell ---------- */
-.shell { display: grid; grid-template-columns: 224px 1fr; height: 100%; }
-.sidebar { background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+.shell { display: grid; grid-template-columns: 224px 1fr; min-height: 100vh; background: linear-gradient(90deg, var(--surface) 0 223px, var(--border) 223px 224px, transparent 224px); }
+.sidebar { background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; overflow: auto; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 16px 18px 14px; border-bottom: 1px solid var(--border); }
 .brand-mark { width: 28px; height: 28px; border-radius: 7px; background: var(--accent); display: grid; place-items: center; flex: none; }
 .brand-name { font-weight: 600; font-size: 14px; line-height: 1.2; }
@@ -91,12 +91,12 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .side-foot { margin-top: auto; padding: 12px 14px; border-top: 1px solid var(--border); font-size: 11.5px; color: var(--text-3); display: grid; gap: 4px; }
 .side-foot .kv { display: flex; justify-content: space-between; gap: 8px; }
 .side-foot .kv span:last-child { color: var(--text-2); font-family: var(--mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }
-.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.topbar { height: 56px; display: flex; align-items: center; gap: 12px; padding: 0 24px; border-bottom: 1px solid var(--border); background: var(--surface); flex: none; }
+.main { display: flex; flex-direction: column; min-width: 0; }
+.topbar { height: 56px; display: flex; align-items: center; gap: 12px; padding: 0 24px; border-bottom: 1px solid var(--border); background: var(--surface); flex: none; position: sticky; top: 0; z-index: 10; }
 .topbar h1 { font-size: 15px; font-weight: 600; margin: 0; }
 .topbar .crumb { color: var(--text-3); font-size: 12.5px; }
 .topbar .spacer { flex: 1; }
-.content { overflow: auto; padding: 20px 24px 40px; flex: 1; }
+.content { padding: 20px 24px 40px; flex: 1; }
 .page { max-width: 1440px; margin: 0 auto; display: grid; gap: 16px; }
 
 /* ---------- primitives ---------- */
@@ -208,7 +208,14 @@ table.tbl { width: 100%; border-collapse: collapse; }
 .track .mk.raw { width: 2px; height: 14px; margin-left: -1px; border-radius: 1px; top: 2px; background: var(--text-3); box-shadow: none; border: 0; }
 .prob .nums { font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; display: flex; gap: 10px; }
 .prob .nums b { color: var(--text); font-weight: 600; }
-.scale { display: grid; grid-template-columns: 116px minmax(160px, 1fr) 210px 86px; gap: 12px; font-size: 10.5px; color: var(--text-3); }
+.scale { display: grid; grid-template-columns: 116px minmax(160px, 1fr) 210px 86px; gap: 12px; font-size: 10.5px; color: var(--text-3); margin-bottom: -2px; }
+.mk-legend { display: inline-flex; gap: 12px; align-items: center; font-weight: 400; color: var(--text-3); font-size: 11.5px; }
+.mk-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+.mk-legend i.f { background: var(--text); }
+.mk-legend i.h { border: 2px solid var(--text-2); width: 9px; height: 9px; }
+.mk-legend i.r { width: 2px; height: 11px; border-radius: 1px; background: var(--text-3); }
+.mk-legend i.zp { width: 14px; height: 9px; border-radius: 2px; background: var(--zone-pass); }
+.mk-legend i.zb { width: 14px; height: 9px; border-radius: 2px; background: var(--zone-block); }
 .scale > div:nth-child(2) { display: flex; justify-content: space-between; }
 
 /* ---------- timeline ---------- */
