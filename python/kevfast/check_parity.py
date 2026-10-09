@@ -2,6 +2,7 @@
   native  kevfast native/full vs kev on the native record: must agree to bf16 noise
   *-rows  the same with branch_mode=rows (one pass, the comment recomputed per question), 16 requests per call
   rules-rows-graph  one request per call: the padded rows path replayed from CUDA graphs
+  native-fp8 (--fp8)  fp8=on against kev in bf16: the FP8 rounding drift (expected to exceed bf16 noise)
   rules   kevfast rules_first/full vs kev on the same tokens as one state ([<state>] rules + "\\n" + content): the cached
           prefix + per-segment attention path must agree to bf16 noise too (the checkpoint is not trained on this layout,
           so only agreement is meaningful, not the answers)
@@ -13,7 +14,7 @@ from kevfast.common import load, to_engine_request
 from kevfast.engine import Engine, Options
 
 run, wire_path, texts_path = sys.argv[1:4]
-n = int(sys.argv[4]) if len(sys.argv) > 4 else 48
+n = int(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4].isdigit() else 48
 tok, model = load(run)
 wire = json.load(open(wire_path))
 texts = [json.loads(l)["text"] for l, _ in zip(open(texts_path), range(n))]
@@ -45,7 +46,15 @@ def kev_rows_first(t):
 
 engines = {"native": Engine(tok, model, Options(branch_mode="two_pass")), "rules": Engine(tok, model, Options(layout="rules_first", branch_mode="two_pass")),
            "native-rows": Engine(tok, model, Options(branch_mode="rows")), "rules-rows": Engine(tok, model, Options(layout="rules_first", branch_mode="rows"))}
-for check in ("native", "rules", "native-rows", "rules-rows", "rules-rows-graph"):
+checks = ["native", "rules", "native-rows", "rules-rows", "rules-rows-graph"] + (["native-fp8"] if "--fp8" in sys.argv else [])
+for check in checks:
+    if check == "native-fp8":   # last: fp8=on frees the bf16 weights; the reference answers below are computed first
+        refs = {}
+        for t in texts:
+            rec = {"state": render({"content": {"text": t, "scene": "comment"}, "evidence": []}),
+                   "questions": [{"instr": render(q["instructions"]), "options": [option_text(k, v) for k, v in q["criteria"].items()], "label": 0} for q in wire.values()]}
+            refs[t] = model.probs(encode(tok, rec))
+        engines["native-fp8"] = Engine(tok, model, Options(fp8="on"))
     eng = engines["rules-rows" if check == "rules-rows-graph" else check]; name = check.split("-")[0]
     step = 1 if check == "rules-rows-graph" else 16          # one request per call: the CUDA-graph path
     dps, flips, total = [], 0, 0
@@ -57,7 +66,9 @@ for check in ("native", "rules", "native-rows", "rules-rows", "rules-rows-graph"
             reqs = [to_engine_request({"rules": rules, "content": {"text": t, "scene": "comment"}, "evidence": []}, wire, "rules_first", True)[0] for t in batch]
         got = eng.answer(reqs)
         for t, g in zip(batch, got):
-            if name == "native":
+            if check == "native-fp8":
+                ref = refs[t]
+            elif name == "native":
                 rec = {"state": render({"content": {"text": t, "scene": "comment"}, "evidence": []}),
                        "questions": [{"instr": render(q["instructions"]), "options": [option_text(k, v) for k, v in q["criteria"].items()], "label": 0} for q in wire.values()]}
                 ref = model.probs(encode(tok, rec))

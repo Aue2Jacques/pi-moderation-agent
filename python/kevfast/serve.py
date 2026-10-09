@@ -6,7 +6,6 @@ requests with a different prefix wait for the next call. GET /v1/models reports 
 can record exactly which optimisations were on.
 usage (kev venv): KF_LAYOUT=rules_first KF_QUESTIONS=short KF_CONFIRM=off KF_FP8=auto \\
   python -m kevfast.serve --run <checkpoint dir> --port 8010"""
-from __future__ import annotations
 
 import argparse, asyncio, queue, threading, time, uuid
 from concurrent.futures import Future

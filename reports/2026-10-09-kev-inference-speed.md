@@ -1,4 +1,4 @@
-# Kev-4B 推理提速：逐项测量（2026-10-09）
+# Kev-4B 推理提速：逐项测量与 kevfast 封装（2026-10-09）
 
 负责人 2026-10-09 要求先把开源判官 Kev-4B 的推理速度提上去（准确率暂不管），并逐项统计每一步优化了什么。数字仅供参考，都是单次运行。
 
@@ -67,10 +67,84 @@
 5. **S0–S4 的"一行"**：评论和所有题目分支在同一行里，后面的分支能看到前面的分支。Kev 原本的分支互不可见。速度上的计算量相同，但这不是能直接用的格式。正式实现需要分支之间的注意力隔离（块因果掩码），或者让 Kev 的缓存支持"规则前缀 + 评论续算"再分支。
 6. **vLLM / SGLang**：没换。有报告称 vLLM 里 Qwen3.5-4B 的前缀缓存块是 528 token，短于此的前缀命中率为 0。我们的规则前缀是 294 token。另外 Kev 的指针头需要自行移植。
 
+## 5. kevfast：可开关的推理引擎（`python/kevfast/`）
+
+负责人 10-09 要求："先不管准确率……把优化到极致的情况先封装好，先修复你目前的问题，然后把每一个优化的功能封装成一个可以开关的选项"。第 3 节的原型有两个问题：各题在同一行里能互相看见；FP8 让单条变慢。kevfast 是重写的推理路径，用同一个 Kev checkpoint。
+
+**怎么算**：每次计算把一批 token 段首尾拼接（不补齐），段分三层：
+
+| 层 | 内容 |
+|---|---|
+| 前缀 | 规则块，可选，跨请求缓存 |
+| 内容 | 每条请求一段 |
+| 分支 | 每道题一段 |
+
+- DeltaNet 层把父段的最终状态作为子段的初始状态，用的是 fla 的 varlen 算子，传入每段的初始状态。
+- 注意力层每段只读祖先段和自己（因果）。所有段共有的前缀，在批量小时随段一起取出、走融合 SDPA；批量大时单独算一次，再按 log-sum-exp 精确合并。
+- 分支之间互不可见，与 Kev 一致。
+
+**开关**（`Options`，服务端用 `KF_*` 环境变量；`/v1/models` 会报告当前开关，评测可据此记录）：
+
+| 开关 | 取值 | 作用 | 改变模型读到的输入？ |
+|---|---|---|---|
+| layout | native / rules_first | rules_first：状态以 `rules` 字段开头时，规则块作缓存前缀 | 是（需按该格式训练） |
+| questions | full / short | short：分支只有规则名和短选项 | 是 |
+| confirm | on / off | off：不算 `#confirm` 复问 | 少答一半题 |
+| fp8 | off / on / auto | FP8 矩阵乘法；auto 只在一次计算 ≥ fp8_min_tokens 时用（同时保留 bf16 与 FP8 两份权重） | 只改舍入 |
+| branch_mode | two_pass / rows / auto | rows：一次计算，每道题一行"评论 + 分支"；two_pass：先算评论，分支接着它的状态算；auto：≤ 4 条请求用 rows | 否 |
+| cuda_graphs | on / off | rows 调用按 16 token 分档右补齐，每个（行数，档位）录制一次 CUDA graph 后重放；服务端遇到新题目组合时预录 | 否 |
+| max_pass_tokens 等 | 数值 | 每次计算的 token 预算（16 GB 卡上约 14k 分支 token 时显存不足）、图的大小上限 | 否 |
+
+**一致性检查**（`python -m kevfast.check_parity`，96 条文本，和 Kev 自己的 bf16 计算比）：
+
+| 检查 | 题数 | 最大 \|dp\| | 平均 \|dp\| | 首选变化 |
+|---|---|---|---|---|
+| native，two_pass | 576 | 0.0166 | 0.00044 | 0 |
+| rules_first，two_pass（和 Kev 对同一串 token 的计算比） | 576 | 0.0254 | 0.00059 | 0 |
+| native，rows | 576 | 0.0116 | 0.00039 | 1 |
+| rules_first，rows | 576 | 0.0161 | 0.00056 | 0 |
+| rules_first，rows，单条 + CUDA graphs | 96 | 0.0109 | 0.00038 | 0 |
+| native，fp8=on（对 bf16） | 576 | 0.0892 | 0.00213 | 2 |
+
+**提速阶梯**（`python -m kevfast.bench`，512 条测试文本；吞吐为每批 32 条，单条为一次一条、64 条；单条在 E6 前先预录图）：
+
+| 阶段 | 每秒条数 | 单条 p50 | 单条 p95 | 显存峰值 |
+|---|---|---|---|---|
+| E0 原格式、全题 + 复问、bf16（Kev 的计算，拼接不补齐） | 9.4 | 206 ms | 231 ms | 10.6 GB |
+| E1 + rules_first | 17.7 | 215 ms | 240 ms | 12.3 GB |
+| E2 + short 问题 | 27.1 | 205 ms | 212 ms | 13.0 GB |
+| E3 + 去复问 | 42.3 | 203 ms | 222 ms | 11.4 GB |
+| E4 + fp8 auto | 55.4 | 203 ms | 210 ms | 14.8 GB |
+| E5 + branch_mode auto | 55.5 | 104 ms | 118 ms | 14.8 GB |
+| E6 + CUDA graphs，fp8 改为 on | 55.3 | 37.8 ms | 51.8 ms | 11.5 GB |
+
+E6 用 fp8=on 是因为：fp8=auto 时同时保留两份权重，再预录图会在 16 GB 卡上显存不足（实测一次 OOM）。
+
+**单条耗时拆解**（rules_first + short + 去复问 + fp8 auto，单条，各段同步计时）：两次计算各约 100 ms，分别只算 33 个和 54 个 token。主要开销是每层的算子启动：每次计算约 600 次调用。rows 模式合成一次计算后约 105 ms，加 CUDA graphs 后约 38–48 ms。批量 32 条时，带同步计时的矩阵乘法约 290 ms（2,784 个 token）。
+
+**服务端端到端**（`python -m kevfast.serve`，原格式 + 全题 + 复问 + fp8=on + 自动分支 + CUDA graphs，`eval-test.ts collect` 并发 32，完整测试集）：
+
+| 判官 | 请求 | 用时 | 辱骂 AUROC | 营销 AUROC | 注入 AUROC |
+|---|---|---|---|---|---|
+| Kev 原服务（v1，第 5 节前的评测） | 3,002 / 0 失败 | 约 6 分钟 | 0.9644 | 0.9987 | 0.9961 |
+| kevfast（同一 checkpoint） | 3,002 / 0 失败 | 282 s | 0.9643 | 0.9986 | 0.9957 |
+
+第一次端到端运行时 3,002 条全部返回 422：`serve.py` 用了 `from __future__ import annotations`，FastAPI 认不出局部导入的请求类型。去掉后重跑。失败的那次输出移到 `/hy-tmp/train/void-kevfast-422`。
+
+**还没做**：
+1. rules_first / short / 去复问的准确率：要按新格式训练。规则前置时 Kev 训练的状态上限（384 token）会丢 758 条，见第 4 节第 4 条。
+2. 批量路径（two_pass）没有 CUDA graphs，分支那次计算仍偏慢：一批 32 条时 303 ms，内容那次 171 ms。
+3. 去掉复问后，快判的"复问一致"检查（`confirmsCallId`）就没有了，策略层怎么处理没改。
+4. 单元测试：kevfast 只能在 GPU 上跑，没进 CI；一致性检查和 bench 是在算力服务器上手动跑的。
+
 ## 复现
 
 ```bash
-# 算力服务器，kev 环境；wire6.json = 评论场景 6 题（buildQuestions(..., true) 的输出）
+# kevfast（算力服务器，kev 环境，PYTHONPATH 指向仓库的 python/）
+PYTHONPATH=python python -m kevfast.check_parity <run> <wire6.json> <texts.jsonl> 96 --fp8
+PYTHONPATH=python python -m kevfast.bench <run> <wire6.json> <texts.jsonl> 512
+KF_LAYOUT=native KF_FP8=on PYTHONPATH=python python -m kevfast.serve --run <run> --port 8010   # 再用 JEV_BASE_URL=http://127.0.0.1:8010/v1 跑 eval-test.ts
+# 第 3 节的原型：wire6.json = 评论场景 6 题（buildQuestions(..., true) 的输出）
 cd /hy-tmp/work/kev && PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True .venv/bin/python /hy-tmp/pma/scripts/gpu/kev_speed_bench.py \
   /hy-tmp/train/runs/kev4b-v1 /hy-tmp/train/wire6.json /hy-tmp/pma/data/eval/test-v1-kev4b-v1/requests-text.jsonl /hy-tmp/pma/data/eval/eval20k.jsonl
 ```
