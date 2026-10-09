@@ -1,28 +1,30 @@
-// One content's path through the system: pipeline summary, then each review (fast-path scores, route, agent steps,
-// submit check, ruling, human task). Rendered from the /api/contents/:id timeline (live via SSE on the tracking page).
+// One content's path through the system: stage summary, then each review (fast-path scores, route, agent steps,
+// submit check, human task, ruling). Rendered from the /api/contents/:id timeline (live via SSE where it is shown).
 import type { AgentStep, ContentTimeline, JudgeRound, QuestionScore, ReviewTimeline } from "./api.ts";
 import { ACTION, ACTOR, QUESTION, ROUTE, SCENE, TOOL, TRIGGER, reasonText } from "./labels.ts";
-import { ActionTag, Icon, PhaseTag, RouteTag, StateTag, clock, duration, p2, p3, shortId, yuan } from "./ui.tsx";
+import { ActionBadge, Badge, Icon, Id, PhaseBadge, RouteBadge, SimTag, StateBadge, clock, duration, p2, p3, yuan, type Tone } from "./ui.tsx";
 
 // ---------- probability rows ----------
 
-const VERDICT: Record<QuestionScore["verdict"], { text: string; tone: string }> = {
+const VERDICT: Record<QuestionScore["verdict"], { text: string; tone: Tone }> = {
   pass: { text: "低于放行线", tone: "good" }, block: { text: "达到处置线", tone: "bad" }, middle: { text: "中间带", tone: "warn" },
-  flagged: { text: "命中", tone: "warn" }, clear: { text: "未命中", tone: "good" }, uncalibrated: { text: "未校准", tone: "" }, missing: { text: "未作答", tone: "" },
+  flagged: { text: "命中", tone: "warn" }, clear: { text: "未命中", tone: "good" }, uncalibrated: { text: "未校准", tone: "neutral" }, missing: { text: "未作答", tone: "neutral" },
 };
 
+const pos = (x: number | null | undefined): string | undefined => (typeof x === "number" ? `${Math.min(100, Math.max(0, x * 100))}%` : undefined);
+
 function ProbRow({ q }: { q: QuestionScore }) {
-  const pos = (x: number | null | undefined): string | undefined => (typeof x === "number" ? `${Math.min(100, Math.max(0, x * 100))}%` : undefined);
   const guard = q.kind === "guard";
   const v = VERDICT[q.verdict];
-  const tip = (label: string, x: number | null | undefined) => `${label} ${p3(x)}`;
+  const tip = (label: string, x: number | null | undefined): string => `${label} ${p3(x)}`;
   return (
     <div className="prob">
-      <div className="q"><span>{QUESTION[q.key] ?? q.key}</span><span className="k">{q.key}</span></div>
+      <div className="q"><b>{QUESTION[q.key] ?? q.key}</b><span className="k">{q.key}</span></div>
       <div className="track" role="img" aria-label={`${q.key}：主问 ${p2(q.primary?.cal)}，复问 ${p2(q.confirm?.cal)}`}>
         <div className="rail" />
         {q.lines && !guard ? <div className="zone pass" style={{ left: 0, width: pos(q.lines.pass) }} title={`放行线 < ${q.lines.pass}`} /> : null}
         {q.lines ? <div className="zone block" style={{ left: pos(q.lines.block), right: 0 }} title={`${guard ? "命中线" : "处置线"} ≥ ${q.lines.block}`} /> : null}
+        {typeof q.mean === "number" ? <div className="fill" style={{ width: pos(q.mean) }} /> : null}
         {q.lines && !guard ? <div className="line" style={{ left: pos(q.lines.pass) }} /> : null}
         {q.lines ? <div className="line" style={{ left: pos(q.lines.block) }} /> : null}
         {typeof q.primary?.raw === "number" ? <div className="mk raw" style={{ left: pos(q.primary.raw) }} title={tip("原始（主问）", q.primary.raw)} /> : null}
@@ -34,7 +36,7 @@ function ProbRow({ q }: { q: QuestionScore }) {
         <span>复问 <b>{p2(q.confirm?.cal)}</b></span>
         <span title={q.temperature ? `温度 T=${q.temperature}` : undefined}>原始 {p3(q.primary?.raw)}</span>
       </div>
-      <div><span className={`tag ${v.tone}`}>{v.text}</span></div>
+      <div><Badge tone={v.tone}>{v.text}</Badge></div>
     </div>
   );
 }
@@ -42,25 +44,26 @@ function ProbRow({ q }: { q: QuestionScore }) {
 export function JudgeRoundView({ round, compact }: { round: JudgeRound; compact?: boolean }) {
   return (
     <div>
-      {!compact ? (
-        <div className="scale" aria-hidden="true"><div /><div><span>0</span><span>0.5</span><span>1</span></div><div>校准后概率</div><div /></div>
-      ) : null}
-      {round.questions.map((q) => <ProbRow key={q.question_sha} q={q} />)}
-      <div className="row small faint" style={{ marginTop: 6, gap: 14 }}>
+      {!compact ? <div className="scale-row" aria-hidden="true"><div /><div className="ticks"><span>0</span><span>0.5</span><span>1</span></div><div>校准后概率</div><div /></div> : null}
+      <div className="probs">{round.questions.map((q) => <ProbRow key={q.question_sha} q={q} />)}</div>
+      <div className="meta-line">
         <span>{round.stage === "fast" ? "快判" : round.explicit_confirm_of ? "复问" : "复判"} · {round.model}</span>
         <span>{round.status === "ok" ? "成功" : round.status}</span>
         <span>耗时 {duration(round.latency_ms)}</span>
         <span>费用 {yuan(round.cost_micro, 6)}</span>
         {round.copy_call_id ? <span>同次请求带打乱选项复问</span> : null}
-        {round.evidence_ids.length ? <span>证据 {round.evidence_ids.map((e) => e.split("#").pop()).join("、")}</span> : <span>只看文本</span>}
+        <span>{round.evidence_ids.length ? `证据 ${round.evidence_ids.map((e) => e.split("#").pop()).join("、")}` : "只看文本"}</span>
       </div>
     </div>
   );
 }
 
+const Legend = () => (
+  <span className="mk-legend"><span><i className="f" />主问</span><span><i className="h" />复问</span><span><i className="r" />原始</span><span><i className="zp" />放行区</span><span><i className="zb" />处置区</span></span>
+);
+
 // ---------- agent steps ----------
 
-const TOOL_ICON: Record<string, string> = { load_rule: "rule", get_thread_context: "thread", get_account_history: "history", judge: "scale", confirm: "repeat", dispose: "gavel", release: "handoff" };
 const VISIBILITY: Record<string, string> = { visible: "对外可见", self_only: "仅作者可见", hidden: "已隐藏" };
 const REL: Record<string, string> = { parent: "父评论", ancestor: "更早回复", reply: "回复", mentioned: "被@者发言", before: "此前", after: "此后" };
 
@@ -100,25 +103,21 @@ function stepText(s: AgentStep): string {
 
 function StepRow({ s, t0 }: { s: AgentStep; t0: number }) {
   const final = (s.tool === "dispose" || s.tool === "release") && s.status === "ok";
-  const tone = s.status === "rejected" || s.status === "blocked" ? "bad" : s.status === "pending" ? "" : s.tool === "release" ? "warn" : final ? "final" : "ok";
+  const tone = s.status === "rejected" || s.status === "blocked" ? "bad" : s.status === "pending" ? "pending" : s.tool === "release" ? "warn" : final ? "final" : "ok";
   const chips: string[] = [];
   if (s.tool === "judge" || s.tool === "confirm" || s.tool === "dispose") for (const e of (s.args["evidence_ids"] as string[] | undefined) ?? []) chips.push(e.split("#").pop() ?? e);
   const evId = (s.result as { evidence_id?: string } | null)?.evidence_id;
   return (
     <div className={`step ${tone}`}>
-      <div className="si"><Icon name={TOOL_ICON[s.tool] ?? "minus"} size={14} /></div>
-      <div style={{ minWidth: 0 }}>
-        <div className="row" style={{ gap: 8 }}>
-          <span className="st">{TOOL[s.tool] ?? s.tool}</span>
-          <span className="mono faint">{s.tool}</span>
-          {s.status === "reused" ? <span className="tag">复用</span> : null}
-          {s.status === "pending" ? <span className="tag info"><span className="dot pulse" style={{ background: "currentColor" }} />进行中</span> : null}
-          {s.attempt > 1 ? <span className="tag warn">第 {s.attempt} 代</span> : null}
-        </div>
-        <div className="sd">{stepText(s)}</div>
-        {chips.length || evId ? <div className="chips">{evId ? <span className="chip">→ {evId.split("#").pop()}</span> : null}{chips.map((c) => <span className="chip" key={c}>{c}</span>)}</div> : null}
+      <div className="node"><i /></div>
+      <div className="st">
+        <b>{TOOL[s.tool] ?? s.tool}</b><span className="tool">{s.tool}</span>
+        {s.status === "reused" ? <Badge>复用</Badge> : null}
+        {s.attempt > 1 ? <Badge tone="warn">第 {s.attempt} 代</Badge> : null}
       </div>
       <div className="sx">+{((s.at - t0) / 1000).toFixed(1)}s</div>
+      <div className="sd">{stepText(s)}</div>
+      {chips.length || evId ? <div className="chips">{evId ? <span className="chip" title={evId}>→ {evId.split("#").pop()}</span> : null}{chips.map((c) => <span className="chip" key={c}>{c}</span>)}</div> : null}
     </div>
   );
 }
@@ -130,74 +129,76 @@ export function ReviewCard({ r, restricted }: { r: ReviewTimeline; restricted: b
   const agentRounds = r.judge_rounds.filter((j) => j.stage === "agent");
   const showAgent = r.route.kind === "agent" || r.route.kind === "appeal" || r.steps.length > 0;
   return (
-    <div className="review-card">
-      <div className="card-h">
-        <span className="tag outline">第 {r.seq} 审次 · {TRIGGER[r.trigger] ?? r.trigger}</span>
-        <RouteTag route={r.route.kind} />
-        <StateTag state={r.state} />
-        <span className="mono faint ellipsis" title={r.review_id}>{shortId(r.review_id)}</span>
-        <div className="right small faint">{clock(r.created_at)}</div>
-      </div>
+    <article className="review">
+      <header className="review-h">
+        <span className="seq">第 {r.seq} 审次</span>
+        <span className="faint">{TRIGGER[r.trigger] ?? r.trigger}</span>
+        <RouteBadge route={r.route.kind} />
+        <StateBadge state={r.state} />
+        <Id value={r.review_id} className="faint" />
+        <span className="when">{clock(r.created_at)}</span>
+      </header>
 
       {r.appeal ? (
-        <div className="section"><div className="section-t"><Icon name="appeal" size={14} />申诉</div>
-          <div className="small">理由代码 <span className="mono">{r.appeal.reason_code ?? "—"}</span>。重审由 agent 重新取证判断，原裁决在新裁决形成前继续有效。</div></div>
+        <section className="sec"><div className="sec-h"><h3>申诉</h3></div>
+          <div className="small">理由代码 <span className="mono">{r.appeal.reason_code ?? "—"}</span>。重审由 agent 重新取证判断，原裁决在新裁决形成前继续有效。</div></section>
       ) : null}
 
       {fast.length ? (
-        <div className="section"><div className="section-t"><Icon name="scale" size={14} />快判打分<span className="faint" style={{ fontWeight: 400 }}>一次请求问全部规则，主问与打乱选项的复问都要过线</span>
-            <span className="mk-legend" style={{ marginLeft: "auto" }}><span><i className="f" />主问</span><span><i className="h" />复问</span><span><i className="r" />原始</span><span><i className="zp" />放行区</span><span><i className="zb" />处置区</span></span></div>
-          {fast.map((j) => <JudgeRoundView key={j.judge_call_id} round={j} />)}</div>
+        <section className="sec">
+          <div className="sec-h"><h3>快判打分</h3><span className="sub">一次请求问全部规则，主问与打乱选项的复问都要过线</span><span className="end"><Legend /></span></div>
+          {fast.map((j) => <JudgeRoundView key={j.judge_call_id} round={j} />)}
+        </section>
       ) : null}
 
-      <div className="section"><div className="section-t"><Icon name="up" size={14} />分流</div>
-        <div className="row"><RouteTag route={r.route.kind} /><span>{routeLine(r)}</span></div></div>
+      <section className="sec"><div className="sec-h"><h3>分流</h3></div>
+        <div className="row"><RouteBadge route={r.route.kind} /><span className="muted">{routeLine(r)}</span></div></section>
 
       {showAgent ? (
-        <div className="section">
-          <div className="section-t"><Icon name="thread" size={14} />agent 调查
-            <span className="faint" style={{ fontWeight: 400 }}>工具 {r.tools_used}/{r.budget_tools} 次 · 费用 {yuan(r.used_micro)}{r.cost_status === "estimated" ? "（估计）" : ""} · 模型 {r.agent_model ?? "—"}</span></div>
+        <section className="sec">
+          <div className="sec-h"><h3>agent 调查</h3>
+            <span className="sub">工具 {r.tools_used}/{r.budget_tools} 次 · 费用 {yuan(r.used_micro)}{r.cost_status === "estimated" ? "（估计）" : ""} · 模型 {r.agent_model ?? "—"}</span></div>
           {r.steps.length === 0 ? (
             <div className="small muted row">{r.state === "queued" ? <><span className="dot pulse" style={{ background: "var(--info)" }} />排队中，等待 worker 领取</> : r.state === "investigating" ? <><span className="dot pulse" style={{ background: "var(--info)" }} />已领取，agent 正在读任务说明</> : "没有工具调用"}</div>
           ) : <div className="steps">{r.steps.map((s) => <StepRow key={s.call_id} s={s} t0={r.created_at} />)}</div>}
-          {r.state === "investigating" && r.steps.length ? <div className="small muted row" style={{ marginTop: 4 }}><span className="dot pulse" style={{ background: "var(--info)" }} />等待下一步…</div> : null}
+          {r.state === "investigating" && r.steps.length ? <div className="small muted row" style={{ marginTop: 6 }}><span className="dot pulse" style={{ background: "var(--info)" }} />等待下一步…</div> : null}
           {agentRounds.length ? (
-            <details style={{ marginTop: 8 }}><summary className="small muted" style={{ cursor: "pointer" }}>带证据复判明细（{agentRounds.length} 次）</summary>
-              <div style={{ marginTop: 8 }}>{agentRounds.map((j) => <div key={j.judge_call_id} style={{ marginBottom: 10 }}><JudgeRoundView round={j} compact /></div>)}</div></details>
+            <details className="more" style={{ marginTop: 10 }}><summary>带证据复判明细（{agentRounds.length} 次）</summary>
+              <div style={{ marginTop: 8, display: "grid", gap: 12 }}>{agentRounds.map((j) => <JudgeRoundView key={j.judge_call_id} round={j} compact />)}</div></details>
           ) : null}
-        </div>
+        </section>
       ) : null}
 
       {r.rejections.length ? (
-        <div className="section"><div className="section-t" style={{ color: "var(--bad)" }}><Icon name="alert" size={14} />提交检查拒绝</div>
-          {r.rejections.map((x, i) => <div key={i} className="small">{clock(x.at)} · {ACTOR[x.actor] ?? x.actor} 提交 {x.action ? ACTION[x.action as keyof typeof ACTION] ?? x.action : ""} 被拒：<span className="mono">{x.code}</span>（第 {x.step} 步）</div>)}</div>
+        <section className="sec"><div className="sec-h"><h3 style={{ color: "var(--bad)" }}>提交检查拒绝</h3></div>
+          {r.rejections.map((x, i) => <div key={i} className="small">{clock(x.at)} · {ACTOR[x.actor] ?? x.actor} 提交 {x.action ? ACTION[x.action as keyof typeof ACTION] ?? x.action : ""} 被拒：<span className="mono">{x.code}</span>（第 {x.step} 步）</div>)}</section>
       ) : null}
 
       {r.human ? (
-        <div className="section"><div className="section-t"><Icon name="user" size={14} />人工</div>
-          <dl className="kv-grid">
+        <section className="sec"><div className="sec-h"><h3>人工</h3></div>
+          <dl className="kv">
             <dt>转入原因</dt><dd>{reasonText(r.human.reason)}</dd>
             <dt>时限</dt><dd>{clock(r.human.due_at)} 前</dd>
-            <dt>领取</dt><dd>{r.human.claimed_by ? `${r.human.claimed_by}（${clock(r.human.claimed_at ?? 0)}）` : "未领取"}</dd>
+            <dt>领取</dt><dd>{r.human.claimed_by ? <>{r.human.claimed_by}{r.human.claimed_by.startsWith("sim-") ? <> <SimTag title="模拟审核员（演示流量）" /></> : null}（{clock(r.human.claimed_at ?? 0)}）</> : "未领取"}</dd>
             {r.human.closed_at ? <><dt>完成</dt><dd>{r.human.closed_by}（{clock(r.human.closed_at)}）{r.human.label ? `，标注 ${r.human.label}` : ""}</dd></> : null}
-          </dl></div>
+          </dl></section>
       ) : null}
 
       {r.ruling ? (
-        <div className="section"><div className="section-t"><Icon name="gavel" size={14} />裁决</div>
+        <section className="sec"><div className="sec-h"><h3>裁决</h3></div>
           <div className="verdict">
-            <ActionTag action={r.ruling.action} big />
+            <ActionBadge action={r.ruling.action} big />
             <span>由 <b>{ACTOR[r.ruling.actor] ?? r.ruling.actor}</b> 作出</span>
             {r.ruling.rule_ids.length ? <span>依据 <span className="mono">{r.ruling.rule_ids.join("、")}</span></span> : null}
             <span className="muted small">提交检查允许：{r.ruling.allowed_actions.map((a) => (a === "human" ? "人工" : ACTION[a as keyof typeof ACTION] ?? a)).join("、") || "—"}</span>
             <span className="faint small">{clock(r.ruling.created_at)} · 用时 {duration(r.ruling.created_at - r.created_at)}</span>
           </div>
-          <div className="small muted" style={{ marginTop: 6 }}>
-            {r.ruling.reason_code ? <>理由：{reasonText(r.ruling.reason_code)}</> : r.ruling.reason !== null ? <>理由：{r.ruling.reason}</> : r.ruling.reason_len ? <><Icon name="lock" size={12} /> 理由 {r.ruling.reason_len} 字，属受限内容{restricted ? "" : "，在受限视图中查看"}</> : null}
+          <div className="small muted" style={{ marginTop: 8, overflowWrap: "anywhere" }}>
+            {r.ruling.reason_code ? <>理由：{reasonText(r.ruling.reason_code)}</> : r.ruling.reason !== null ? <>理由：{r.ruling.reason}</> : r.ruling.reason_len ? <span className="row" style={{ gap: 4 }}><Icon name="lock" size={12} />理由 {r.ruling.reason_len} 字，属受限内容{restricted ? "" : "，在受限视图中查看"}</span> : null}
           </div>
-        </div>
+        </section>
       ) : null}
-    </div>
+    </article>
   );
 }
 
@@ -235,41 +236,47 @@ function stages(t: ContentTimeline): Stage[] {
 export function Pipeline({ t }: { t: ContentTimeline }) {
   return (
     <div className="pipeline">
-      {stages(t).map((s) => <div key={s.t} className={`pipe ${s.s}`}><div className="ic" /><div className="t">{s.t}</div><div className="d" title={s.d}>{s.d}</div></div>)}
+      {stages(t).map((s) => <div key={s.t} className={`stage ${s.s}`}><div className="bar" /><div className="t">{s.t}</div><div className="d">{s.d}</div></div>)}
     </div>
   );
 }
 
-export function ContentHeader({ t, text }: { t: ContentTimeline; text?: string | null }) {
+export function ContentHeader({ t, text, sim }: { t: ContentTimeline; text?: string | null; sim?: boolean }) {
   const shown = t.content.text ?? text ?? null;
   return (
-    <div className="stack" style={{ gap: 8 }}>
-      <div className="row">
-        <span className="mono">{t.content.content_id}</span>
-        <span className="tag">{SCENE[t.content.scene] ?? t.content.scene}</span>
-        <PhaseTag phase={t.phase} />
-        <span className="small muted">当前有效处置</span><ActionTag action={t.effective?.action ?? null} />
+    <div className="stack" style={{ gap: 10 }}>
+      <div className="row" style={{ gap: "6px 10px" }}>
+        <Id value={t.content.content_id} />
+        {sim ? <SimTag /> : null}
+        <Badge>{SCENE[t.content.scene] ?? t.content.scene}</Badge>
+        <PhaseBadge phase={t.phase} />
+        <span className="row" style={{ gap: 6 }}><span className="small faint">当前有效处置</span><ActionBadge action={t.effective?.action ?? null} /></span>
         <span className="small faint">{VISIBILITY[t.effective?.visibility ?? ""] ?? "—"}</span>
       </div>
       {shown !== null ? (
-        <div className={t.content.text !== null ? "restricted-box" : ""} style={t.content.text === null ? { fontSize: 14 } : undefined}>
-          {t.content.text !== null ? <div className="small row" style={{ color: "var(--warn)" }}><Icon name="lock" size={12} />受限视图：原文（本次查看已写审计）</div> : null}
-          <div className="txt">{shown}</div>
-        </div>
-      ) : <div className="small faint row"><Icon name="lock" size={12} />原文默认不展示（{t.content.text_len} 字，sha {t.content.text_sha ?? "—"}）</div>}
+        t.content.text !== null ? (
+          <div className="restricted"><div className="lbl"><Icon name="lock" size={12} />受限视图：原文（本次查看已写审计）</div><div className="content-text">{shown}</div></div>
+        ) : <div className="content-text">{shown}</div>
+      ) : <div className="hidden-text"><Icon name="lock" size={12} />原文默认不展示（{t.content.text_len} 字，sha {t.content.text_sha ?? "—"}）</div>}
     </div>
   );
 }
+
+const STEP_STATUS: Record<string, string> = { ok: "完成", reused: "复用", blocked: "被拦下", rejected: "被拒", pending: "进行中" };
 
 export function EventFeed({ t }: { t: ContentTimeline }) {
   const evs = [...t.events].reverse();
   return (
-    <div className="feed" aria-live="polite">
-      {evs.map((e) => <div className="ev" key={e.id}><span className="tm">{clock(e.at)}</span><span><b style={{ fontWeight: 600 }}>{e.title}</b>{e.detail ? <span className="muted"> · {e.kind === "route" || e.kind === "human_queue" ? reasonText(e.detail) : e.kind === "tool" ? ({ ok: "完成", reused: "复用", blocked: "被拦下", rejected: "被拒", pending: "进行中" } as Record<string, string>)[e.detail] ?? e.detail : e.detail}</span> : null}</span></div>)}
+    <div className="events" aria-live="polite">
+      {evs.map((e) => (
+        <div className="ev" key={e.id}><span className="tm">{clock(e.at)}</span>
+          <span className="tx"><b>{e.title}</b>{e.detail ? <span className="muted"> · {e.kind === "route" || e.kind === "human_queue" ? reasonText(e.detail) : e.kind === "tool" ? STEP_STATUS[e.detail] ?? e.detail : e.detail}</span> : null}</span></div>
+      ))}
     </div>
   );
 }
 
 export function ReviewCards({ t }: { t: ContentTimeline }) {
-  return <div>{t.reviews.length === 0 ? <div className="card"><div className="empty"><span className="dot pulse" style={{ background: "var(--info)", marginRight: 8 }} />已进入接入队列，等待快判…</div></div> : t.reviews.map((r) => <ReviewCard key={r.review_id} r={r} restricted={t.restricted} />)}</div>;
+  if (t.reviews.length === 0) return <div className="review"><div className="empty"><span className="dot pulse" style={{ background: "var(--info)", marginRight: 8 }} />已进入接入队列，等待快判…</div></div>;
+  return <div>{t.reviews.map((r) => <ReviewCard key={r.review_id} r={r} restricted={t.restricted} />)}</div>;
 }

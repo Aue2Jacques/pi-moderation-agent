@@ -37,7 +37,7 @@ try {
   const verdict = await page.locator(".verdict").first().innerText();
   check("the ruling shows up live (agent pass)", verdict.includes("放行") && verdict.includes("agent"), verdict);
   check("judge score rows are drawn", (await page.locator(".prob").count()) >= 3);
-  check("pipeline reaches the last stage", (await page.locator(".pipe.done").count()) >= 4);
+  check("pipeline reaches the last stage", (await page.locator(".stage.done").count()) >= 4);
   await shot(page, "1-track-agent-pass");
 
   // 2. a sample the agent hands to a person; decide it on the human desk
@@ -56,7 +56,7 @@ try {
   // 3. appeal the content the agent took down earlier? use the list of disposed contents
   await page.goto(`${app.base}/#/appeals`);
   await page.getByText("最近已处置的内容").waitFor();
-  await page.locator(".tbl tbody tr.click").first().click();
+  await page.locator(".candidates tbody tr.click").filter({ hasNot: page.locator(".sim") }).first().click();   // one of this script's contents, not demo traffic
   await page.getByRole("button", { name: "提交申诉" }).click();
   await page.getByText("已受理").waitFor();
   check("appeal accepted", true);
@@ -66,10 +66,10 @@ try {
 
   // 4. review list -> detail -> restricted view (confirm dialog accepted, audited server side)
   await page.goto(`${app.base}/#/reviews`);
-  await page.locator(".tbl tbody tr.click").first().waitFor();
-  check("review list has rows", (await page.locator(".tbl tbody tr.click").count()) >= 3);
+  await page.locator(".table tbody tr.click").first().waitFor();
+  check("review list has rows", (await page.locator(".table tbody tr.click").count()) >= 3);
   await shot(page, "5-reviews");
-  await page.locator(".tbl tbody tr.click").last().click();
+  await page.locator(".table tbody tr.click").last().click();
   await page.getByRole("button", { name: /查看原文与证据/ }).click();
   await page.getByText("受限视图：原文").waitFor();
   check("restricted view shows the original text", true);

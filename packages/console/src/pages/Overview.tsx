@@ -1,82 +1,115 @@
-// Overview: cumulative counts from app.db (/api/stats) and G's live window metrics (/api/metrics, SSE).
+// Overview: cumulative numbers and the latest reviews from the global live stream (/api/events), G's in-memory window
+// metrics from /api/metrics (SSE). Nothing here polls.
 import { useState } from "react";
 import { useConsole } from "../App.tsx";
-import type { RouteKind, Stats } from "../api.ts";
+import type { ReviewListItem, Stats, TrafficKind, TrafficStatus } from "../api.ts";
 import { useEventSource } from "../hooks.ts";
-import { useLive } from "../live.tsx";
 import { ACTION, ROUTE, ROUTES, reasonText } from "../labels.ts";
-import { Alert, Card, Empty, duration, pad2, pct, yuan } from "../ui.tsx";
+import { useLive } from "../live.tsx";
+import { ActionBadge, Alert, Empty, Id, Kpi, PageHead, Panel, RouteBadge, SimTag, StateBadge, clock, duration, pad2, pct, yuan } from "../ui.tsx";
 
 type Metrics = { intake_rate: number; fast_rate: number; queue_intake: number; queue_agent: number; queue_human: number; outstanding_total: number; replay_paused: boolean;
   p50_fast: number; p95_fast: number; p50_agent: number; p95_agent: number; cost_micro_per_1k: number; release_pct: number; judge_abstain_pct: number; outbox_pending: number; pass_pct: number; block_pct: number; suspicious_pct: number };
 
-const Tile = ({ label, value, unit, foot }: { label: string; value: string; unit?: string; foot?: string }) => (
-  <div className="card stat"><div className="label">{label}</div><div className="value">{value}{unit ? <span className="unit">{unit}</span> : null}</div>{foot ? <div className="foot">{foot}</div> : null}</div>
-);
+type Bucket = Stats["series"][number];
+const total = (b: Bucket): number => ROUTES.reduce((n, r) => n + (b[r as keyof Bucket] as number), 0);
+const hhmm = (m: number): string => { const d = new Date(m * 60_000); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
 
-/** Decisions per minute, stacked by route; hover a column for its numbers. */
+/** Reviews created per minute, stacked by route (HTML bars: heights animate when a minute fills up). */
 function MinuteBars({ series }: { series: Stats["series"] }) {
   const [hover, setHover] = useState<number | null>(null);
-  const W = 720, H = 180, padL = 28, padB = 22, padT = 8;
-  const totals = series.map((b) => ROUTES.reduce((n, r) => n + (b[r as keyof typeof b] as number), 0));
-  const max = Math.max(4, ...totals);
+  const max = Math.max(4, ...series.map(total));
   const step = Math.ceil(max / 4);
   const top = step * 4;
-  const cw = (W - padL) / series.length;
-  const y = (v: number): number => padT + (H - padT - padB) * (1 - v / top);
-  const label = (m: number): string => { const d = new Date(m * 60_000); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
   const hb = hover !== null ? series[hover] : undefined;
   return (
-    <div style={{ position: "relative" }}>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label="每分钟审次数，按路径堆叠" onMouseLeave={() => setHover(null)}>
-        {[0, 1, 2, 3, 4].map((i) => (
-          <g key={i}>
-            <line x1={padL} x2={W} y1={y(i * step)} y2={y(i * step)} stroke="var(--border)" strokeDasharray={i ? "2 3" : undefined} />
-            <text x={padL - 6} y={y(i * step) + 4} textAnchor="end" fontSize="10" fill="var(--text-3)">{i * step}</text>
-          </g>
-        ))}
-        {series.map((b, i) => {
-          let acc = 0;
-          const x = padL + i * cw + 2;
-          return (
-            <g key={b.minute} onMouseEnter={() => setHover(i)}>
-              <rect x={padL + i * cw} y={padT} width={cw} height={H - padT - padB} fill={hover === i ? "var(--surface-3)" : "transparent"} />
+    <div className="bars" style={{ ["--cols" as string]: series.length }} onMouseLeave={() => setHover(null)} role="img" aria-label="每分钟新建审次，按路径堆叠">
+      <div className="y">{[0, 1, 2, 3, 4].map((i) => <span key={i} style={{ top: `${100 - (i * 100) / 4}%` }}>{i * step}</span>)}</div>
+      <div className="plot">
+        {[1, 2, 3, 4].map((i) => <div key={i} className="gl" style={{ top: `${100 - (i * 100) / 4}%` }} />)}
+        <div className="cols">
+          {series.map((b, i) => (
+            <div key={b.minute} className="col" onMouseEnter={() => setHover(i)}>
               {ROUTES.map((r) => {
-                const v = b[r as keyof typeof b] as number;
-                if (!v) return null;
-                const y0 = y(acc), y1 = y(acc + v);
-                acc += v;
-                return <rect key={r} x={x} y={y1 + 1} width={Math.max(2, cw - 4)} height={Math.max(1, y0 - y1 - 1)} rx={2} fill={`var(--route-${r})`} />;
+                const v = b[r as keyof Bucket] as number;
+                return <div key={r} className="bseg" style={{ height: `${(100 * v) / top}%`, background: `var(--route-${r})` }} />;
               })}
-              {i % 5 === 4 ? <text x={i === series.length - 1 ? W - 2 : padL + i * cw + cw / 2} y={H - 6} textAnchor={i === series.length - 1 ? "end" : "middle"} fontSize="10" fill="var(--text-3)">{label(b.minute)}</text> : null}
-            </g>
-          );
-        })}
-      </svg>
-      {hb ? (
-        <div className="chart-tip" style={{ left: `min(calc(${((padL + (hover! + 1) * cw) / W) * 100}% + 8px), calc(100% - 170px))`, top: 8 }}>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>{label(hb.minute)} · 共 {totals[hover!]}</div>
-          {ROUTES.map((r) => <div className="row" key={r}><span className="row" style={{ gap: 6 }}><span className="sw" style={{ background: `var(--route-${r})` }} />{ROUTE[r]}</span><span className="num">{hb[r as keyof typeof hb]}</span></div>)}
+            </div>
+          ))}
         </div>
-      ) : null}
+        {hb ? (
+          <div className="chart-tip" style={{ left: `clamp(0px, calc(${((hover! + 1) / series.length) * 100}% + 6px), calc(100% - 168px))`, top: 4 }}>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>{hhmm(hb.minute)} · 共 {total(hb)}</div>
+            {ROUTES.map((r) => <div className="row" key={r}><span className="route"><span className="sw" style={{ background: `var(--route-${r})` }} />{ROUTE[r]}</span><span className="num">{hb[r as keyof Bucket]}</span></div>)}
+          </div>
+        ) : null}
+      </div>
+      <div className="x" aria-hidden="true">{series.map((b, i) => i % 5 === 4 ? <span key={b.minute} className={i === series.length - 1 ? "end" : ""} style={{ left: i === series.length - 1 ? "100%" : `${((i + 0.5) / series.length) * 100}%` }}>{hhmm(b.minute)}</span> : null)}</div>
     </div>
   );
 }
 
-function Legend() {
-  return <div className="legend">{ROUTES.map((r) => <span key={r}><span className="sw" style={{ background: `var(--route-${r})` }} />{ROUTE[r]}</span>)}</div>;
+const Legend = () => <div className="legend">{ROUTES.map((r) => <span key={r}><span className="sw" style={{ background: `var(--route-${r})` }} />{ROUTE[r]}</span>)}</div>;
+
+function Meter({ rows, total: t }: { rows: [string, number][]; total: number }) {
+  if (!rows.length) return <Empty>暂无</Empty>;
+  return (
+    <div className="meter">
+      {rows.map(([k, n]) => (
+        <div className="item" key={k}><span className="l">{k}</span><span className="n">{n}<span className="faint"> · {pct(n, t)}</span></span>
+          <div className="track"><div className="fill" style={{ width: `${t ? (100 * n) / t : 0}%` }} /></div></div>
+      ))}
+    </div>
+  );
 }
 
-function BarList({ rows, total }: { rows: [string, number][]; total: number }) {
-  if (!rows.length) return <Empty>暂无</Empty>;
-  return <div className="bar-list">{rows.map(([k, n]) => <div className="item" key={k}><span className="ellipsis" title={k}>{k}</span><div className="track"><div className="fill" style={{ width: `${total ? (100 * n) / total : 0}%` }} /></div><span className="num" style={{ textAlign: "right" }}>{n}</span></div>)}</div>;
+/** The latest reviews as they arrive on the live stream. */
+function LiveFeed({ items }: { items: ReviewListItem[] }) {
+  const { go, isSim } = useConsole();
+  if (!items.length) return <Empty>还没有审次</Empty>;
+  return (
+    <div className="feed-list" aria-live="polite">
+      {items.map((r) => (
+        <div key={r.review_id} className="feed-row" role="link" tabIndex={0} onClick={() => go(`/contents/${encodeURIComponent(r.content_id)}`)} onKeyDown={(e) => { if (e.key === "Enter") go(`/contents/${encodeURIComponent(r.content_id)}`); }}>
+          <span className="tm">{clock(r.created_at)}</span>
+          <span className="what"><RouteBadge route={r.route} />{isSim(r.content_id) ? <SimTag /> : <Id value={r.content_id} short className="faint" />}</span>
+          <span className="out">{r.action ? <ActionBadge action={r.action} /> : <StateBadge state={r.state} />}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const KIND: Record<TrafficKind, string> = { normal: "正常", marketing: "营销", abuse: "辱骂", mild: "轻度辱骂", banter: "需看上下文", repeat: "需看账号历史", injection: "注入" };
+
+function TrafficPanel({ t }: { t: TrafficStatus }) {
+  const sum = t.generated || 1;
+  return (
+    <Panel title="模拟流量" sub={t.paused || t.per_min === 0 ? "已暂停" : `每分钟约 ${t.per_min} 条`}>
+      <div className="stack" style={{ gap: 14 }}>
+        <div className="trio">
+          <Kpi label="已生成" value={t.generated} />
+          <Kpi label="模拟审核员已处理" value={t.sim_reviewer.decided} />
+          <Kpi label="模拟申诉" value={t.appeals} />
+        </div>
+        <div className="meter two">
+          {(Object.keys(KIND) as TrafficKind[]).map((k) => (
+            <div className="item" key={k}><span className="l">{KIND[k]}</span><span className="n">{t.by_kind[k]}</span>
+              <div className="track"><div className="fill" style={{ width: `${(100 * t.by_kind[k]) / sum}%` }} /></div></div>
+          ))}
+        </div>
+        <div className="small faint">内容由演示流量生成器按比例混合产生，ID 以 sim- 开头；模拟审核员（{t.sim_reviewer.id}）每分钟最多处理 {t.sim_reviewer.per_min} 条模拟任务，不碰手动提交的内容。</div>
+      </div>
+    </Panel>
+  );
 }
 
 export function Overview() {
   const { config } = useConsole();
   const live = useLive();
   const { data: m, connected } = useEventSource<Metrics>("/api/metrics");
-  if (!live.frame) return <Empty>{live.connected ? "加载中…" : "正在连接实时数据流…"}</Empty>;
+  const head = <PageHead title="概览" desc={config.mode === "demo" ? "累计数字与最新审次随实时数据流更新。演示模式下判官与 agent 是脚本，数字只作演示。" : "累计数字与最新审次随实时数据流更新。"} />;
+  if (!live.frame) return <>{head}<Panel><Empty>{live.connected ? "加载中…" : "正在连接实时数据流…"}</Empty></Panel></>;
   const d = live.frame.stats;
   const finished = Math.max(0, d.reviews - d.agent.open - d.human.open);
   const auto = d.routes.fast_pass + d.routes.fast_block + d.agent.disposed;
@@ -86,66 +119,75 @@ export function Overview() {
 
   return (
     <>
-      {d.contents === 0 ? <Alert tone="info">还没有内容。到“提交与追踪”提交一条{config.mode === "demo" ? "，或点演示示例" : ""}，这里的数字会随之变化。</Alert> : null}
-      <div className="grid cols-4 stats">
-        <Tile label="已接入内容" value={String(d.contents)} foot={`已快判 ${d.judged} · 审次 ${d.reviews}`} />
-        <Tile label="自动完成率" value={pct(auto, finished)} foot={`快判 ${d.routes.fast_pass + d.routes.fast_block} + agent 处置 ${d.agent.disposed} / 已结束 ${finished}`} />
-        <Tile label="人工队列" value={String(d.human.open)} unit="条" foot={`已领取 ${d.human.claimed} · 超时 ${d.human.overdue} · 已完成 ${d.human.closed}`} />
-        <Tile label="每条内容平均费用" value={yuan(d.cost.per_content_micro, 5)} foot={`快判 ${yuan(d.cost.fast_micro)} · 审次 ${yuan(d.cost.review_micro)}${config.mode === "demo" ? " · 演示用模拟用量" : ""}`} />
+      {head}
+      {d.contents === 0 ? <Alert tone="info">还没有内容。到“提交与追踪”提交一条{config.mode === "demo" ? "，或点演示示例；开启顶栏的模拟流量后数字会持续变化" : ""}。</Alert> : null}
+      <div className="kpis" style={{ ["--n" as string]: 5 }}>
+        <Kpi label="已接入内容" value={d.contents} foot={`已快判 ${d.judged} · 审次 ${d.reviews}`} />
+        <Kpi label="自动完成率" value={pct(auto, finished)} foot={`快判 ${d.routes.fast_pass + d.routes.fast_block} · agent 处置 ${d.agent.disposed} / 已结束 ${finished}`} />
+        <Kpi label="agent 处理中" value={d.agent.open} foot={`已处置 ${d.agent.disposed} · 交人工 ${d.agent.released}`} />
+        <Kpi label="人工队列" value={d.human.open} tone={d.human.overdue ? "warn" : undefined} foot={`已领取 ${d.human.claimed} · 超时 ${d.human.overdue} · 已完成 ${d.human.closed}`} />
+        <Kpi label="每条平均费用" value={yuan(d.cost.per_content_micro, 5)} foot={`快判 ${yuan(d.cost.fast_micro)} · 审次 ${yuan(d.cost.review_micro)}`} />
       </div>
 
-      <div className="grid" style={{ gridTemplateColumns: "minmax(0, 1.6fr) minmax(0, 1fr)" }}>
-        <Card title="分流" sub="每分钟新建审次，按路径（近 30 分钟）" right={<Legend />}>
+      <div className="grid g-main">
+        <Panel title="分流" sub="每分钟新建审次，近 30 分钟" actions={<Legend />} className="fill">
           <MinuteBars series={d.series} />
-        </Card>
-        <Card title="各路占比" sub={`累计 ${routeTotal} 个审次`}>
-          <div className="stack">
-            <div className="share-bar" role="img" aria-label="各路占比">{ROUTES.filter((r) => d.routes[r]).map((r) => <div key={r} title={`${ROUTE[r]} ${d.routes[r]}`} style={{ width: `${(100 * d.routes[r]) / Math.max(1, routeTotal)}%`, background: `var(--route-${r})` }} />)}</div>
-            <table className="tbl"><tbody>
-              {ROUTES.map((r: RouteKind) => <tr key={r}><td><span className="row" style={{ gap: 8 }}><span className="sw" style={{ background: `var(--route-${r})` }} />{ROUTE[r]}</span></td><td className="num">{d.routes[r]}</td><td className="num muted">{pct(d.routes[r], routeTotal)}</td></tr>)}
-            </tbody></table>
-          </div>
-        </Card>
+        </Panel>
+        <Panel title="最新审次" sub="实时" flush>
+          <LiveFeed items={live.recent.slice(0, 9)} />
+        </Panel>
       </div>
 
-      <div className="grid cols-3">
-        <Card title="耗时" sub="累计，近 2000 条">
-          <table className="tbl"><tbody>
-            <tr><td>接入到快判结论</td><td className="num">p50 {duration(d.latency_ms.fast_p50)}</td><td className="num">p95 {duration(d.latency_ms.fast_p95)}</td></tr>
-            <tr><td>agent 审次</td><td className="num">p50 {duration(d.latency_ms.agent_p50)}</td><td className="num">p95 {duration(d.latency_ms.agent_p95)}</td></tr>
-            <tr><td>人工处理</td><td className="num">p50 {duration(d.latency_ms.human_p50)}</td><td className="num muted">—</td></tr>
-          </tbody></table>
-        </Card>
-        <Card title="当前有效处置" sub={`${effTotal} 条内容`}>
-          <BarList rows={Object.entries(d.effective).map(([k, n]) => [k === "pending" ? "待定（审核中）" : ACTION[k as keyof typeof ACTION] ?? k, n])} total={effTotal} />
-        </Card>
-        <Card title="转人工原因" sub={`agent 处置 ${d.agent.disposed} · 交人工 ${d.agent.released}`}>
-          <BarList rows={Object.entries(d.release_reasons).sort((a, b) => b[1] - a[1]).map(([k, n]) => [reasonText(k), n])} total={relTotal} />
-        </Card>
+      <div className="grid g-4">
+        <Panel title="各路占比" sub={`累计 ${routeTotal} 个审次`}>
+          <div className="stack" style={{ gap: 14 }}>
+            <div className="share" role="img" aria-label="各路占比">{ROUTES.filter((r) => d.routes[r]).map((r) => <div key={r} title={`${ROUTE[r]} ${d.routes[r]}`} style={{ width: `${(100 * d.routes[r]) / Math.max(1, routeTotal)}%`, background: `var(--route-${r})` }} />)}</div>
+            <div className="meter">
+              {ROUTES.map((r) => <div className="item" key={r}><span className="l route"><span className="sw" style={{ background: `var(--route-${r})` }} />{ROUTE[r]}</span><span className="n">{d.routes[r]}<span className="faint"> · {pct(d.routes[r], routeTotal)}</span></span></div>)}
+            </div>
+          </div>
+        </Panel>
+        <Panel title="耗时" sub="近 2000 条">
+          <div className="lat">
+            <span className="h">阶段</span><span className="h v">p50</span><span className="h v">p95</span>
+            <span>接入到快判结论</span><span className="v">{duration(d.latency_ms.fast_p50)}</span><span className="v">{duration(d.latency_ms.fast_p95)}</span>
+            <span>agent 审次</span><span className="v">{duration(d.latency_ms.agent_p50)}</span><span className="v">{duration(d.latency_ms.agent_p95)}</span>
+            <span>人工处理</span><span className="v">{duration(d.latency_ms.human_p50)}</span><span className="v faint">—</span>
+          </div>
+        </Panel>
+        <Panel title="当前有效处置" sub={`${effTotal} 条内容`}>
+          <Meter rows={Object.entries(d.effective).map(([k, n]) => [k === "pending" ? "待定（审核中）" : ACTION[k as keyof typeof ACTION] ?? k, n])} total={effTotal} />
+        </Panel>
+        <Panel title="转人工原因" sub={`共 ${relTotal} 次`}>
+          <Meter rows={Object.entries(d.release_reasons).sort((a, b) => b[1] - a[1]).map(([k, n]) => [reasonText(k), n])} total={relTotal} />
+        </Panel>
       </div>
 
-      <div className="grid cols-2">
-        <Card title="申诉">
-          <div className="grid cols-3" style={{ gap: 0 }}>
-            <div className="stat"><div className="label">申诉总数</div><div className="value">{d.appeals.total}</div></div>
-            <div className="stat"><div className="label">处理中</div><div className="value">{d.appeals.open}</div></div>
-            <div className="stat"><div className="label">改判</div><div className="value">{d.appeals.changed}</div></div>
-          </div>
-        </Card>
-        <Card title="实时窗口指标" sub={connected ? "网关内存，每秒推送" : "未连接"}>
-          {!m ? <Empty>等待推送…</Empty> : (
-            <dl className="kv-grid" style={{ gridTemplateColumns: "max-content 1fr max-content 1fr", gap: "10px 18px" }}>
-              <dt>接入速率</dt><dd className="num">{m.intake_rate.toFixed(2)} 条/秒</dd>
-              <dt>队列 接入 / agent / 人工</dt><dd className="num">{m.queue_intake} / {m.queue_agent} / {m.queue_human}</dd>
-              <dt>快判 p50 / p95</dt><dd className="num">{duration(m.p50_fast)} / {duration(m.p95_fast)}</dd>
-              <dt>未完成总量</dt><dd className="num">{m.outstanding_total}{m.replay_paused ? "（背压暂停）" : ""}</dd>
-              <dt>近 60 秒 放行 / 处置 / 疑似</dt><dd className="num">{m.pass_pct}% / {m.block_pct}% / {m.suspicious_pct}%</dd>
-              <dt>每千条费用</dt><dd className="num">{yuan(m.cost_micro_per_1k, 3)}</dd>
-              <dt>转人工占比（5 分钟）</dt><dd className="num">{m.release_pct}%</dd>
-              <dt>判官弃答 · 待投递</dt><dd className="num">{m.judge_abstain_pct}% · {m.outbox_pending}</dd>
-            </dl>
-          )}
-        </Card>
+      <div className="grid g-2 align-start">
+        <div className="stack" style={{ gap: 16 }}>
+          <Panel title="申诉">
+            <div className="trio">
+              <Kpi label="申诉总数" value={d.appeals.total} />
+              <Kpi label="处理中" value={d.appeals.open} />
+              <Kpi label="改判" value={d.appeals.changed} />
+            </div>
+          </Panel>
+          <Panel title="网关窗口指标" sub={connected ? "内存窗口，每秒推送" : "未连接"}>
+            {!m ? <Empty>等待推送…</Empty> : (
+              <dl className="kv">
+                <dt>接入速率</dt><dd className="num">{m.intake_rate.toFixed(2)} 条/秒</dd>
+                <dt>队列：接入 / agent / 人工</dt><dd className="num">{m.queue_intake} / {m.queue_agent} / {m.queue_human}</dd>
+                <dt>快判 p50 / p95</dt><dd className="num nowrap">{duration(m.p50_fast)} / {duration(m.p95_fast)}</dd>
+                <dt>未完成总量</dt><dd className="num">{m.outstanding_total}{m.replay_paused ? "（背压暂停）" : ""}</dd>
+                <dt>近 60 秒 放行 / 处置 / 疑似</dt><dd className="num">{m.pass_pct}% / {m.block_pct}% / {m.suspicious_pct}%</dd>
+                <dt>每千条费用</dt><dd className="num">{yuan(m.cost_micro_per_1k, 3)}</dd>
+                <dt>转人工占比（5 分钟）</dt><dd className="num">{m.release_pct}%</dd>
+                <dt>判官弃答 · 待投递</dt><dd className="num">{m.judge_abstain_pct}% · {m.outbox_pending}</dd>
+              </dl>
+            )}
+          </Panel>
+        </div>
+        {live.frame.traffic ? <TrafficPanel t={live.frame.traffic} /> : null}
       </div>
     </>
   );

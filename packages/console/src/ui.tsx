@@ -1,77 +1,117 @@
-// Shared presentational pieces: icons, tags, cards, formatting.
-import type { ReactNode } from "react";
+// Shared presentational pieces: icons (navigation only), badges, panels, KPI cells, ids and long text, formatting.
+// Text is never clipped without a way to read it: shortened ids and clamped text carry the full value in `title`
+// and expand on click.
+import { useState, type ReactNode } from "react";
 import type { Action, RouteKind } from "./api.ts";
 import { ACTION, ACTOR, PHASE, ROUTE, STATE } from "./labels.ts";
 
-// ---------- icons (inline SVG, 16px, stroke) ----------
+// ---------- icons (inline SVG, 16px, stroke): navigation and a few controls only ----------
 const paths: Record<string, string> = {
-  overview: "M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z",
-  send: "M4 12l16-8-6 16-2.5-6.5L4 12z",
-  list: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
-  user: "M12 12a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0",
+  overview: "M4 13h4v7H4zM10 8h4v12h-4zM16 4h4v16h-4z",
+  track: "M4 12h4l3-7 4 14 3-7h2",
+  list: "M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01",
+  human: "M12 12a4 4 0 100-8 4 4 0 000 8zM5 20a7 7 0 0114 0",
   appeal: "M4 4v6h6M20 20v-6h-6M5.6 15A8 8 0 0019 18M18.4 9A8 8 0 005 6",
-  rules: "M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h5",
-  sun: "M12 17a5 5 0 100-10 5 5 0 000 10zM12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4",
-  moon: "M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z",
-  check: "M5 12.5l4.5 4.5L19 7.5",
-  x: "M6 6l12 12M18 6L6 18",
-  minus: "M5 12h14",
-  eye: "M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zM12 15a3 3 0 100-6 3 3 0 000 6z",
-  lock: "M6 11h12v10H6zM8 11V7a4 4 0 018 0v4",
-  rule: "M6 3h9l4 4v14H6zM9 13h7M9 17h5",
-  thread: "M4 5h16v10H8l-4 4zM8 9h8M8 12h5",
-  history: "M3 12a9 9 0 103-6.7L3 8M3 3v5h5M12 7v5l3 2",
-  scale: "M12 3v18M5 7h14M7 7l-3 7a3 3 0 006 0zM17 7l-3 7a3 3 0 006 0z",
-  repeat: "M17 2l4 4-4 4M3 11V9a3 3 0 013-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 01-3 3H3",
-  gavel: "M14 4l6 6M11 7l6 6M3 21l8-8M12.5 5.5l6 6-3 3-6-6z",
-  handoff: "M16 11a4 4 0 100-8M8 21v-2a4 4 0 014-4h4M3 15l3 3 4-5",
-  alert: "M12 9v4M12 17h.01M10.3 3.9L2 18a2 2 0 001.7 3h16.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z",
-  clock: "M12 21a9 9 0 100-18 9 9 0 000 18zM12 7v5l3 2",
-  refresh: "M21 12a9 9 0 11-3-6.7L21 8M21 3v5h-5",
-  inbox: "M3 13l3-8h12l3 8v6H3zM3 13h5l1 3h6l1-3h5",
-  up: "M7 17L17 7M9 7h8v8",
+  rules: "M7 3h8l4 4v14H7zM14 3v5h5M10 13h6M10 17h4",
+  sun: "M12 16a4 4 0 100-8 4 4 0 000 8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4",
+  moon: "M20.5 13.5A8.5 8.5 0 1110.5 3.5a6.5 6.5 0 0010 10z",
+  menu: "M4 7h16M4 12h16M4 17h16",
+  close: "M6 6l12 12M18 6L6 18",
   back: "M15 18l-6-6 6-6",
+  check: "M5 12.5l4.5 4.5L19 7.5",
+  lock: "M6 11h12v10H6zM8 11V7a4 4 0 018 0v4",
+  pause: "M8 5v14M16 5v14",
+  play: "M7 5l12 7-12 7z",
 };
 export function Icon({ name, size = 16, className }: { name: string; size?: number; className?: string }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
-      <path d={paths[name] ?? paths["minus"]} />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <path d={paths[name] ?? paths["close"]} />
     </svg>
   );
 }
 
-// ---------- tags ----------
-const ACTION_TONE: Record<Action, string> = { pass: "good", limit: "warn", takedown: "bad" };
-const ACTION_ICON: Record<Action, string> = { pass: "check", limit: "minus", takedown: "x" };
-export function ActionTag({ action, big }: { action: Action | null | undefined; big?: boolean }) {
-  if (!action) return <span className="tag">未定</span>;
-  return <span className={`tag ${ACTION_TONE[action]}`} style={big ? { height: 28, fontSize: 14, padding: "0 12px", borderRadius: 14 } : undefined}><Icon name={ACTION_ICON[action]} size={big ? 15 : 13} />{ACTION[action]}</span>;
+// ---------- badges ----------
+export type Tone = "good" | "warn" | "bad" | "info" | "neutral" | "accent";
+export function Badge({ tone = "neutral", dot, pulse, children, title, className }: { tone?: Tone; dot?: boolean; pulse?: boolean; children: ReactNode; title?: string; className?: string }) {
+  return <span className={`badge ${tone} ${className ?? ""}`} title={title}>{dot ? <span className={`dot ${pulse ? "pulse" : ""}`} /> : null}{children}</span>;
 }
-const STATE_TONE: Record<string, string> = { queued: "info", investigating: "info", disposed: "good", human_queue: "warn", human_disposed: "good" };
-export function StateTag({ state }: { state: string }) {
-  const live = state === "queued" || state === "investigating";
-  return <span className={`tag ${STATE_TONE[state] ?? ""}`}>{live ? <span className="dot pulse" style={{ background: "currentColor" }} /> : null}{STATE[state] ?? state}</span>;
+const ACTION_TONE: Record<Action, Tone> = { pass: "good", limit: "warn", takedown: "bad" };
+export function ActionBadge({ action, big }: { action: Action | null | undefined; big?: boolean }) {
+  if (!action) return <Badge>未定</Badge>;
+  return <Badge tone={ACTION_TONE[action]} className={big ? "lg" : undefined}>{ACTION[action]}</Badge>;
 }
-export function RouteTag({ route }: { route: RouteKind }) {
-  return <span className="tag outline"><span className="dot" style={{ background: `var(--route-${route}, var(--text-3))` }} />{ROUTE[route]}</span>;
+const STATE_TONE: Record<string, Tone> = { queued: "info", investigating: "info", disposed: "neutral", human_queue: "warn", human_disposed: "neutral" };
+export function StateBadge({ state }: { state: string }) {
+  const live = state === "queued" || state === "investigating" || state === "human_queue";
+  return <Badge tone={STATE_TONE[state] ?? "neutral"} dot pulse={state === "investigating"} className={live ? "" : "quiet"}>{STATE[state] ?? state}</Badge>;
+}
+export function RouteBadge({ route }: { route: RouteKind }) {
+  return <span className="route"><span className="sw" style={{ background: `var(--route-${route}, var(--text-3))` }} />{ROUTE[route]}</span>;
+}
+export function PhaseBadge({ phase }: { phase: string }) {
+  const tone: Tone = phase === "done" ? "good" : phase === "human" ? "warn" : "info";
+  return <Badge tone={tone} dot pulse={phase !== "done"}>{PHASE[phase] ?? phase}</Badge>;
 }
 export const ActorText = ({ actor }: { actor: string | null | undefined }) => <span>{actor ? (ACTOR[actor] ?? actor) : "—"}</span>;
-export function PhaseTag({ phase }: { phase: string }) {
-  const tone = phase === "done" ? "good" : phase === "human" ? "warn" : "info";
-  return <span className={`tag ${tone}`}>{phase !== "done" ? <span className="dot pulse" style={{ background: "currentColor" }} /> : <Icon name="check" size={13} />}{PHASE[phase] ?? phase}</span>;
-}
+/** Marks generated demo traffic and the simulated reviewer. */
+export const SimTag = ({ title = "演示流量生成器产生的模拟数据" }: { title?: string }) => <span className="sim" title={title}>模拟</span>;
 
 // ---------- layout ----------
-export function Card({ title, sub, right, children, tight, className }: { title?: ReactNode; sub?: ReactNode; right?: ReactNode; children: ReactNode; tight?: boolean; className?: string }) {
+export function Panel({ title, sub, actions, children, flush, className, id }: { title?: ReactNode; sub?: ReactNode; actions?: ReactNode; children: ReactNode; flush?: boolean; className?: string; id?: string }) {
   return (
-    <section className={`card ${className ?? ""}`}>
-      {title !== undefined ? <div className="card-h"><h2>{title}</h2>{sub ? <span className="sub">{sub}</span> : null}{right ? <div className="right">{right}</div> : null}</div> : null}
-      <div className={`card-b ${tight ? "tight" : ""}`}>{children}</div>
+    <section className={`panel ${className ?? ""}`} id={id}>
+      {title !== undefined ? (
+        <header className="panel-h">
+          <div className="panel-t"><h2>{title}</h2>{sub ? <span className="sub">{sub}</span> : null}</div>
+          {actions ? <div className="panel-a">{actions}</div> : null}
+        </header>
+      ) : null}
+      <div className={`panel-b ${flush ? "flush" : ""}`}>{children}</div>
     </section>
+  );
+}
+export function PageHead({ title, desc, actions }: { title: string; desc?: ReactNode; actions?: ReactNode }) {
+  return (
+    <div className="page-head">
+      <div className="ph-t"><h1>{title}</h1>{desc ? <p>{desc}</p> : null}</div>
+      {actions ? <div className="ph-a">{actions}</div> : null}
+    </div>
+  );
+}
+export function Kpi({ label, value, unit, foot, tone }: { label: string; value: ReactNode; unit?: string; foot?: ReactNode; tone?: Tone }) {
+  return (
+    <div className="kpi">
+      <div className="kpi-l">{label}</div>
+      <div className={`kpi-v ${tone ?? ""}`}>{value}{unit ? <span className="unit">{unit}</span> : null}</div>
+      {foot ? <div className="kpi-f">{foot}</div> : null}
+    </div>
   );
 }
 export const Empty = ({ children }: { children: ReactNode }) => <div className="empty">{children}</div>;
 export const Alert = ({ tone, children }: { tone: "bad" | "info" | "warn" | "good"; children: ReactNode }) => <div className={`alert ${tone}`} role={tone === "bad" ? "alert" : "status"}>{children}</div>;
+
+/** An id in monospace. `short`: middle-shortened, full value on hover, click to show it in full. */
+export function Id({ value, short, className }: { value: string; short?: boolean; className?: string }) {
+  const [open, setOpen] = useState(false);
+  const cut = short && !open && value.length > 24;
+  if (!cut && !short) return <span className={`mono id ${className ?? ""}`} title={value}>{value}</span>;
+  return (
+    <span className={`mono id ${short ? "can-open" : ""} ${className ?? ""}`} title={value} role="button" tabIndex={0}
+      onClick={(e) => { e.stopPropagation(); setOpen(!open); }} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); setOpen(!open); } }}>
+      {cut ? `${value.slice(0, 11)}…${value.slice(-9)}` : value}
+    </span>
+  );
+}
+
+/** Long text clamped to `lines`; full text on hover, click to expand. */
+export function Clamp({ text, lines = 2, className }: { text: string; lines?: number; className?: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className={`clamp ${open ? "open" : ""} ${className ?? ""}`} style={{ WebkitLineClamp: open ? "unset" : lines }} title={open ? undefined : text}
+      onClick={(e) => { e.stopPropagation(); setOpen(!open); }}>{text}</span>
+  );
+}
 
 // ---------- formatting ----------
 export const pad2 = (n: number): string => String(n).padStart(2, "0");
@@ -98,4 +138,3 @@ export function yuan(micro: number | null | undefined, digits = 4): string { ret
 export const p2 = (x: number | null | undefined): string => (x === null || x === undefined ? "—" : x.toFixed(2));
 export const p3 = (x: number | null | undefined): string => (x === null || x === undefined ? "—" : x.toFixed(3));
 export const pct = (n: number, d: number): string => (d ? `${Math.round((100 * n) / d)}%` : "—");
-export const shortId = (id: string): string => (id.length > 26 ? `${id.slice(0, 12)}…${id.slice(-10)}` : id);
