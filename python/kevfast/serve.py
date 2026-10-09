@@ -27,6 +27,10 @@ class Server:
         threading.Thread(target=self._work, name="kevfast-model", daemon=True).start()
 
     def submit(self, req) -> Future:
+        if not self.opts.confirm and any(k.endswith("#confirm") for k in req.questions):
+            # answering only the primaries would leave the client's copies unanswered (the TypeSafe client then rejects
+            # the whole response): say so instead
+            raise ValueError("this server runs KF_CONFIRM=off: send the questions without '#confirm' copies (JEV_IN_CALL_CONFIRM=0)")
         er, meta, keep = to_engine_request(req.state, {k: q.model_dump() for k, q in req.questions.items()}, self.opts.layout, self.opts.confirm)
         f: Future = Future()
         self.queue.put((er, meta, f))
@@ -75,6 +79,7 @@ class Server:
 
 def make_app(server: Server):
     from fastapi import FastAPI, Request
+    from fastapi.responses import JSONResponse
     from kev.api import SystemOneRequest, output_tokens, to_answers
     app = FastAPI(title="kevfast")
 
@@ -86,7 +91,9 @@ def make_app(server: Server):
 
     @app.post("/v1/systemone")
     async def systemone(req: SystemOneRequest):
-        p, meta, ms = await asyncio.wrap_future(server.submit(req))
+        try: fut = server.submit(req)
+        except ValueError as e: return JSONResponse({"detail": str(e)}, 400)
+        p, meta, ms = await asyncio.wrap_future(fut)
         answers = to_answers([x.tolist() for x in p], meta)
         return {"model": req.model, "answers": answers, "usage": {"input_tokens": 0, "output_tokens": output_tokens(server.tok, answers)}, "latency_ms": round(ms, 1)}
 

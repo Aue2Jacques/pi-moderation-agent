@@ -26,6 +26,7 @@ const questions = sceneQuestions(bundle, "comment");
 const keyOf = new Map(questions.map((q) => [q.sha, core.questionKey(q)] as const));
 const modelId = env("JEV_MODEL", "jev-latest");
 const layout = env("JEV_LAYOUT", "content-first") as JudgeLayout;   // see eval-test.ts
+const inCallConfirm = env("JEV_IN_CALL_CONFIRM", "1") !== "0";       // see eval-test.ts
 const sameRun = (r: Out) => r.rulesVer === bundle.rulesVer && r.model === modelId && (r.layout ?? "content-first") === layout;
 type Probs = Record<string, number>;
 type Out = { id: string; rulesVer: string; model: string; layout?: JudgeLayout; ok: boolean; labels?: Record<string, number>; primary?: Record<string, Probs>; copy?: Record<string, Probs> };
@@ -36,7 +37,7 @@ if (phase === "collect") {
   const [inPath, outPath, conc] = [a1!, a2!, Number(a3 ?? 32)];
   const models = createModels();
   models.setProvider(jevProvider({ baseUrl: env("JEV_BASE_URL"), apiKey: env("JEV_API_KEY"), modelId }));
-  const judge = piJudge(models, jevModel(models, modelId), { inCallConfirm: true, timeoutMs: 30_000, layout });
+  const judge = piJudge(models, jevModel(models, modelId), { inCallConfirm, timeoutMs: 30_000, layout });
   const done = new Set(readJsonl<Out>(outPath).filter((r) => r.ok && sameRun(r)).map((r) => r.id));
   const rows = readJsonl<{ id: string; text: string; labels: Record<string, number> }>(inPath).filter((r) => !done.has(r.id));
   let next = 0, ok = 0, failed = 0;

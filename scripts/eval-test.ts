@@ -58,6 +58,7 @@ type Probs = Record<string, number>;
 type Row = { id: string; view: string; textSha: string; rulesVer: string; model: string; layout?: JudgeLayout; ok: boolean; primary?: Record<string, Probs>; copy?: Record<string, Probs>; tries: number };
 const readJsonl = <T>(p: string): T[] => existsSync(p) ? readFileSync(p, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as T) : [];
 const LAYOUT = env("JEV_LAYOUT", "content-first") as JudgeLayout;   // rules-first: rules at the front of the state (an open judge trained on it)
+const IN_CALL_CONFIRM = env("JEV_IN_CALL_CONFIRM", "1") !== "0";   // 0: no shuffled-option copies in the request (a kevfast KF_CONFIRM=off judge)
 const identity = (it: Item) => `${it.id}|${VIEW}|${sha(it[VIEW])}|${bundle.rulesVer}|${JEV}|${LAYOUT}`;
 
 // calibrated answer records for one row (primary, then the in-call copy confirming it), exactly as the runtime builds them
@@ -79,7 +80,7 @@ const fastRoute = (cal: core.Calibrator, r: Row): string => {
 if (phase === "collect") {
   const models = createModels();
   models.setProvider(jevProvider({ baseUrl: env("JEV_BASE_URL"), apiKey: env("JEV_API_KEY"), modelId: JEV }));
-  const judge = piJudge(models, jevModel(models, JEV), { inCallConfirm: true, timeoutMs: 30_000, layout: LAYOUT });
+  const judge = piJudge(models, jevModel(models, JEV), { inCallConfirm: IN_CALL_CONFIRM, timeoutMs: 30_000, layout: LAYOUT });
   const done = new Set(readJsonl<Row>(OUT).filter((r) => r.ok).map((r) => `${r.id}|${r.view}|${r.textSha}|${r.rulesVer}|${r.model}|${r.layout ?? "content-first"}`));
   const todo = items.filter((it) => !done.has(identity(it)));
   const t0 = Date.now();
@@ -102,7 +103,7 @@ if (phase === "collect") {
     }
   }));
   const manifest = { phase, view: VIEW, gitHead: (() => { try { return execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim(); } catch { return "unknown"; } })(),
-    scriptSha: sha(readFileSync("scripts/eval-test.ts")), rulesVer: bundle.rulesVer, judge: JEV, layout: LAYOUT, split: "split-v1", splitPart: PART, splitManifestSha: sha(readFileSync("eval/split-v1.manifest.jsonl")),
+    scriptSha: sha(readFileSync("scripts/eval-test.ts")), rulesVer: bundle.rulesVer, judge: JEV, layout: LAYOUT, inCallConfirm: IN_CALL_CONFIRM, split: "split-v1", splitPart: PART, splitManifestSha: sha(readFileSync("eval/split-v1.manifest.jsonl")),
     evalSha: sha(readFileSync("data/eval/eval20k.jsonl")), items: items.length, todo: todo.length, ok, failed, requests, concurrency: Number(concArg ?? 16), retries: "up to 3 tries per item",
     started: new Date(t0).toISOString(), ended: new Date().toISOString(), outputSha: sha(readFileSync(OUT)) };
   writeFileSync(join(outDir, `manifest-collect-${VIEW}-${Date.now()}.json`), JSON.stringify(manifest, null, 1));
