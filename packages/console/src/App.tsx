@@ -78,7 +78,7 @@ export function App() {
     case "reviews": body = <Reviews />; break;
     case "contents": body = <ContentDetail contentId={parts[1] ?? ""} />; break;
     case "human": body = <Human selected={parts[1] ?? null} />; break;
-    case "appeals": body = <Appeals />; break;
+    case "appeals": body = <Appeals preset={parts[1] ?? null} />; break;
     case "rules": body = <Rules />; break;
     default: body = <Overview />;
   }
