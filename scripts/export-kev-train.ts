@@ -10,7 +10,9 @@
 // LAYOUT=rules-first: the request layout of eval-test / fit-calib with JEV_LAYOUT=rules-first (packages/judges rulesFirst):
 // the state starts with every question the comment scene asks (rules, exceptions, injection guard), in the order the fast
 // path asks them, and each labelled question is a short line; the state is byte-identical to what the judge is later sent.
-// usage: [EXCLUDE=...] [LAYOUT=content-first|rules-first] node --experimental-strip-types scripts/export-kev-train.ts <split=train|val> <out.jsonl> [limit]
+// QUESTIONS=short (with LAYOUT=rules-first): each question is the rule key with the bare option names and no descriptions,
+// the form python/kevfast serves with KF_QUESTIONS=short (kev renders an option with an empty description as its name).
+// usage: [EXCLUDE=...] [LAYOUT=content-first|rules-first] [QUESTIONS=full|short] node --experimental-strip-types scripts/export-kev-train.ts <split=train|val> <out.jsonl> [limit]
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import * as core from "../packages/core/src/index.ts";
@@ -28,7 +30,10 @@ if (LAYOUT !== "content-first" && LAYOUT !== "rules-first") throw new Error(`unk
 // the scene's full question list, as eval-test.ts builds it (so the rules block matches the requests exactly)
 const sceneQs = [...core.rulesFor(bundle, "comment").flatMap((r) => [r.question, ...r.exceptions.map((x) => x.question)]), ...(bundle.scenes.comment.injectionGuard ? [bundle.scenes.comment.injectionGuard.question] : [])];
 const rf = LAYOUT === "rules-first" ? rulesFirst(buildQuestions(sceneQs, true).questions) : undefined;
-const wire = rf ? rf.questions : buildQuestions(rules.map((r) => r.question), false).questions;
+const SHORT = (process.env.QUESTIONS ?? "full") === "short";
+if (SHORT && !rf) throw new Error("QUESTIONS=short needs LAYOUT=rules-first (the rule text has to be in the state)");
+const shortQ = (k: string, q: { criteria: Record<string, string> }) => ({ type: "choice", instructions: k, criteria: Object.fromEntries(Object.keys(q.criteria).map((o) => [o, ""])) });
+const wire = rf ? (SHORT ? Object.fromEntries(Object.entries(rf.questions).map(([k, q]) => [k, shortQ(k, q as never)])) : rf.questions) : buildQuestions(rules.map((r) => r.question), false).questions;
 const ids = new Set(jsonl<{ id: string; split: string }>("data/eval/split-v1.jsonl").filter((r) => r.split === split).map((r) => r.id));
 const exclude = new Set((process.env.EXCLUDE ?? "").split(",").filter(Boolean).flatMap((f) => f.endsWith(".jsonl") ? jsonl<{ id: string }>(f).map((r) => r.id) : readFileSync(f, "utf8").split(/\s+/).filter(Boolean)));
 const items = jsonl<{ id: string; text: string; text_strip: string }>("data/eval/eval20k.jsonl").filter((x) => ids.has(x.id));
@@ -65,6 +70,6 @@ for (const it of items) {
   if (limitArg && lines.length >= Number(limitArg)) break;
 }
 writeFileSync(out, lines.join("\n") + "\n");
-const manifest = { split, out, layout: LAYOUT, records: lines.length, exclude: process.env.EXCLUDE ?? "", excluded: exclude.size, rulesVer: bundle.rulesVer, sourceMap: "source-label-map-v1", outputSha: sha(readFileSync(out)), counts };
+const manifest = { split, out, layout: LAYOUT, questions: SHORT ? "short" : "full", records: lines.length, exclude: process.env.EXCLUDE ?? "", excluded: exclude.size, rulesVer: bundle.rulesVer, sourceMap: "source-label-map-v1", outputSha: sha(readFileSync(out)), counts };
 writeFileSync(`${out}.manifest.json`, JSON.stringify(manifest, null, 1));
 console.log(JSON.stringify(manifest, null, 1));

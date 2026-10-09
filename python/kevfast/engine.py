@@ -18,7 +18,9 @@ never see each other, as in Kev. With layout=native and questions=full the engin
 Switches (Options, or KF_* environment variables for serve.py):
   layout     native | rules_first   rules_first: a state that starts with a "rules" field is split; the rules are the cached
                                     prefix and only the rest is computed per request
-  questions  full | short           short: a branch is the rule key and short option labels; the rule text lives only in the prefix
+  questions  full | short           short: a branch is the rule key and the option names ([<q>] ABUSE-001 [<opt>] violate ...);
+                                    the rule text and option descriptions live only in the prefix. The request's own
+                                    question wording is ignored (scripts/export-kev-train.ts QUESTIONS=short trains this form)
   confirm    on | off               off: drop the shuffled-option copies ("<key>#confirm") before computing
   fp8        off | on | auto        FP8 (e4m3) GEMMs, per-row weight / per-token activation scales; auto: only for passes of
                                     at least fp8_min_tokens tokens (small passes lose to the quantisation overhead)
@@ -46,7 +48,6 @@ import torch
 import torch.nn.functional as F
 
 LAYOUTS, QUESTIONS, FP8_MODES, BRANCH_MODES = ("native", "rules_first"), ("full", "short"), ("off", "on", "auto"), ("two_pass", "rows", "auto")
-SHORT_LABELS = {"violate": "违规", "none": "不违规", "unknown": "无法判断"}
 SDPA_GATHER_BYTES = int(os.environ.get("KF_SDPA_GATHER_MB", 1024)) << 20   # per attention layer: gather the shared prefix per segment (fused SDPA) up to this size, else LSE merge
 
 
@@ -579,7 +580,7 @@ class Engine:
         if hit is not None: return hit
         from kev.model import user_tokens
         instr = q["key"] if self.opts.questions == "short" else q["instr"]
-        opts = [SHORT_LABELS.get(n, n) for n in q["names"]] if self.opts.questions == "short" else q["options"]
+        opts = list(q["names"]) if self.opts.questions == "short" else q["options"]   # short: the option names (violate / none / unknown)
         b = [self.q_id] + user_tokens(self.tok, instr)
         for o in opts: b += [self.o_id] + user_tokens(self.tok, o) + [self.c_id]
         b = b + [self.d_id]
