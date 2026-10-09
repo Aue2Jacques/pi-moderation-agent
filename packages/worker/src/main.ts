@@ -1,5 +1,7 @@
 // Process W entry. Opens app.db + session.sqlite, runs the startup barrier, admission loop, heartbeat/pump loops, and a small HTTP on 127.0.0.1:8081.
 // usage: node --experimental-strip-types packages/worker/src/main.ts
+// DEMO=1: demo mode, no .env and no API key: the agent model is the scripted agent and the judge the scripted judge of
+// demo.ts; leases, budgets, submit checks and recovery are unchanged. Started by scripts/console.ts.
 import { createServer } from "node:http";
 import { mkdirSync, readFileSync } from "node:fs";
 import { acquireSingleInstanceLock } from "./flock.ts";
@@ -10,6 +12,8 @@ import * as core from "@mod/core";
 import { identityCalibrator, jevModel, jevProvider, loadCalibrator } from "@mod/judges";
 import { loadBundle } from "@mod/policy";
 import { piJudge } from "./pi-judge.ts";
+import { demoAgentProvider, demoCalibrator, demoJudge, demoPrices } from "./demo.ts";
+import type { JudgeClient } from "./judge-client.ts";
 import { relayProvider } from "./relay.ts";
 import { Worker } from "./worker.ts";
 
@@ -33,35 +37,49 @@ export const INSTRUCTIONS = [
 ].join("");
 
 async function main(): Promise<void> {
-  loadDotEnv();
+  const demo = process.env["DEMO"] === "1";
+  if (!demo) loadDotEnv();   // demo mode never reads .env
   mkdirSync("data", { recursive: true });
-  // single-instance lock (§7.3 step 0; OS-level since dev plan 2026-10-08 R1)
-  if (!acquireSingleInstanceLock("data/w.lock.db")) { console.error("another worker holds data/w.lock.db"); process.exit(2); }
+  // single-instance lock (§7.3 step 0; OS-level since dev plan 2026-10-08 R1); W_LOCK lets a demo run beside a real one
+  const lock = env("W_LOCK", "data/w.lock.db");
+  if (!acquireSingleInstanceLock(lock)) { console.error(`another worker holds ${lock}`); process.exit(2); }
   const db = core.openAppDb(env("APP_DB", "data/app.db"), "worker");
   core.ensureSchema(db);
   const { bundle, texts } = loadBundle("rules", "config/scenes.yaml");
   const pricesRaw = readFileSync("config/prices.yaml", "utf8");
-  const prices: core.PriceTable = { pricesVer: `prices@${core.sha256(pricesRaw).slice(0, 12)}`, perMillion: (parse(pricesRaw) as { models: core.PriceTable["perMillion"] }).models };
+  const realPrices: core.PriceTable = { pricesVer: `prices@${core.sha256(pricesRaw).slice(0, 12)}`, perMillion: (parse(pricesRaw) as { models: core.PriceTable["perMillion"] }).models };
+  const prices = demo ? demoPrices(realPrices) : realPrices;
   const models = createModels();
-  models.setProvider(relayProvider({ baseUrl: env("RELAY_BASE_URL"), apiKey: env("RELAY_API_KEY") }));
-  models.setProvider(jevProvider({ baseUrl: env("JEV_BASE_URL"), apiKey: env("JEV_API_KEY"), modelId: env("JEV_MODEL", "jev-latest") }));
-  const judge = piJudge(models, jevModel(models, env("JEV_MODEL", "jev-latest")), { inCallConfirm: true, timeoutMs: envNum("JUDGE_TIMEOUT_MS", 8000) });
-  const agentModel = env("AGENT_MODEL", "qwen3.8-flash");
+  let judge: JudgeClient;
+  let agent: { provider: string; modelId: string };
+  if (demo) {
+    const scripted = demoAgentProvider({ delayMs: envNum("DEMO_AGENT_MS", 700) });
+    models.setProvider(scripted.provider);
+    agent = scripted.model;
+    judge = demoJudge({ delayMs: envNum("DEMO_JUDGE_MS", 350) });
+  } else {
+    models.setProvider(relayProvider({ baseUrl: env("RELAY_BASE_URL"), apiKey: env("RELAY_API_KEY") }));
+    models.setProvider(jevProvider({ baseUrl: env("JEV_BASE_URL"), apiKey: env("JEV_API_KEY"), modelId: env("JEV_MODEL", "jev-latest") }));
+    judge = piJudge(models, jevModel(models, env("JEV_MODEL", "jev-latest")), { inCallConfirm: true, timeoutMs: envNum("JUDGE_TIMEOUT_MS", 8000) });
+    agent = { provider: "a6api", modelId: env("AGENT_MODEL", "qwen3.8-flash") };
+  }
+  const agentModel = agent.modelId;
   const strong = env("STRONG_MODEL", "deepseek-v4.1-flash");   // model whitelist (owner 2026-10-08); escalation is off unless FLAG_ESCALATION=true
   const calibMode = env("CALIB_MODE", "strict");
   if (calibMode !== "strict" && calibMode !== "identity") throw new Error(`CALIB_MODE must be strict|identity, got ${calibMode}`);
-  const calibrator = calibMode === "identity" ? identityCalibrator() : loadCalibrator(env("CALIB_DIR", "calib"), env("JEV_MODEL", "jev-latest"));
+  const calibrator = demo ? demoCalibrator(env("CALIB_DIR", "calib"), env("JEV_MODEL", "jev-latest"), bundle.rulesVer)
+    : calibMode === "identity" ? identityCalibrator() : loadCalibrator(env("CALIB_DIR", "calib"), env("JEV_MODEL", "jev-latest"));
   const workerId = `w-${process.pid}-${Date.now()}`;
   const sessionDb = env("SESSION_DB", "data/session.sqlite");
   core.ensurePrivateDbFile(sessionDb);   // conversation content lives here: owner-only like app.db (dev plan R9c)
   const worker = await Worker.open({
     db, storage: await openNodeSqliteStorage(sessionDb), models, bundle, ruleTexts: texts, workerId, judge, prices, calibrator,
     cfg: { ...core.DEFAULT_CONFIG, leaseTtlMs: envNum("LEASE_TTL_MS", 30_000), deadlineMs: envNum("DEADLINE_MS_SHORT", 60_000), maxAttempts: envNum("MAX_ATTEMPTS", 3) },
-    flags: { escalation: env("FLAG_ESCALATION", "false") === "true" }, maxModelCalls: envNum("MAX_MODEL_CALLS", 20), strongModel: { provider: "a6api", modelId: strong },
-    now: () => Date.now(), admitMax: envNum("ADMIT_MAX", 10), modelFor: () => ({ provider: "a6api", modelId: agentModel }), instructions: INSTRUCTIONS,
+    flags: { escalation: !demo && env("FLAG_ESCALATION", "false") === "true" }, maxModelCalls: envNum("MAX_MODEL_CALLS", 20), strongModel: { provider: "a6api", modelId: strong },
+    now: () => Date.now(), admitMax: envNum("ADMIT_MAX", 10), modelFor: () => agent, instructions: INSTRUCTIONS,
   });
   const started = await worker.start();
-  console.log(JSON.stringify({ msg: "worker up", workerId, ...started, agentModel, calib_mode: calibrator.mode, calib_ver: calibrator.calibVer }));
+  console.log(JSON.stringify({ msg: "worker up", mode: demo ? "demo" : "real", workerId, ...started, agentModel, calib_mode: calibrator.mode, calib_ver: calibrator.calibVer }));
   worker.startLoops();
   const admit = setInterval(() => { worker.admitOnce().catch((e) => console.error("admit error", core.redact(e))); }, envNum("ADMIT_MS", 1000));
   admit.unref();
