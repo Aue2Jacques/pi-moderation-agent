@@ -1,5 +1,6 @@
 """kevfast: a packed, switchable inference engine for Kev checkpoints on the hybrid Qwen3.5 backbone (owner 2026-10-09:
-"把优化到极致的情况先封装好……把每一个优化的功能封装成一个可以开关的选项").
+package the fastest configuration first, with every optimisation as its own switch, so accuracy changes can be traced
+to one switch later).
 
 Kev's own serving runs every request as [state] + one row per question; every row carries the whole rule text, and rows
 are padded to a common length. This engine runs the same checkpoint as a three-level tree of token segments, packed into
