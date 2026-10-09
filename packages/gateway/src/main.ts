@@ -3,19 +3,20 @@
 // DEMO=1: demo mode, no .env and no API key: scripted judge, the repository's fitted temperatures, demo prices and demo
 // account history (packages/worker/src/demo.ts); everything else is the normal gateway. Started by scripts/console.ts.
 import { readFileSync, mkdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { parse } from "yaml";
 import { createModels } from "@earendil-works/pi-ai/models";
 import * as core from "@mod/core";
 import { identityCalibrator, jevModel, jevProvider, loadCalibrator } from "@mod/judges";
 import { loadBundle } from "@mod/policy";
-import { DEMO_AGENT_MODEL, DEMO_JUDGE_MODEL, DEMO_SAMPLES, demoCalibrator, demoJudge, demoPrices, piJudge, seedDemoHistory, type JudgeClient } from "@mod/worker";
+import { DEMO_AGENT_MODEL, DEMO_JUDGE_MODEL, DEMO_SAMPLES, demoCalibrator, demoImageText, demoJudge, demoPrices, loadDemoImages, piJudge, seedDemoHistory, type JudgeClient } from "@mod/worker";
 import { Gateway, DEFAULT_GATEWAY_CONFIG } from "./gateway.ts";
 import { dirImageStore, relayImageChecker } from "./image.ts";
 import { createHttpServer } from "./http.ts";
 import { readCalibFiles } from "./console-api.ts";
 import { DemoTraffic, MAX_PER_SEC, SIM_PREFIX, SIM_REVIEWER } from "./demo-traffic.ts";
 import { DemoRetention } from "./demo-retention.ts";
+import { demoImageChecker, storeImage } from "./demo-images.ts";
 
 export function loadDotEnv(): void {
   try {
@@ -48,9 +49,14 @@ async function main(): Promise<void> {
   const calibJudge = env("JEV_MODEL", "jev-latest");
   const calibrator = demo ? demoCalibrator(env("CALIB_DIR", "calib"), calibJudge, bundle.rulesVer)
     : calibMode === "identity" ? identityCalibrator() : loadCalibrator(env("CALIB_DIR", "calib"), calibJudge);
+  // demo images: the preset screenshots (demo/images) go into the demo data dir's image store under their refs; the
+  // scripted judge reads a preset's known content, the scripted image check answers through the real image channel
+  const demoImgDir = join(dirname(resolve(env("APP_DB", "data/app.db"))), "images");
+  const presets = demo ? loadDemoImages(env("DEMO_IMAGES_DIR", "demo/images")) : [];
+  for (const x of presets) storeImage(demoImgDir, x.bytes, "png");
   let judge: JudgeClient;
   if (demo) {
-    judge = demoJudge({ delayMs: envNum("DEMO_JUDGE_MS", 350) });
+    judge = demoJudge({ delayMs: envNum("DEMO_JUDGE_MS", 350), imageText: demoImageText(db, presets) });
     seedDemoHistory(db, Date.now());
   } else {
     const models = createModels();
@@ -70,6 +76,8 @@ async function main(): Promise<void> {
     // stage ③ minimal image channel, off unless both are set: IMAGE_DIR (where image refs resolve) and IMAGE_MODEL (TEMPORARY
     // relay implementation; the online interface is the owner's decision)
     ...(!demo && process.env["IMAGE_DIR"] && process.env["IMAGE_MODEL"] ? { imageStore: dirImageStore(env("IMAGE_DIR")), imageChecker: relayImageChecker({ baseUrl: env("RELAY_BASE_URL"), apiKey: env("RELAY_API_KEY"), model: env("IMAGE_MODEL") }) } : {}),
+    // demo: the scripted image check behind the same channel; middle-band image content goes to the agent first
+    ...(demo ? { imageStore: dirImageStore(demoImgDir), imageChecker: demoImageChecker(presets, { delayMs: envNum("DEMO_VISION_MS", 300) }), imageToAgent: true } : {}),
   });
   gateway.startLoops({ intakeMs: envNum("INTAKE_MS", demo ? 200 : 500) });
   const configured = (() => { try { return (JSON.parse(readFileSync("config/reviewers.json", "utf8")) as { reviewers: string[] }).reviewers; } catch { return ["rev1"]; } })();
@@ -95,6 +103,11 @@ async function main(): Promise<void> {
       samples: demo ? DEMO_SAMPLES.map((x) => ({ id: x.id, title: x.title, route: x.route, scene: x.scene, text: x.text, account_id: x.accountId, parent: x.parent ? { text: x.parent.text, account_id: x.parent.accountId } : null })) : [],
       calibFiles: readCalibFiles(env("CALIB_DIR", "calib"), calibJudge), streamPollMs: envNum("STREAM_POLL_MS", 250), livePollMs: envNum("LIVE_POLL_MS", 500),
       ...(trafficApi ? { traffic: trafficApi, simPrefix: SIM_PREFIX, simReviewer: SIM_REVIEWER } : {}),
+      // image intake: demo -> its data dir + presets; real -> IMAGE_DIR when set (then the existing image channel, or
+      // image_unsupported -> a person when IMAGE_MODEL is not set); otherwise images are refused
+      ...(demo ? { images: { dir: demoImgDir, note: "演示模式：图片由脚本判官模拟（预置截图按已知内容打分，其他图片给中间带概率）",
+        samples: presets.map((x) => ({ id: x.id, title: x.title, route: x.route, scene: x.scene, account_id: x.accountId, url: `/api/demo/image-samples/${x.id}`, ref: x.ref, file: x.file })) } }
+        : process.env["IMAGE_DIR"] ? { images: { dir: resolve(env("IMAGE_DIR")) } } : {}),
     } });
   const port = envNum("G_PORT", 8080);
   server.listen(port, "127.0.0.1", () => console.log(JSON.stringify({ msg: "gateway up", port, mode: demo ? "demo" : "real", ...(traffic ? { demo_traffic_per_sec: traffic.cfg.perSec } : {}), rules_ver: bundle.rulesVer, prices_ver: prices.pricesVer, calib_mode: calibrator.mode, calib_ver: calibrator.calibVer, note: demo ? "演示模式：判官与 agent 是脚本，数字只作演示" : calibrator.mode === "identity" ? "未校准联调模式：原始概率直接参与处置，结果不是校准门槛下的自动审核" : calibrator.calibVer === "calib@none" ? "strict 且无校准文件：快判只会产生疑似，不会自动放行/拦截" : "strict：按校准文件" })));

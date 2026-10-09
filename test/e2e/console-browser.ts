@@ -1,13 +1,17 @@
 // Browser-level smoke test of the web console in demo mode (headless Chromium via playwright-core): submit a sample and
 // watch the live timeline, decide a human task, file an appeal, open a review's restricted view; with the demo traffic
 // running: lists and overview numbers change on their own (no reload), new rows are highlighted, the simulated reviewer
-// is marked, the traffic control pauses / resumes; every page at 1440 / 1024 / 390 px in both themes passes the
-// text-overflow audit (overflow.ts); the narrow-screen drawer navigates; reduced motion turns animations off.
+// is marked, the traffic control pauses / resumes and switches rate tiers; the overview's pipeline and throughput are
+// drawn and move; images: a preset screenshot and an uploaded file go through the timeline with the vision step; at the
+// top tier (50 a second) the overview runs for 30 s while the frame rate and long tasks are measured; every page at
+// 1440 / 1024 / 390 px in both themes passes the text-overflow audit (overflow.ts); the narrow-screen drawer
+// navigates; reduced motion turns animations off.
 // Fails on any page error or console error.
 // Needs a browser once: node_modules/.bin/playwright-core install chromium-headless-shell (plus its system libraries;
 // on a machine without them, LD_LIBRARY_PATH / FONTCONFIG_FILE can point at locally extracted copies).
 // usage: node --experimental-strip-types --no-warnings test/e2e/console-browser.ts [--shots dir]   (pnpm run e2e:browser)
 import { mkdirSync } from "node:fs";
+import { deflateSync } from "node:zlib";
 import { join } from "node:path";
 import { chromium, type Page } from "playwright-core";
 import { launchDemo } from "./launch.ts";
@@ -21,9 +25,21 @@ let failed = 0, passed = 0;
 const check = (name: string, ok: boolean, detail = ""): void => { if (ok) passed++; else failed++; console.log(`${ok ? "ok  " : "FAIL"} ${name}${!ok && detail ? ` — ${detail}` : ""}`); };
 const shot = async (page: Page, name: string): Promise<void> => { if (shots) await page.screenshot({ path: join(shots, `${name}.png`), fullPage: true }); };
 
-const app = await launchDemo({ DEMO_AGENT_MS: "300", DEMO_JUDGE_MS: "150", DEMO_TRAFFIC_PER_MIN: "60", DEMO_SIM_MIN_AGE_MS: "4000", DEMO_SIM_THINK_MS: "1500" });
+const app = await launchDemo({ DEMO_AGENT_MS: "300", DEMO_JUDGE_MS: "150", DEMO_TRAFFIC_PER_SEC: "1", DEMO_SIM_MIN_AGE_MS: "4000", DEMO_SIM_THINK_MS: "1500" });
+const fpsArg = process.argv.indexOf("--fps-secs");
+const FPS_SECS = fpsArg >= 0 ? Number(process.argv[fpsArg + 1]) : 30;
+/** A small PNG (8x8, made-up pixels). */
+function tinyPng(): Buffer {
+  const table = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+  const crc = (b: Buffer): number => { let x = 0xffffffff; for (const v of b) x = table[(x ^ v) & 255]! ^ (x >>> 8); return (x ^ 0xffffffff) >>> 0; };
+  const chunk = (type: string, data: Buffer): Buffer => { const len = Buffer.alloc(4); len.writeUInt32BE(data.length); const td = Buffer.concat([Buffer.from(type), data]); const c = Buffer.alloc(4); c.writeUInt32BE(crc(td)); return Buffer.concat([len, td, c]); };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(8, 0); ihdr.writeUInt32BE(8, 4); ihdr[8] = 8; ihdr[9] = 2;
+  const raw = Buffer.alloc(25 * 8); for (let i = 0; i < raw.length; i++) raw[i] = (i * 13) % 256;
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
+}
 const errors: string[] = [];
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+let imageContent = "";
 try {
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, locale: "zh-CN" });
@@ -79,10 +95,34 @@ try {
   check("restricted view shows the original text", true);
   await shot(page, "6-detail-restricted");
 
+  // 4b. images: a preset screenshot (agent, then takedown) and an uploaded file (agent, then a person)
+  await page.goto(`${app.base}/#/track`);
+  await page.locator("button.img-sample", { hasText: "辱骂截图" }).click();
+  await page.locator(".sec-h h3", { hasText: "视觉编码" }).first().waitFor({ timeout: 20_000 });
+  await page.locator(".verdict").first().waitFor({ timeout: 20_000 });
+  check("preset screenshot: thumbnail, vision step and demo note on the timeline", (await page.locator(".thumb img").count()) >= 1 && (await page.locator(".note-demo").first().innerText()).includes("演示模式"));
+  check("preset screenshot: the agent takes it down", (await page.locator(".verdict").first().innerText()).includes("下架"));
+  await shot(page, "4b-track-image-preset");
+  await page.locator('input[type="file"]').setInputFiles({ name: "随手一张.png", mimeType: "image/png", buffer: tinyPng() });
+  await page.locator(".picked").waitFor();
+  check("picked image previewed before submitting", (await page.locator(".picked img").count()) === 1);
+  await page.getByRole("button", { name: "提交并追踪" }).click();
+  await page.getByRole("link", { name: "去人工复核" }).waitFor({ timeout: 30_000 });
+  check("uploaded image: shown from this tab, goes agent -> person", (await page.locator(".thumb img").count()) >= 1 && (await page.locator(".stage", { hasText: "视觉编码" }).count()) === 1);
+  imageContent = decodeURIComponent(page.url().split("/track/")[1] ?? "");
+  await shot(page, "4c-track-image-upload");
+  await page.locator('input[type="file"]').setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("hello") });
+  check("a non-image file is refused before upload", (await page.locator(".alert.bad").first().innerText()).includes("只接受"));
+
   // 5. overview and rules, light and dark
   await page.goto(`${app.base}/#/overview`);
   await page.getByText("各路占比").waitFor();
   await page.waitForTimeout(1500);
+  check("pipeline drawn: canvas and seven nodes plus the appeal source", (await page.locator(".flow canvas.dots").count()) === 1 && (await page.locator(".fnode").count()) === 8);
+  check("throughput curve drawn", (await page.locator(".tput path.ln").getAttribute("d"))?.startsWith("M") ?? false);
+  const big = async (): Promise<number> => Number((await page.locator(".hero-big .v .num").innerText()).replace(/[^\d.]/g, ""));
+  await page.waitForTimeout(2500);
+  check(`headline throughput is live (${await big()} /s)`, (await big()) > 0);
   await shot(page, "7-overview");
   await page.goto(`${app.base}/#/rules`);
   await page.getByText("场景策略").waitFor();
@@ -125,10 +165,41 @@ try {
   check("pausing the traffic stops it", (await gen()) === g0);
   await page.getByRole("button", { name: "继续模拟流量" }).click();
   await page.getByRole("button", { name: "暂停模拟流量" }).waitFor();
+  await page.getByRole("radio", { name: "每秒 20 条" }).click();
+  await page.waitForTimeout(500);
+  const st = (await (await fetch(`${app.base}/api/demo/traffic`)).json()) as { per_sec: number };
+  check(`rate tier from the top bar (${st.per_sec}/s)`, st.per_sec === 20);
+  await page.locator(".traffic .tiers button.on", { hasText: "20" }).waitFor();
+
+  // 6b. top tier: the overview runs for FPS_SECS seconds; frames and long tasks are counted in the page
+  await fetch(`${app.base}/api/demo/traffic`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ per_sec: 50 }) });
+  await page.goto(`${app.base}/#/overview`);
+  await page.locator(".flow canvas.dots").waitFor();
+  await page.waitForTimeout(3000);
+  const perf = await page.evaluate(async (secs: number) => {
+    let frames = 0, worst = 0, last = performance.now();
+    const long: number[] = [];
+    const po = new PerformanceObserver((l) => { for (const e of l.getEntries()) long.push(e.duration); });
+    try { po.observe({ type: "longtask", buffered: false }); } catch { /* not supported */ }
+    const gaps: number[] = [];
+    await new Promise<void>((done) => {
+      const end = performance.now() + secs * 1000;
+      const tick = (t: number): void => { frames++; gaps.push(t - last); worst = Math.max(worst, t - last); last = t; if (t < end) requestAnimationFrame(tick); else done(); };
+      requestAnimationFrame(tick);
+    });
+    po.disconnect();
+    gaps.sort((a, b) => a - b);
+    return { fps: frames / secs, p95: gaps[Math.floor(gaps.length * 0.95)] ?? 0, worst, long: long.length, longMs: long.reduce((a, b) => a + b, 0), dots: document.querySelectorAll(".feed-row").length };
+  }, FPS_SECS);
+  console.log(`     top tier, ${FPS_SECS} s on the overview: ${perf.fps.toFixed(1)} fps, frame gap p95 ${perf.p95.toFixed(1)} ms, worst ${perf.worst.toFixed(0)} ms, long tasks ${perf.long} (${perf.longMs.toFixed(0)} ms)`);
+  check(`overview stays smooth at 50/s (${perf.fps.toFixed(1)} fps, p95 frame gap ${perf.p95.toFixed(0)} ms)`, perf.fps >= 24 && perf.p95 < 80);
+  check(`latest-review list stays bounded (${perf.dots} rows)`, perf.dots <= 9);
+  await shot(page, "11-overview-top-tier");
+  await fetch(`${app.base}/api/demo/traffic`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ per_sec: 5 }) });
 
   // 7. text-overflow audit: every page, three widths, both themes
   const ids = { detail: (await (await fetch(`${app.base}/api/review-list?limit=1&route=agent`)).json() as { items: { content_id: string }[] }).items[0]?.content_id ?? "" };
-  const pages = ["overview", "track", "reviews", `contents/${encodeURIComponent(ids.detail)}`, "human", "appeals", "rules"];
+  const pages = ["overview", "track", `track/${encodeURIComponent(imageContent)}`, "reviews", `contents/${encodeURIComponent(ids.detail)}`, "human", "appeals", "rules"];
   const problems: string[] = [];
   for (const theme of ["light", "dark"] as const) {
     for (const width of [1440, 1024, 390]) {

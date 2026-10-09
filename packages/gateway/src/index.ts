@@ -10,3 +10,4 @@ export * from "./console-actions.ts";
 export * from "./demo-traffic.ts";
 export * from "./live.ts";
 export * from "./demo-retention.ts";
+export * from "./demo-images.ts";

@@ -6,7 +6,7 @@
 // Real-mode G runs in a scratch directory holding only links to rules/, config/ and calib/ (no .env to read) with an
 // unreachable judge address; nothing is submitted, so no judge call is made.
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, symlinkSync } from "node:fs";
+import { mkdtempSync, readdirSync, symlinkSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -241,6 +241,9 @@ describe("demo retention with real G and W", () => {
   }, 90_000);
 });
 
+/** 1x1 PNG */
+const PNG_1PX = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
 describe("real mode never generates traffic", () => {
   let g: ChildProcess | undefined;
   afterAll(() => { g?.kill("SIGTERM"); });
@@ -268,10 +271,45 @@ describe("real mode never generates traffic", () => {
     expect((await fetch(`${base}/api/demo/traffic`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ per_sec: 20 }) })).status).toBe(404);
     await sleep(500);
     expect(((await (await fetch(`${base}/api/stats`)).json()) as Stats).contents).toBe(0);
+    // images: refused without an image store (IMAGE_DIR); no demo presets
+    const img = await fetch(`${base}/api/contents`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ scene: "comment", image: { data: PNG_1PX } }) });
+    expect(img.status).toBe(400);
+    expect(((await img.json()) as { code: string }).code).toBe("E_IMAGE_DISABLED");
+    expect(cfg.images).toMatchObject({ enabled: false, samples: [], note: null });
+    expect((await fetch(`${base}/api/demo/image-samples/img-normal`)).status).toBe(404);
     // no demo retention in real mode: the rollup table is never created
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(join(dir, "app.db"), { readOnly: true });
     expect(db.prepare("SELECT name FROM sqlite_master WHERE name='console_rollup'").get()).toBeUndefined();
     db.close();
+  }, 40_000);
+});
+
+describe("real mode with an image store: images take the existing image channel", () => {
+  let g: ChildProcess | undefined;
+  afterAll(() => { g?.kill("SIGTERM"); });
+
+  it("IMAGE_DIR set, no image model: the image is stored and the content goes to a person (image_unsupported), no judge call", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "real-img-"));
+    for (const x of ["rules", "config", "calib"]) symlinkSync(join(ROOT, x), join(dir, x));
+    const gp = await freePort();
+    const env: NodeJS.ProcessEnv = {
+      PATH: process.env["PATH"], HOME: process.env["HOME"], G_PORT: String(gp), APP_DB: join(dir, "app.db"), CONSOLE_DIR: join(dir, "none"),
+      JEV_BASE_URL: "http://127.0.0.1:9", JEV_API_KEY: "unused", HUMAN_REVIEW_TOKEN: TOKEN, IMAGE_DIR: join(dir, "images"), INTAKE_MS: "100",
+    };
+    g = await startProc("packages/gateway/src/main.ts", env, "gateway up", dir);
+    const base = `http://127.0.0.1:${gp}`;
+    const cfg = (await (await fetch(`${base}/api/config`)).json()) as ConsoleConfig;
+    expect(cfg.images).toMatchObject({ enabled: true, samples: [] });
+    const r = await fetch(`${base}/api/contents`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ scene: "comment", image: { data: PNG_1PX } }) });
+    expect(r.status).toBe(201);
+    const id = ((await r.json()) as { content_id: string }).content_id;
+    const sample = await fetch(`${base}/api/contents`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ scene: "comment", image_sample: "img-normal" }) });
+    expect(sample.status).toBe(400);
+    let t: ContentTimeline | undefined;
+    for (let i = 0; i < 40; i++) { t = (await (await fetch(`${base}/api/contents/${encodeURIComponent(id)}`)).json()) as ContentTimeline; if (t.reviews.length) break; await sleep(150); }
+    expect(t!.reviews[0]).toMatchObject({ trigger: "suspicious", release_reason: "image_unsupported", judge_rounds: [] });
+    expect(t!.image_note).toBeNull();
+    expect(readdirSync(join(dir, "images"))).toEqual([t!.content.images[0]!.ref]);
   }, 40_000);
 });

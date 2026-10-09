@@ -16,7 +16,10 @@ export class ActionError extends Error {
 export type ActionDeps = { db: Db; gateway: Gateway; bundle: PolicyBundle; humanAuth: core.HumanAuth; now: () => number };
 
 export type NewContentInput = {
-  text: string; scene: core.Scene; contentId?: string; accountId?: string; threadId?: string; replyTo?: string;
+  /** may be empty when the content carries an image */
+  text: string; scene: core.Scene;
+  /** refs of images already in the image store */
+  imageRefs?: string[]; contentId?: string; accountId?: string; threadId?: string; replyTo?: string;
   parent?: { text: string; accountId?: string };
 };
 export type IntakeResult =
@@ -31,8 +34,10 @@ export function intakeContent(d: ActionDeps, i: NewContentInput): IntakeResult {
   const { db } = d;
   const contentId = i.contentId ?? `c-${d.now().toString(36)}-${core.uuid().slice(0, 6)}`;
   const existing = core.readContent(db, contentId);
+  const text = i.text || null;
   if (existing) {
-    if (existing.scene === i.scene && existing.text_sha === core.sha256(i.text)) return { status: 200, contentId, duplicate: true };
+    const sameImages = (existing.image_refs ?? null) === (i.imageRefs?.length ? JSON.stringify(i.imageRefs) : null);
+    if (existing.scene === i.scene && existing.text_sha === (text === null ? null : core.sha256(text)) && sameImages) return { status: 200, contentId, duplicate: true };
     return { status: 409, code: "E_REQUEST_CONFLICT", message: `content ${contentId} exists with a different payload` };
   }
   if (d.gateway.replayPaused) return { status: 429, code: "E_BACKPRESSURE", message: "intake paused by backpressure" };
@@ -43,7 +48,7 @@ export function intakeContent(d: ActionDeps, i: NewContentInput): IntakeResult {
     replyTo = `${contentId}.parent`;
     core.contextInsert(db, { contentId: replyTo, scene: i.scene, text: i.parent.text, ...(i.parent.accountId ? { accountId: i.parent.accountId } : {}), ...(threadId ? { threadId } : {}), eventTime: at - 60_000 }, at);
   }
-  core.intakeInsert(db, { contentId, scene: i.scene, text: i.text, ...(i.accountId ? { accountId: i.accountId } : {}), ...(threadId ? { threadId } : {}), ...(replyTo ? { replyTo } : {}), eventTime: at }, at);
+  core.intakeInsert(db, { contentId, scene: i.scene, ...(text !== null ? { text } : {}), ...(i.imageRefs?.length ? { imageRefs: i.imageRefs } : {}), ...(i.accountId ? { accountId: i.accountId } : {}), ...(threadId ? { threadId } : {}), ...(replyTo ? { replyTo } : {}), eventTime: at }, at);
   return { status: 201, contentId, duplicate: false };
 }
 

@@ -10,8 +10,10 @@ import type { Gateway } from "./gateway.ts";
 import { DASHBOARD_HTML, HUMAN_HTML } from "./pages.ts";
 import { LiveHub } from "./live.ts";
 import { ActionError, claimTask, pinnedBundle, humanRule, intakeContent, openAppeal, unclaimTask } from "./console-actions.ts";
-import { buildTimeline, humanQueue, listAppeals, listReviews, rulesInfo, stats, type CalibFileInfo } from "./console-api.ts";
-import type { ConsoleConfig, DemoSampleInfo, TrafficStatus } from "./console-types.ts";
+import { buildTimeline, humanQueue, listAppeals, listReviews, rulesInfo, stats, type CalibFileInfo, type TimelineImages } from "./console-api.ts";
+import type { ConsoleConfig, DemoSampleInfo, ImageSampleInfo, TrafficStatus } from "./console-types.ts";
+import { MAX_IMAGE_BYTES, decodeImage, storeImage } from "./demo-images.ts";
+import { dirImageStore } from "./image.ts";
 
 /** What the console needs beyond the core HTTP deps. All optional: without it the API still works, with real-mode defaults. */
 export type ConsoleDeps = {
@@ -29,6 +31,9 @@ export type ConsoleDeps = {
   traffic?: { status(): TrafficStatus; set(o: { perSec?: number; paused?: boolean }): void };
   simPrefix?: string;
   simReviewer?: string;
+  /** image intake: where images are stored (the image channel's IMAGE_DIR, or the demo data dir); absent: images are
+   *  refused. Demo mode adds the preset screenshots (already stored under their refs) and a note for the timeline. */
+  images?: { dir: string; samples?: (ImageSampleInfo & { ref: string; file: string })[]; note?: string };
 };
 
 export type HttpDeps = { db: Db; gateway: Gateway; bundle: PolicyBundle; humanAuth: core.HumanAuth; now: () => number; console?: ConsoleDeps };
@@ -64,9 +69,17 @@ const html = (res: ServerResponse, body: string): void => {
   res.end(body);
 };
 class BadRequest extends Error {}
+class TooLarge extends Error {}
+/** Request bodies above this are refused (413); an image upload (base64, at most MAX_IMAGE_BYTES) fits. */
+const MAX_BODY = Math.ceil((MAX_IMAGE_BYTES * 4) / 3) + 64 * 1024;
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
-  for await (const c of req) chunks.push(c as Buffer);
+  let n = 0;
+  for await (const c of req) {
+    n += (c as Buffer).length;
+    if (n > MAX_BODY) throw new TooLarge(`request body larger than ${MAX_BODY} bytes`);
+    chunks.push(c as Buffer);
+  }
   const raw = Buffer.concat(chunks).toString("utf8");
   if (!raw) return {};
   let v: unknown;
@@ -106,6 +119,10 @@ export function createHttpServer(d: HttpDeps): Server {
   const cons: ConsoleDeps = d.console ?? { mode: "real" };
   const consoleDir = cons.dir && existsSync(join(cons.dir, "index.html")) ? cons.dir : undefined;
   const bad = (res: ServerResponse, message: string, code = "E_BAD_REQUEST"): void => json(res, 400, { code, message });
+  const imgs = cons.images;
+  const imageStore = imgs ? dirImageStore(imgs.dir) : undefined;
+  const presetByRef = new Map((imgs?.samples ?? []).map((x) => [x.ref, x] as const));
+  const timelineImages: TimelineImages = { preset: (ref) => { const x = presetByRef.get(ref); return x ? { id: x.id, title: x.title, url: x.url } : null; }, note: imgs?.note ?? null };
   const live = new LiveHub({ db, now: d.now, pollMs: cons.livePollMs ?? 500, flow: () => gateway.flow(), ...(cons.traffic ? { traffic: () => cons.traffic!.status() } : {}) });
   return createServer(async (req, res) => {
     try {
@@ -145,6 +162,7 @@ export function createHttpServer(d: HttpDeps): Server {
           demo_auth: cons.mode === "demo" ? { reviewer: d.humanAuth.reviewers[0] ?? "rev1", token: d.humanAuth.token } : null,
           samples: [...(cons.samples ?? [])],
           demo_traffic: cons.mode === "demo" && cons.traffic ? { sim_prefix: cons.simPrefix ?? "sim-", sim_reviewer: cons.simReviewer ?? "sim-reviewer" } : null,
+          images: { enabled: !!imgs, max_bytes: MAX_IMAGE_BYTES, samples: (imgs?.samples ?? []).map(({ ref: _r, file: _f, ...x }) => x), note: imgs?.note ?? null },
         };
         return json(res, 200, cfg);
       }
@@ -178,7 +196,8 @@ export function createHttpServer(d: HttpDeps): Server {
         const b = await readJson(req);
         const text = typeof b["text"] === "string" ? b["text"].trim() : "";
         const scene = String(b["scene"] ?? "");
-        if (!text) return bad(res, "text is required");
+        const wantsImage = b["image"] !== undefined || b["image_sample"] !== undefined;
+        if (!text && !wantsImage) return bad(res, "text is required (or an image)");
         if (text.length > MAX_TEXT) return bad(res, `text longer than ${MAX_TEXT} characters`);
         if (!textScenes(d.bundle).includes(scene)) return bad(res, `scene must be one of ${textScenes(d.bundle).join(", ")}`, "E_SCENE_INVALID");
         const opt = (k: string): string | undefined => (typeof b[k] === "string" && (b[k] as string).trim() ? (b[k] as string).trim() : undefined);
@@ -189,12 +208,51 @@ export function createHttpServer(d: HttpDeps): Server {
         const parentAccount = parent && typeof parent["account_id"] === "string" && parent["account_id"] ? String(parent["account_id"]) : undefined;
         if (parentAccount !== undefined && !ID_RE.test(parentAccount)) return bad(res, `parent.account_id must match ${ID_RE.source}`);
         if (parent && opt("reply_to")) return bad(res, "give either parent or reply_to, not both");
-        const out = intakeContent(d, { text, scene: scene as core.Scene, ...(opt("content_id") ? { contentId: opt("content_id")! } : {}), ...(opt("account_id") ? { accountId: opt("account_id")! } : {}),
+        // an image: uploaded (base64) or a demo preset; stored in the image store under its content hash
+        let imageRefs: string[] | undefined;
+        if (wantsImage) {
+          if (!imgs) return json(res, 400, { code: "E_IMAGE_DISABLED", message: "image intake is off (no image store configured: IMAGE_DIR)" });
+          if (b["image"] !== undefined && b["image_sample"] !== undefined) return bad(res, "give either image or image_sample, not both");
+          if (b["image_sample"] !== undefined) {
+            const x = (imgs.samples ?? []).find((y) => y.id === b["image_sample"]);
+            if (!x) return bad(res, "unknown image_sample", "E_IMAGE_SAMPLE");
+            imageRefs = [x.ref];
+          } else {
+            const img = b["image"] && typeof b["image"] === "object" ? (b["image"] as Record<string, unknown>) : {};
+            const dec = decodeImage(img["data"]);
+            if ("code" in dec) return json(res, dec.status, { code: dec.code, message: dec.message });
+            imageRefs = [storeImage(imgs.dir, dec.bytes, dec.ext)];
+          }
+        }
+        const out = intakeContent(d, { text, scene: scene as core.Scene, ...(imageRefs ? { imageRefs } : {}), ...(opt("content_id") ? { contentId: opt("content_id")! } : {}), ...(opt("account_id") ? { accountId: opt("account_id")! } : {}),
           ...(opt("thread_id") ? { threadId: opt("thread_id")! } : {}), ...(opt("reply_to") ? { replyTo: opt("reply_to")! } : {}), ...(parent ? { parent: { text: parentText, ...(parentAccount ? { accountId: parentAccount } : {}) } } : {}) });
         if (out.status === 409 || out.status === 429) return json(res, out.status, { code: out.code, message: out.message });
         const contentId = out.contentId;
         if (out.duplicate) return json(res, 200, { content_id: contentId, duplicate: true });
-        return json(res, 201, { content_id: contentId, duplicate: false, timeline: `/api/contents/${encodeURIComponent(contentId)}`, stream: `/api/contents/${encodeURIComponent(contentId)}/stream` });
+        return json(res, 201, { content_id: contentId, duplicate: false, timeline: `/api/contents/${encodeURIComponent(contentId)}`, stream: `/api/contents/${encodeURIComponent(contentId)}/stream`, ...(imageRefs ? { images: imageRefs.length } : {}) });
+      }
+      // demo preset screenshots: made-up comment cards, public like the console's own assets
+      if (req.method === "GET" && (mm0 = m(/^\/api\/demo\/image-samples\/([\w-]+)$/)) && cons.mode === "demo") {
+        const x = (imgs?.samples ?? []).find((y) => y.id === mm0![1]);
+        const loaded = x && imageStore ? imageStore.load(x.ref) : undefined;
+        if (!loaded || "error" in loaded) return json(res, 404, { code: "NOT_FOUND" });
+        res.writeHead(200, { "content-type": loaded.mime, "cache-control": "public, max-age=3600" });
+        return void res.end(loaded.bytes);
+      }
+      // a content's image: content like its text, so only for a signed-in reviewer who confirms, and audited
+      if (req.method === "GET" && (mm0 = m(/^\/api\/contents\/([^/]+)\/images\/(\d+)$/))) {
+        const who = auth(d, req);
+        if (!who) return json(res, 401, { code: "E_HUMAN_AUTH" });
+        if (req.headers["x-confirm"] !== "yes") return json(res, 400, { code: "E_CONFIRM_REQUIRED" });
+        const id = decodeURIComponent(mm0[1]!);
+        const c = core.readContent(db, id);
+        const ref = c?.image_refs ? (JSON.parse(c.image_refs) as string[])[Number(mm0[2])] : undefined;
+        if (!c || !ref) return json(res, 404, { code: "E_IMAGE_NOT_FOUND" });
+        const loaded = imageStore?.load(ref);
+        if (!loaded || "error" in loaded) return json(res, 404, { code: "E_IMAGE_NOT_FOUND" });
+        core.tx(db, () => core.appendAudit(db, "restricted_view", id, who.reviewerId, { path, view: "image" }, d.now()));
+        res.writeHead(200, { "content-type": loaded.mime, "cache-control": "private, no-store" });
+        return void res.end(loaded.bytes);
       }
       if (req.method === "GET" && (mm0 = m(/^\/api\/contents\/([^/]+)\/stream$/))) {
         const id = decodeURIComponent(mm0[1]!);
@@ -203,7 +261,7 @@ export function createHttpServer(d: HttpDeps): Server {
         let last = "";
         const push = (): void => {
           try {
-            const t = buildTimeline(db, id, bundleByVer);
+            const t = buildTimeline(db, id, bundleByVer, { images: timelineImages });
             if (t && t.version !== last) { last = t.version; res.write(`event: timeline\nid: ${t.version}\ndata: ${JSON.stringify(t)}\n\n`); }
           } catch (e) {
             console.error("timeline stream", core.redact(e));
@@ -224,7 +282,7 @@ export function createHttpServer(d: HttpDeps): Server {
           if (req.headers["x-confirm"] !== "yes") return json(res, 400, { code: "E_CONFIRM_REQUIRED" });
           if (core.readContent(db, id)) core.tx(db, () => core.appendAudit(db, "restricted_view", id, who.reviewerId, { path, view: "timeline" }, d.now()));
         }
-        const t = buildTimeline(db, id, bundleByVer, { restricted: wantRestricted });
+        const t = buildTimeline(db, id, bundleByVer, { restricted: wantRestricted, images: timelineImages });
         return t ? json(res, 200, t) : json(res, 404, { code: "E_CONTENT_NOT_FOUND" });
       }
       let mm: RegExpExecArray | null;
@@ -327,6 +385,7 @@ export function createHttpServer(d: HttpDeps): Server {
       json(res, 404, { code: "NOT_FOUND" });
     } catch (e) {
       if (e instanceof BadRequest) return bad(res, e.message, "E_BAD_JSON");
+      if (e instanceof TooLarge) { res.setHeader("connection", "close"); return json(res, 413, { code: "E_BODY_TOO_LARGE", message: e.message }); }
       if (e instanceof ActionError) return json(res, e.status, { code: e.code, message: e.message });
       console.error("http error", core.redact(e));
       json(res, 500, { code: "INTERNAL" });

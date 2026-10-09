@@ -1,6 +1,9 @@
 // One content's path through the system: stage summary, then each review (fast-path scores, route, agent steps,
 // submit check, human task, ruling). Rendered from the /api/contents/:id timeline (live via SSE where it is shown).
-import type { AgentStep, ContentTimeline, JudgeRound, QuestionScore, ReviewTimeline } from "./api.ts";
+import { useEffect, useState } from "react";
+import { useConsole } from "./App.tsx";
+import type { AgentStep, ContentTimeline, ImageInfo, JudgeRound, QuestionScore, ReviewTimeline } from "./api.ts";
+import { localImages, restrictedImage } from "./images.ts";
 import { ACTION, ACTOR, QUESTION, ROUTE, SCENE, TOOL, TRIGGER, reasonText } from "./labels.ts";
 import { useInitialCount } from "./motion.tsx";
 import { ActionBadge, Badge, Icon, Id, PhaseBadge, RouteBadge, SimTag, StateBadge, clock, duration, p2, p3, yuan, type Tone } from "./ui.tsx";
@@ -48,12 +51,12 @@ export function JudgeRoundView({ round, compact }: { round: JudgeRound; compact?
       {!compact ? <div className="scale-row" aria-hidden="true"><div /><div className="ticks"><span>0</span><span>0.5</span><span>1</span></div><div>校准后概率</div><div /></div> : null}
       <div className="probs">{round.questions.map((q) => <ProbRow key={q.question_sha} q={q} />)}</div>
       <div className="meta-line">
-        <span>{round.stage === "fast" ? "快判" : round.explicit_confirm_of ? "复问" : "复判"} · {round.model}</span>
+        <span>{round.channel === "image" ? "图片通道" : round.stage === "fast" ? "快判" : round.explicit_confirm_of ? "复问" : "复判"} · {round.model}</span>
         <span>{round.status === "ok" ? "成功" : round.status}</span>
         <span>耗时 {duration(round.latency_ms)}</span>
         <span>费用 {yuan(round.cost_micro, 6)}</span>
         {round.copy_call_id ? <span>同次请求带打乱选项复问</span> : null}
-        <span>{round.evidence_ids.length ? `证据 ${round.evidence_ids.map((e) => e.split("#").pop()).join("、")}` : "只看文本"}</span>
+        <span>{round.channel === "image" ? "看图片" : round.evidence_ids.length ? `证据 ${round.evidence_ids.map((e) => e.split("#").pop()).join("、")}` : "只看文本"}</span>
       </div>
     </div>
   );
@@ -131,8 +134,9 @@ function Steps({ r }: { r: ReviewTimeline }) {
 
 // ---------- review card ----------
 
-export function ReviewCard({ r, restricted }: { r: ReviewTimeline; restricted: boolean }) {
-  const fast = r.judge_rounds.filter((j) => j.stage === "fast");
+export function ReviewCard({ r, restricted, t }: { r: ReviewTimeline; restricted: boolean; t?: ContentTimeline }) {
+  const fast = r.judge_rounds.filter((j) => j.stage === "fast" && j.channel !== "image");
+  const vision = r.judge_rounds.filter((j) => j.channel === "image");
   const agentRounds = r.judge_rounds.filter((j) => j.stage === "agent");
   const showAgent = r.route.kind === "agent" || r.route.kind === "appeal" || r.steps.length > 0;
   return (
@@ -153,8 +157,21 @@ export function ReviewCard({ r, restricted }: { r: ReviewTimeline; restricted: b
 
       {fast.length ? (
         <section className="sec">
-          <div className="sec-h"><h3>快判打分</h3><span className="sub">一次请求问全部规则，主问与打乱选项的复问都要过线</span><span className="end"><Legend /></span></div>
+          <div className="sec-h"><h3>快判打分</h3><span className="sub">{vision.length && t?.image_note ? "一次请求问全部规则（演示：脚本判官按截图的已知内容和附带文字打分），主问与打乱选项的复问都要过线" : "一次请求问全部规则，主问与打乱选项的复问都要过线"}</span><span className="end"><Legend /></span></div>
           {fast.map((j) => <JudgeRoundView key={j.judge_call_id} round={j} />)}
+        </section>
+      ) : null}
+
+      {vision.length ? (
+        <section className="sec">
+          <div className="sec-h"><h3>视觉编码</h3><span className="sub">图片经视觉编码后回答图片检查题（武器、血腥、惊悚、二维码或联系方式），同样主问 + 复问</span></div>
+          <div className="vision">
+            {t?.content.images.length ? <div className="vision-img">{t.content.images.map((im) => <ImageThumb key={im.n} contentId={t.content.content_id} img={im} restricted={t.restricted} small />)}</div> : null}
+            <div className="vision-b">
+              {vision.map((j) => <JudgeRoundView key={j.judge_call_id} round={j} compact />)}
+              {t?.image_note ? <div className="note-demo">{t.image_note}</div> : null}
+            </div>
+          </div>
         </section>
       ) : null}
 
@@ -231,9 +248,13 @@ function stages(t: ContentTimeline): Stage[] {
   const agentReviews = t.reviews.filter((r) => r.route.kind === "agent" || r.route.kind === "appeal");
   const agentLive = agentReviews.some((r) => r.state === "queued" || r.state === "investigating");
   const steps = agentReviews.reduce((n, r) => n + r.steps.length, 0);
+  const vision = first?.judge_rounds.find((j) => j.channel === "image");
+  const imgs = t.content.images.length;
   return [
-    { t: "接入", d: `${SCENE[t.content.scene] ?? t.content.scene} · ${t.content.text_len} 字`, s: "done" },
+    { t: "接入", d: `${SCENE[t.content.scene] ?? t.content.scene} · ${t.content.text_len} 字${imgs ? ` · ${imgs} 张图` : ""}`, s: "done" },
+
     { t: "快判", d: fast ? `${fast.questions.length} 题 · ${duration(fast.latency_ms)}` : first ? "未调用判官" : "等待中", s: fast || first ? "done" : "active" },
+    ...(imgs ? [{ t: "视觉编码", d: vision ? `图片检查 ${p2(vision.questions[0]?.mean)}` : first ? "未调用" : "等待中", s: (vision || first ? "done" : fast ? "active" : "todo") as Stage["s"] }] : []),
     { t: "分流", d: first ? ROUTE[first.route.kind] : "—", s: first ? "done" : "todo" },
     { t: "agent 调查", d: agentReviews.length ? (agentLive ? `进行中 · ${steps} 步` : `${steps} 步`) : "未进入", s: !agentReviews.length ? (first ? "skip" : "todo") : agentLive ? "active" : "done" },
     { t: "结论", d: last?.ruling ? `${ACTION[last.ruling.action]} · ${ACTOR[last.ruling.actor] ?? last.ruling.actor}` : t.phase === "human" ? "等待人工" : "—", s: last?.ruling && t.phase === "done" ? "done" : t.phase === "human" ? "active" : "todo" },
@@ -241,9 +262,10 @@ function stages(t: ContentTimeline): Stage[] {
 }
 
 export function Pipeline({ t }: { t: ContentTimeline }) {
+  const st = stages(t);
   return (
-    <div className="pipeline">
-      {stages(t).map((s) => <div key={s.t} className={`stage ${s.s}`}><div className="bar" /><div className="t">{s.t}</div><div className="d">{s.d}</div></div>)}
+    <div className="pipeline" style={{ ["--stages" as string]: st.length }}>
+      {st.map((s) => <div key={s.t} className={`stage ${s.s}`}><div className="bar" /><div className="t">{s.t}</div><div className="d">{s.d}</div></div>)}
     </div>
   );
 }
@@ -264,7 +286,28 @@ export function ContentHeader({ t, text, sim }: { t: ContentTimeline; text?: str
         t.content.text !== null ? (
           <div className="restricted"><div className="lbl"><Icon name="lock" size={12} />受限视图：原文（本次查看已写审计）</div><div className="content-text">{shown}</div></div>
         ) : <div className="content-text">{shown}</div>
-      ) : <div className="hidden-text"><Icon name="lock" size={12} />原文默认不展示（{t.content.text_len} 字，sha {t.content.text_sha ?? "—"}）</div>}
+      ) : t.content.text_len || !t.content.images.length ? <div className="hidden-text"><Icon name="lock" size={12} />原文默认不展示（{t.content.text_len} 字，sha {t.content.text_sha ?? "—"}）</div> : null}
+      {t.content.images.length ? <div className="thumbs">{t.content.images.map((im) => <ImageThumb key={im.n} contentId={t.content.content_id} img={im} restricted={t.restricted} />)}</div> : null}
+    </div>
+  );
+}
+
+/** One attached image: a preset sample or this tab's own upload is shown; anything else only through the restricted
+ *  view (in it, loaded right away; otherwise behind a button that asks first). */
+export function ImageThumb({ contentId, img, restricted, small }: { contentId: string; img: ImageInfo; restricted: boolean; small?: boolean }) {
+  const { reviewer } = useConsole();
+  const direct = img.preset?.url ?? (img.n === 0 ? localImages.get(contentId) : undefined) ?? null;
+  const [url, setUrl] = useState<string | null>(direct);
+  const [err, setErr] = useState<string | null>(null);
+  const load = (): void => { if (reviewer) restrictedImage(contentId, img.n, reviewer).then(setUrl).catch((e) => setErr(String(e))); };
+  useEffect(() => { if (!url && restricted && reviewer) load(); }, [restricted]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const label = img.preset ? `预置示例：${img.preset.title}` : `图片 ${img.n + 1}`;
+  if (url) return <a className={`thumb ${small ? "sm" : ""}`} href={url} target="_blank" rel="noreferrer" title={label}><img src={url} alt={label} /><span className="cap">{label}</span></a>;
+  return (
+    <div className={`thumb locked ${small ? "sm" : ""}`}>
+      <span className="row" style={{ gap: 6 }}><Icon name="lock" size={12} />{label}属受限内容</span>
+      {err ? <span className="small" style={{ color: "var(--bad)" }}>{err}</span> : null}
+      <button className="btn sm" disabled={!reviewer} onClick={() => { if (window.confirm("查看图片会写入审计记录，继续？")) load(); }}>查看图片</button>
     </div>
   );
 }
@@ -285,5 +328,5 @@ export function EventFeed({ t }: { t: ContentTimeline }) {
 
 export function ReviewCards({ t }: { t: ContentTimeline }) {
   if (t.reviews.length === 0) return <div className="review"><div className="empty"><span className="dot pulse" style={{ background: "var(--info)", marginRight: 8 }} />已进入接入队列，等待快判…</div></div>;
-  return <div>{t.reviews.map((r) => <ReviewCard key={r.review_id} r={r} restricted={t.restricted} />)}</div>;
+  return <div>{t.reviews.map((r) => <ReviewCard key={r.review_id} r={r} restricted={t.restricted} t={t} />)}</div>;
 }

@@ -12,7 +12,7 @@ import * as core from "@mod/core";
 import { identityCalibrator, jevModel, jevProvider, loadCalibrator } from "@mod/judges";
 import { loadBundle } from "@mod/policy";
 import { piJudge } from "./pi-judge.ts";
-import { DemoSessionRetention, demoAgentProvider, demoCalibrator, demoJudge, demoPrices } from "./demo.ts";
+import { DemoSessionRetention, demoAgentProvider, demoCalibrator, demoImageText, demoJudge, demoPrices, loadDemoImages } from "./demo.ts";
 import type { JudgeClient } from "./judge-client.ts";
 import { relayProvider } from "./relay.ts";
 import { Worker } from "./worker.ts";
@@ -56,7 +56,7 @@ async function main(): Promise<void> {
     const scripted = demoAgentProvider({ delayMs: envNum("DEMO_AGENT_MS", 700) });
     models.setProvider(scripted.provider);
     agent = scripted.model;
-    judge = demoJudge({ delayMs: envNum("DEMO_JUDGE_MS", 350) });
+    judge = demoJudge({ delayMs: envNum("DEMO_JUDGE_MS", 350), imageText: demoImageText(db, loadDemoImages(env("DEMO_IMAGES_DIR", "demo/images"))) });
   } else {
     models.setProvider(relayProvider({ baseUrl: env("RELAY_BASE_URL"), apiKey: env("RELAY_API_KEY") }));
     models.setProvider(jevProvider({ baseUrl: env("JEV_BASE_URL"), apiKey: env("JEV_API_KEY"), modelId: env("JEV_MODEL", "jev-latest") }));

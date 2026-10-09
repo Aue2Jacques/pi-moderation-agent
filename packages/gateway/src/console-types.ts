@@ -27,6 +27,8 @@ export type QuestionScore = {
 
 export type JudgeRound = {
   judge_call_id: string;
+  /** text: the judge on the (model-view) text; image: the image channel (vision encoder + image_check question) */
+  channel: "text" | "image";
   copy_call_id: string | null;       // the in-call shuffled copy, or null
   stage: "fast" | "agent";
   explicit_confirm_of: string | null; // an agent `confirm` call: the call it re-asks
@@ -93,6 +95,9 @@ export type ContentTimeline = {
     text_len: number; text_sha: string | null; created_at: number;
     /** only in the restricted view */
     text: string | null;
+    /** attached images (metadata only; the bytes: preset samples at their public url, others through the restricted
+     *  GET /api/contents/:id/images/:n) */
+    images: ImageInfo[];
   };
   intake: { status: string; attempts: number } | null;
   effective: { action: Action | null; visibility: string } | null;
@@ -101,6 +106,8 @@ export type ContentTimeline = {
   reviews: ReviewTimeline[];
   events: TimelineEvent[];
   restricted: boolean;
+  /** demo mode with images: how the images were judged (shown on the timeline); null otherwise */
+  image_note: string | null;
   /** digest of everything above; the stream sends a new snapshot only when it changes */
   version: string;
 };
@@ -161,6 +168,9 @@ export type RulesInfo = {
   proposals: { proposal_id: string; base_rules_ver: string; status: string; changes: unknown; created_at: number }[];
 };
 
+export type ImageInfo = { n: number; ref: string; preset: { id: string; title: string; url: string } | null };
+export type ImageSampleInfo = { id: string; title: string; route: string; scene: string; account_id: string; url: string };
+
 export type DemoSampleInfo = { id: string; title: string; route: string; scene: string; text: string; account_id: string; parent: { text: string; account_id: string } | null };
 
 export type ConsoleConfig = {
@@ -174,6 +184,8 @@ export type ConsoleConfig = {
   samples: DemoSampleInfo[];
   /** demo mode with the traffic generator: how simulated contents and the simulated reviewer are named */
   demo_traffic: { sim_prefix: string; sim_reviewer: string } | null;
+  /** image intake: off when no image store is configured (real mode without IMAGE_DIR); demo: the preset screenshots */
+  images: { enabled: boolean; max_bytes: number; samples: ImageSampleInfo[]; note: string | null };
 };
 
 export type TrafficKind = "normal" | "marketing" | "abuse" | "mild" | "banter" | "repeat" | "injection";

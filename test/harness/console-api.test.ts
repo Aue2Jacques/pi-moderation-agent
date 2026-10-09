@@ -8,6 +8,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
+import { deflateSync } from "node:zlib";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ConsoleConfig, ContentTimeline, HumanQueueItem, AppealItem, Stats, RulesInfo, ReviewListItem } from "../../packages/gateway/src/console-types.ts";
@@ -324,5 +325,106 @@ describe("console API on real G + W processes (demo mode)", () => {
     expect(rules.versions.find((v) => v.current)!.reviews).toBe(s.reviews);
     expect(rules.calibration.files.length).toBeGreaterThan(0);
     expect(rules.current.scenes.find((x) => x.scene === "nickname")!.allowed_actions).toEqual(["pass", "takedown"]);
+  });
+});
+
+/** A small valid PNG (8x8, made up pixels), base64. */
+function tinyPng(seed = 7): string {
+  const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+  const crc = (b: Buffer): number => { let x = 0xffffffff; for (const v of b) x = crcTable[(x ^ v) & 255]! ^ (x >>> 8); return (x ^ 0xffffffff) >>> 0; };
+  const chunk = (type: string, data: Buffer): Buffer => { const len = Buffer.alloc(4); len.writeUInt32BE(data.length); const td = Buffer.concat([Buffer.from(type), data]); const c = Buffer.alloc(4); c.writeUInt32BE(crc(td)); return Buffer.concat([len, td, c]); };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(8, 0); ihdr.writeUInt32BE(8, 4); ihdr[8] = 8; ihdr[9] = 2;
+  const raw = Buffer.alloc(25 * 8); for (let i = 0; i < raw.length; i++) raw[i] = (i * seed) % 256;
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]).toString("base64");
+}
+
+describe("images in demo mode (scripted image check behind the real image channel)", () => {
+  const sample = (id: string) => cfg.images.samples.find((x) => x.id === id)!;
+  const submitImage = async (body: Record<string, unknown>): Promise<string> => {
+    const res = await post("/api/contents", { scene: "comment", ...body });
+    expect(res.status).toBe(201);
+    return ((await res.json()) as { content_id: string }).content_id;
+  };
+
+  it("config lists the preset screenshots; they are served as PNG", async () => {
+    expect(cfg.images).toMatchObject({ enabled: true, max_bytes: 2 * 1024 * 1024 });
+    expect(cfg.images.samples.map((x) => x.id)).toEqual(["img-normal", "img-marketing", "img-abuse"]);
+    expect(cfg.images.note).toContain("演示模式");
+    const r = await fetch(`${base}${sample("img-normal").url}`);
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toBe("image/png");
+    expect((await fetch(`${base}/api/demo/image-samples/nope`)).status).toBe(404);
+  });
+
+  it("presets go to auto pass, auto action and agent -> takedown; the timeline shows the image and the vision step", async () => {
+    const normal = await submitImage({ image_sample: "img-normal", account_id: sample("img-normal").account_id });
+    const mkt = await submitImage({ image_sample: "img-marketing", account_id: sample("img-marketing").account_id });
+    const abuse = await submitImage({ image_sample: "img-abuse", account_id: sample("img-abuse").account_id });
+    const tn = await waitFor(normal, settled), tm = await waitFor(mkt, settled), ta = await waitFor(abuse, settled);
+    expect(tn.reviews[0]!.route.kind).toBe("fast_pass");
+    expect(tm.reviews[0]!.route.kind).toBe("fast_block");
+    expect(tm.effective?.action).toBe("limit");
+    expect(ta.reviews[0]!.route.kind).toBe("agent");
+    expect(ta.reviews[0]!.ruling).toMatchObject({ actor: "agent", action: "takedown" });
+    expect(ta.reviews[0]!.steps.map((s) => s.tool)).toContain("get_account_history");
+    for (const t of [tn, tm, ta]) {
+      expect(t.content.images).toHaveLength(1);
+      expect(t.content.images[0]!.preset?.id).toMatch(/^img-/);
+      expect(t.image_note).toContain("演示模式");
+      const vision = t.reviews[0]!.judge_rounds.filter((j) => j.channel === "image");
+      expect(vision).toHaveLength(1);
+      expect(vision[0]!.questions[0]).toMatchObject({ key: "image_check", lines: { block: 0.9, pass: 0.1 } });
+      expect(vision[0]!.copy_call_id).not.toBeNull();   // primary + confirming copy, as for text
+      expect(t.events.some((e) => e.kind === "vision" && (e.detail ?? "").includes("演示模式"))).toBe(true);
+      expect(t.content.text_len).toBe(0);
+    }
+    // the scripted judge read the screenshots' known content: per-rule scores differ by preset
+    const score = (t: ContentTimeline, k: string): number => t.reviews[0]!.judge_rounds[0]!.questions.find((q) => q.key === k)!.mean!;
+    expect(score(tm, "MARKETING-003")).toBeGreaterThan(0.9);
+    expect(score(ta, "ABUSE-001")).toBeGreaterThan(0.3);
+    expect(score(tn, "ABUSE-001")).toBeLessThan(0.1);
+  });
+
+  it("any other image gets the middle band: agent, then a person; its bytes only through the restricted view", async () => {
+    const id = await submitImage({ text: "看看这张图", image: { data: `data:image/png;base64,${tinyPng()}` } });
+    const t = await waitFor(id, settled);
+    expect(t.phase).toBe("human");
+    expect(t.reviews[0]!.route.kind).toBe("agent");
+    expect(t.reviews[0]!.release_reason).toBe("evidence_gap");
+    expect(t.content.images[0]!.preset).toBeNull();
+    expect(t.reviews[0]!.judge_rounds.find((j) => j.channel === "image")!.questions[0]!.verdict).toBe("middle");
+    const url = `${base}/api/contents/${encodeURIComponent(id)}/images/0`;
+    expect((await fetch(url)).status).toBe(401);
+    expect((await fetch(url, { headers: H })).status).toBe(400);   // no x-confirm
+    const ok = await fetch(url, { headers: { ...H, "x-confirm": "yes" } });
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("content-type")).toBe("image/png");
+    expect(Buffer.from(await ok.arrayBuffer()).toString("base64")).toBe(tinyPng());
+    expect((await fetch(`${base}/api/contents/${encodeURIComponent(id)}/images/1`, { headers: { ...H, "x-confirm": "yes" } })).status).toBe(404);
+    // the same bytes again: the same stored ref
+    const again = await submitImage({ image: { data: tinyPng() } });
+    expect((await timeline(again)).content.images[0]!.ref).toBe(t.content.images[0]!.ref);
+  });
+
+  it("refuses bad images: too large, wrong type, not base64, both kinds, unknown sample, nothing at all, oversized body", async () => {
+    const big = Buffer.alloc(2 * 1024 * 1024 + 10, 1);
+    big.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const cases: [Record<string, unknown>, number, string][] = [
+      [{ image: { data: big.toString("base64") } }, 413, "E_IMAGE_TOO_LARGE"],
+      [{ image: { data: Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'/>").toString("base64") } }, 415, "E_IMAGE_TYPE"],
+      [{ image: { data: "not base64 !!" } }, 400, "E_IMAGE_INVALID"],
+      [{ image: {} }, 400, "E_IMAGE_INVALID"],
+      [{ image: { data: tinyPng() }, image_sample: "img-normal" }, 400, "E_BAD_REQUEST"],
+      [{ image_sample: "img-nope" }, 400, "E_IMAGE_SAMPLE"],
+      [{ text: "" }, 400, "E_BAD_REQUEST"],
+    ];
+    for (const [body, status, code] of cases) {
+      const r = await post("/api/contents", { scene: "comment", ...body });
+      expect(r.status, JSON.stringify(body).slice(0, 80)).toBe(status);
+      expect(((await r.json()) as { code: string }).code).toBe(code);
+    }
+    const huge = await post("/api/contents", { scene: "comment", image: { data: Buffer.alloc(4 * 1024 * 1024, 2).toString("base64") } });
+    expect(huge.status).toBe(413);
+    expect(((await huge.json()) as { code: string }).code).toBe("E_BODY_TOO_LARGE");
   });
 });

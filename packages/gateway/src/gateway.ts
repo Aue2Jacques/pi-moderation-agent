@@ -28,7 +28,9 @@ export const DEFAULT_GATEWAY_CONFIG: GatewayConfig = {
 export type Candidate = { bundle: PolicyBundle; ruleTexts?: Record<string, string>; agentModel: string };
 export type GatewayDeps = { db: Db; bundle: PolicyBundle; ruleTexts?: Record<string, string>; judge: JudgeClient; prices: PriceTable; calibrator: core.Calibrator; evidenceVer: string; judgeModel: string; cfg: GatewayConfig; now: () => number; gatewayId: string; candidate?: Candidate;
   /** stage ③ minimal image channel (both or neither); the online interface is the owner's decision */
-  imageStore?: ImageStore; imageChecker?: ImageChecker };
+  imageStore?: ImageStore; imageChecker?: ImageChecker;
+  /** demo mode only, see FastpathDeps.imageToAgent */
+  imageToAgent?: boolean };
 
 /**
  * Metric definitions (round-9 item 8). Window = last 300 s unless stated.
@@ -116,7 +118,7 @@ export class Gateway {
           const bundle = this.bundleFor(id);
           const deps = { db, bundle, judge: this.d.judge, prices: this.d.prices, pins: { ...this.pins, rulesVer: bundle.rulesVer }, judgeModel: this.d.judgeModel, calibrator: this.d.calibrator, blacklist: this.blacklist, index: this.index, rate: this.rate,
             backpressure: () => this.backpressure(), budgetTools: this.d.cfg.budgetTools, budgetMicro: this.d.cfg.budgetMicro, now: this.d.now,
-            ...(this.d.imageStore && this.d.imageChecker ? { imageStore: this.d.imageStore, imageChecker: this.d.imageChecker } : {}) };
+            ...(this.d.imageStore && this.d.imageChecker ? { imageStore: this.d.imageStore, imageChecker: this.d.imageChecker } : {}), ...(this.d.imageToAgent ? { imageToAgent: true } : {}) };
           try {
             const o = await runFastpath(deps, id);
             out.push(o);

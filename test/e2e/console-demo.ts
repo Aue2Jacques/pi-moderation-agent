@@ -1,6 +1,7 @@
 // End-to-end run of the core interaction in demo mode, over HTTP only: `scripts/console.ts --demo` starts G + W
 // (and builds the console if needed); then submit -> timeline -> human decision -> appeal, checking each state change,
-// with the demo traffic running alongside; then the global live stream (/api/events) while the traffic runs.
+// with the demo traffic running alongside; images (the preset screenshots and an upload); then the global live stream
+// (/api/events) with the traffic at the top tier (50 a second): throughput, retention status.
 // usage: node --experimental-strip-types --no-warnings test/e2e/console-demo.ts   (pnpm run e2e:console)
 // Exit code 0 = every check passed; the checks print as they run.
 import type { ConsoleConfig, ContentTimeline, HumanQueueItem, AppealItem, LiveFrame, ReviewListItem, Stats, TrafficStatus } from "../../packages/gateway/src/console-types.ts";
@@ -100,6 +101,31 @@ try {
   const list = await get<AppealItem[]>("/api/appeals");
   check("appeal listed with prior and result", list.some((x) => x.content_id === appealed && x.prior?.action === "takedown" && !!x.result));
 
+  // 3b. images: the three preset screenshots take their routes, an uploaded image goes agent -> person
+  const imgIds: Record<string, string> = {};
+  for (const x of cfg.images.samples) {
+    const r = await post("/api/contents", { scene: x.scene, account_id: x.account_id, image_sample: x.id });
+    imgIds[x.id] = ((await r.json()) as { content_id: string }).content_id;
+    check(`image sample ${x.id} -> 201`, r.status === 201);
+  }
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+  const up = await post("/api/contents", { scene: "comment", text: "随手传一张图", image: { data: `data:image/png;base64,${png}` } });
+  const upId = ((await up.json()) as { content_id: string }).content_id;
+  check("image upload -> 201", up.status === 201);
+  const imgWant: Record<string, (t: ContentTimeline) => boolean> = {
+    "img-normal": (t) => t.reviews[0]?.route.kind === "fast_pass",
+    "img-marketing": (t) => t.reviews[0]?.route.kind === "fast_block",
+    "img-abuse": (t) => t.reviews[0]?.route.kind === "agent" && t.reviews[0]?.ruling?.action === "takedown",
+  };
+  for (const [k, ok] of Object.entries(imgWant)) {
+    const t = await until(imgIds[k]!, (x) => x.phase === "done" || x.phase === "human");
+    check(`${k}: ${t.reviews.map((r) => `${r.route.kind}/${r.ruling?.action ?? "-"}`).join(" ")}, vision step on the timeline`, ok(t) && t.reviews[0]!.judge_rounds.some((j) => j.channel === "image") && t.events.some((e) => e.kind === "vision"));
+  }
+  const tu = await until(upId, (x) => x.phase === "done" || x.phase === "human");
+  check(`uploaded image: agent -> person (${tu.reviews[0]?.route.kind}/${tu.reviews[0]?.release_reason})`, tu.phase === "human" && tu.reviews[0]?.route.kind === "agent" && (tu.image_note ?? "").includes("演示模式"));
+  const tooBig = await post("/api/contents", { scene: "comment", image: { data: Buffer.alloc(3 * 1024 * 1024, 1).toString("base64") } });
+  check("oversized image -> 413", tooBig.status === 413);
+
   // 4. a failure path through the same running system
   const bad = await post("/api/contents", { text: "hello", scene: "forum" });
   check("invalid scene -> 400", bad.status === 400);
@@ -111,20 +137,29 @@ try {
   const own = all.items.filter((r) => !r.content_id.startsWith(cfg.demo_traffic!.sim_prefix));
   const humanClosed = (await get<HumanQueueItem[]>("/api/human/queue?status=closed")).filter((x) => !x.content_id.startsWith(cfg.demo_traffic!.sim_prefix));
   const ownAppeals = (await get<AppealItem[]>("/api/appeals")).filter((x) => !x.content_id.startsWith(cfg.demo_traffic!.sim_prefix));
-  check(`own reviews add up (reviews ${own.length}, human closed ${humanClosed.length}, appeals ${ownAppeals.length})`, own.length === 7 && humanClosed.length === 1 && ownAppeals.length === 1);
+  check(`own reviews add up (reviews ${own.length}, human closed ${humanClosed.length}, appeals ${ownAppeals.length})`, own.length === 11 && humanClosed.length === 1 && ownAppeals.length === 1);
   let tr = await get<TrafficStatus>("/api/demo/traffic");
   for (let i = 0; i < 60 && tr.generated === 0; i++) { await new Promise((r) => setTimeout(r, 250)); tr = await get<TrafficStatus>("/api/demo/traffic"); }
   const s = await get<Stats>("/api/stats");
-  check(`demo traffic is running (${tr.per_min}/min, generated ${tr.generated})`, tr.per_min > 0 && !tr.paused && tr.generated > 0 && s.contents > 6);
+  check(`demo traffic is running by default (${tr.per_sec}/s, generated ${tr.generated})`, tr.per_sec === 10 && !tr.paused && tr.generated > 0 && s.contents > 6);
+  check(`rate tiers offered: ${tr.tiers.join(" / ")} (max ${tr.max_per_sec})`, tr.tiers.join(",") === "1,5,10,20,50" && tr.max_per_sec === 50);
+  check("retention is on in demo mode", !!tr.retention && tr.retention.keep > 0);
 
-  // 5. the global live stream: with the traffic turned up, frames arrive on their own with new reviews and moving counts
-  await post("/api/demo/traffic", { per_min: 120 });
+  // 5. the global live stream: with the traffic at the top tier, frames arrive on their own with new reviews, moving
+  // counts and the fast-path throughput
+  const set = await post("/api/demo/traffic", { per_sec: 50 });
+  check("top tier accepted", set.status === 200 && ((await set.json()) as TrafficStatus).per_sec === 50);
+  check("above the top tier refused", (await post("/api/demo/traffic", { per_sec: 80 })).status === 400);
+  await new Promise((r) => setTimeout(r, 4000));
   const frames = await liveFrames(6000);
   const later = frames.slice(1);
   check(`live stream: snapshot then ${later.length} frames without polling`, frames[0]?.snapshot === true && later.length >= 2);
   check("live stream: new reviews arrive as changed rows", later.some((f) => f.changed.some((r) => r.content_id.startsWith(cfg.demo_traffic!.sim_prefix))));
   check(`live stream: content count moves (${frames[0]?.stats.contents} -> ${frames.at(-1)?.stats.contents})`, (frames.at(-1)?.stats.contents ?? 0) > (frames[0]?.stats.contents ?? 0));
   check("live stream: traffic status rides along", (frames.at(-1)?.traffic?.generated ?? 0) > (frames[0]?.traffic?.generated ?? 0));
+  const flow = frames.at(-1)?.flow;
+  check(`live stream: fast-path throughput at the top tier (${flow?.per_sec.toFixed(1)}/s now, 300 one-second buckets)`, !!flow && flow.series.length === 300 && flow.per_sec > 25);
+  await post("/api/demo/traffic", { per_sec: 10 });
 } catch (e) {
   failed++;
   console.error("FAIL unexpected error", e);

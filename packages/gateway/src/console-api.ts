@@ -8,7 +8,7 @@ import { join } from "node:path";
 import * as core from "@mod/core";
 import type { Db, PolicyBundle, Question } from "@mod/core";
 import type {
-  AgentStep, AppealItem, ContentTimeline, HumanQueueItem, JudgeRound, ProbPair, QuestionScore, ReviewListItem, ReviewTimeline,
+  AgentStep, AppealItem, ContentTimeline, HumanQueueItem, ImageInfo, JudgeRound, ProbPair, QuestionScore, ReviewListItem, ReviewTimeline,
   RouteKind, RulesInfo, Stats, SubmitRejection, TimelineEvent,
 } from "./console-types.ts";
 
@@ -57,6 +57,7 @@ function scoreQuestions(bundle: PolicyBundle | undefined, scene: core.Scene, sta
     const ruleId = (a ?? b)!.rule_id;
     const rule = ruleId ? bundle?.rules.find((x) => x.ruleId === ruleId) : undefined;
     const lines = kind === "guard" ? (guard ? { block: guard.threshold, pass: guard.threshold } : null)
+      : kind === "image_check" ? (bundle?.scenes[scene]?.imageCheck.thresholds ?? null)
       : kind === "rule" && rule ? (stage === "agent" && rule.agentThresholds ? rule.agentThresholds : rule.thresholds) : null;
     const pa = pairOf(a, q), pb = pairOf(b, q);
     const cals = [pa?.cal, pb?.cal].filter((x): x is number => typeof x === "number");
@@ -84,7 +85,7 @@ function judgeRounds(db: Db, reviewId: string, bundle: PolicyBundle | undefined,
     const copy = calls.find((x) => x.confirms_call_id === c.judge_call_id && isCopy(x));
     const stage = c.attempt === null ? "fast" : "agent";
     return {
-      judge_call_id: c.judge_call_id, copy_call_id: copy?.judge_call_id ?? null, stage, explicit_confirm_of: c.confirms_call_id,
+      judge_call_id: c.judge_call_id, channel: c.api === "image" ? "image" : "text", copy_call_id: copy?.judge_call_id ?? null, stage, explicit_confirm_of: c.confirms_call_id,
       attempt: c.attempt, status: c.status, model: c.model, latency_ms: c.latency_ms, cost_micro: c.cost_micro,
       evidence_ids: parse<string[]>(c.evidence_set, []).map(evidenceIdOf),
       questions: scoreQuestions(bundle, scene, stage, answers(c.judge_call_id), copy ? answers(copy.judge_call_id) : []),
@@ -199,12 +200,16 @@ function reviewTimeline(db: Db, r: core.ReviewRow, bundleOf: BundleOf, scene: co
 const ACTION_ZH: Record<string, string> = { pass: "放行", limit: "限流", takedown: "下架" };
 const TOOL_ZH: Record<string, string> = { load_rule: "读取规则", get_thread_context: "取线程上下文", get_account_history: "取账号历史", judge: "带证据复判", confirm: "打乱选项复问", dispose: "提交处置", release: "交人工", escalate_model: "升级模型" };
 
-function eventsOf(content: { content_id: string; created_at: number }, reviews: ReviewTimeline[]): TimelineEvent[] {
+function eventsOf(content: { content_id: string; created_at: number }, reviews: ReviewTimeline[], imageNote: string | null): TimelineEvent[] {
   const ev: TimelineEvent[] = [{ id: "intake", at: content.created_at, review_id: null, kind: "intake", title: "内容进入" }];
   for (const r of reviews) {
     const rid = r.review_id;
     if (r.trigger === "appeal") ev.push({ id: `${rid}:appeal`, at: r.created_at, review_id: rid, kind: "appeal", title: "用户申诉，开新审次", ...(r.appeal?.reason_code ? { detail: r.appeal.reason_code } : {}) });
-    for (const j of r.judge_rounds) ev.push({ id: `${rid}:judge:${j.judge_call_id}`, at: j.at, review_id: rid, kind: j.stage === "fast" ? "fast_judge" : "judge", title: j.stage === "fast" ? "快判打分" : j.explicit_confirm_of ? "复问" : "带证据复判", detail: j.questions.map((q) => `${q.key} ${q.mean === null ? "—" : q.mean.toFixed(2)}`).join(" · ") });
+    for (const j of r.judge_rounds) {
+      const detail = j.questions.map((q) => `${q.key} ${q.mean === null ? "—" : q.mean.toFixed(2)}`).join(" · ");
+      if (j.channel === "image") ev.push({ id: `${rid}:vision:${j.judge_call_id}`, at: j.at, review_id: rid, kind: "vision", title: "视觉编码 + 图片打分", detail: imageNote ? `${detail}（${imageNote}）` : detail });
+      else ev.push({ id: `${rid}:judge:${j.judge_call_id}`, at: j.at, review_id: rid, kind: j.stage === "fast" ? "fast_judge" : "judge", title: j.stage === "fast" ? "快判打分" : j.explicit_confirm_of ? "复问" : "带证据复判", detail });
+    }
     const routeTitle: Record<RouteKind, string> = { fast_pass: "快判：自动放行", fast_block: "快判：自动处置", agent: "转 agent 查证据", human_direct: "直接转人工", appeal: "申诉审次排队", other: "新审次" };
     ev.push({ id: `${rid}:route`, at: r.created_at, review_id: rid, kind: "route", title: routeTitle[r.route.kind], ...(r.route.reason ? { detail: r.route.reason } : {}) });
     for (const s of r.steps) ev.push({ id: `${rid}:step:${s.call_id}`, at: s.at, review_id: rid, kind: "tool", title: TOOL_ZH[s.tool] ?? s.tool, detail: s.status });
@@ -215,11 +220,18 @@ function eventsOf(content: { content_id: string; created_at: number }, reviews: 
     }
     if (r.ruling) ev.push({ id: `${rid}:ruling`, at: r.ruling.created_at, review_id: rid, kind: "ruling", title: `${r.ruling.actor === "fastpath" ? "快判" : r.ruling.actor === "agent" ? "agent " : "人工"}裁决：${ACTION_ZH[r.ruling.action] ?? r.ruling.action}`, ...(r.ruling.rule_ids.length ? { detail: r.ruling.rule_ids.join(", ") } : {}) });
   }
-  const rank: Record<string, number> = { intake: 0, appeal: 1, fast_judge: 2, route: 3, tool: 4, judge: 4, rejected: 5, human_queue: 6, human_claim: 7, ruling: 8 };
+  const rank: Record<string, number> = { intake: 0, appeal: 1, fast_judge: 2, vision: 2, route: 3, tool: 4, judge: 4, rejected: 5, human_queue: 6, human_claim: 7, ruling: 8 };
   return ev.sort((a, b) => a.at - b.at || (rank[a.kind] ?? 9) - (rank[b.kind] ?? 9));
 }
 
-export function buildTimeline(db: Db, contentId: string, bundleOf: BundleOf, o: { restricted?: boolean } = {}): ContentTimeline | undefined {
+export type TimelineImages = {
+  /** a stored image's preset sample (demo), if it is one */
+  preset?: (ref: string) => ImageInfo["preset"];
+  /** shown with the image step (demo mode) */
+  note?: string | null;
+};
+
+export function buildTimeline(db: Db, contentId: string, bundleOf: BundleOf, o: { restricted?: boolean; images?: TimelineImages } = {}): ContentTimeline | undefined {
   const c = core.readContent(db, contentId);
   if (!c) return undefined;
   const restricted = !!o.restricted;
@@ -231,8 +243,10 @@ export function buildTimeline(db: Db, contentId: string, bundleOf: BundleOf, o: 
   const phase: ContentTimeline["phase"] = !latest ? "intake"
     : latest.state === "queued" || latest.state === "investigating" ? "agent"
     : latest.state === "human_queue" ? "human" : "done";
-  const content = { content_id: c.content_id, scene: c.scene, account_id: c.account_id, thread_id: c.thread_id, reply_to: c.reply_to, text_len: (c.text ?? "").length, text_sha: c.text_sha ? c.text_sha.slice(0, 12) : null, created_at: c.created_at, text: restricted ? c.text : null };
-  const body = { content, intake: intake ?? null, effective: st ? { action: st.effective_action, visibility: st.visibility } : null, phase, reviews, events: eventsOf(c, reviews), restricted };
+  const images: ImageInfo[] = parse<string[]>(c.image_refs, []).map((ref, n) => ({ n, ref, preset: o.images?.preset?.(ref) ?? null }));
+  const imageNote = images.length ? (o.images?.note ?? null) : null;
+  const content = { content_id: c.content_id, scene: c.scene, account_id: c.account_id, thread_id: c.thread_id, reply_to: c.reply_to, text_len: (c.text ?? "").length, text_sha: c.text_sha ? c.text_sha.slice(0, 12) : null, created_at: c.created_at, text: restricted ? c.text : null, images };
+  const body = { content, intake: intake ?? null, effective: st ? { action: st.effective_action, visibility: st.visibility } : null, phase, reviews, events: eventsOf(c, reviews, imageNote), restricted, image_note: imageNote };
   return { ...body, version: core.sha256(JSON.stringify(body)).slice(0, 16) };
 }
 

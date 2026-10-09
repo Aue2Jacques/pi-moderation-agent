@@ -195,7 +195,7 @@ function TaskPanel({ item, onChanged }: { item: HumanQueueItem; onChanged: () =>
         </Panel>
       ) : msg ? <Alert tone={msg.tone}>{msg.text}</Alert> : null}
 
-      {review ? <ReviewCard r={review} restricted={!!restricted} /> : <Panel title="证据"><Empty>加载中…</Empty></Panel>}
+      {review ? <ReviewCard r={review} restricted={!!restricted} {...(restricted ?? t ? { t: (restricted ?? t)! } : {})} /> : <Panel title="证据"><Empty>加载中…</Empty></Panel>}
     </div>
   );
 }

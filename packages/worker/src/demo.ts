@@ -17,6 +17,7 @@ export const DEMO_JUDGE_PROVIDER = "demo";
 export const DEMO_JUDGE_MODEL = "jev-scripted";
 export const DEMO_AGENT_PROVIDER = "demo";
 export const DEMO_AGENT_MODEL = "scripted-agent";
+export const DEMO_VISION_MODEL = "vision-scripted";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -81,7 +82,9 @@ function answerOf(q: Question, p: number): JudgeAnswers[string] {
 /** Deterministic small offset for the shuffled-option copy: the same input gives the same pair of answers. */
 const jitter = (seed: string): number => ((parseInt(core.sha256(seed).slice(0, 4), 16) % 7) - 3) * 0.002;
 
-export function demoJudge(o: { delayMs?: number } = {}): JudgeClient {
+/** `imageText`: demo mode's stand-in for a judge that reads images (Kev reads screenshots, reports/2026-10-09-kev-
+ *  inference-speed.md §11): the known content of a preset screenshot attached to the content, judged with its text. */
+export function demoJudge(o: { delayMs?: number; imageText?: (contentId: string) => string | undefined } = {}): JudgeClient {
   const delayMs = o.delayMs ?? 350;
   return {
     provider: DEMO_JUDGE_PROVIDER,
@@ -89,7 +92,8 @@ export function demoJudge(o: { delayMs?: number } = {}): JudgeClient {
     inCallConfirm: true,
     classify: async (req: JudgeRequest): Promise<JudgeResponse> => {
       if (delayMs > 0) await sleep(delayMs);
-      const text = req.text ?? "";
+      const seen = o.imageText?.(req.contentId);
+      const text = [req.text ?? "", seen ? core.modelView(seen) : ""].filter(Boolean).join("\n");
       const main: JudgeAnswers = {};
       const copy: JudgeAnswers = {};
       for (const q of req.questions) {
@@ -127,6 +131,9 @@ export function demoCalibrator(dir: string, judge: string, rulesVer: string): co
     const had = temps.get(key);
     if (!had || (exact && !had.exact)) temps.set(key, { T: c.T, exact });
   }
+  // the demo's scripted image check has no fit: it is taken as calibrated (T=1), so a preset screenshot can be decided
+  // automatically in the demo; real mode has no such default (strict: no fit, never auto-decided)
+  if (!temps.has("image_check")) temps.set("image_check", { T: 1, exact: false });
   const sig = core.sha256(JSON.stringify([...temps.entries()].sort())).slice(0, 10);
   return {
     calibVer: `calib@demo-${sig}`,
@@ -152,7 +159,7 @@ export function demoPrices(real: core.PriceTable): core.PriceTable {
   const per = real.perMillion;
   const jev = per["jev/jev-latest"] ?? { input: 0, output: 0 };
   const agent = per["a6api/qwen3.8-flash"] ?? { input: 0, output: 0 };
-  const perMillion = { ...per, [`${DEMO_JUDGE_PROVIDER}/${DEMO_JUDGE_MODEL}`]: jev, [`${DEMO_AGENT_PROVIDER}/${DEMO_AGENT_MODEL}`]: agent };
+  const perMillion = { ...per, [`${DEMO_JUDGE_PROVIDER}/${DEMO_JUDGE_MODEL}`]: jev, [`${DEMO_AGENT_PROVIDER}/${DEMO_AGENT_MODEL}`]: agent, [`${DEMO_JUDGE_PROVIDER}/${DEMO_VISION_MODEL}`]: jev };
   return { pricesVer: `prices@demo-${core.sha256(core.canonical(perMillion)).slice(0, 10)}`, perMillion };
 }
 
@@ -258,6 +265,56 @@ export function seedDemoHistory(db: core.Db, now: number): void {
   core.synthEventInsert(db, { eventId: "demo:u_repeat:1", accountId: "u_repeat", kind: "prior_ruling", payload: { action: "takedown", rule_ids: ["ABUSE-001"] }, eventTime: now - 2 * day });
   core.synthEventInsert(db, { eventId: "demo:u_repeat:2", accountId: "u_repeat", kind: "prior_ruling", payload: { action: "takedown", rule_ids: ["ABUSE-001"] }, eventTime: now - 4 * day });
   core.synthEventInsert(db, { eventId: "demo:u_repeat:3", accountId: "u_repeat", kind: "warning", payload: { note: "demo" }, eventTime: now - 5 * day });
+}
+
+// ---------- image samples ----------
+
+export type DemoImageSample = {
+  id: string; title: string; route: string; scene: core.Scene; accountId: string; file: string;
+  /** what the screenshot shows (rendered by scripts/demo-images.ts); the scripted judge judges this text */
+  screenshot: string;
+  /** the scripted image check's probability for "violate" (weapons, gore, QR codes / contact details) */
+  imageP: number;
+  /** rendering only */
+  name: string; when: string; likes: number; avatar: string;
+};
+
+/** Preset screenshots (demo/images/), one per route. All text is made up. */
+export const DEMO_IMAGE_SAMPLES: readonly DemoImageSample[] = [
+  { id: "img-normal", title: "正常截图", route: "判官读图：两条规则都低于放行线、图片检查未命中，自动放行", scene: "comment", accountId: "u_viewer", file: "screenshot-normal.png",
+    screenshot: "周末去试了同款路线，风景确实不错，早上去人少", imageP: 0.02, name: "晚风与猫", when: "2 小时前", likes: 38, avatar: "#c9d6e8" },
+  { id: "img-marketing", title: "营销引流截图", route: "判官读图：营销引流概率过处置线，图片里有联系方式，自动限流", scene: "comment", accountId: "u_promo", file: "screenshot-marketing.png",
+    screenshot: "加V领优惠券，私聊发链接，名额有限 vx: xxxxxx", imageP: 0.97, name: "省钱小助手", when: "5 分钟前", likes: 0, avatar: "#e8d5c4" },
+  { id: "img-abuse", title: "辱骂截图", route: "判官读图：辱骂在中间带，转 agent；账号近期多次被处置，复判后下架", scene: "comment", accountId: "u_repeat", file: "screenshot-abuse.png",
+    screenshot: "就这水平也好意思发？太菜了，别丢人了", imageP: 0.03, name: "路过的网友", when: "18 分钟前", likes: 2, avatar: "#d8d0e6" },
+];
+
+export type LoadedDemoImage = DemoImageSample & { sha: string; ref: string; bytes: Buffer };
+
+/** A stored image's ref: the first 24 hex digits of its sha-256 plus the extension (the same file gets the same ref). */
+export const imageRefOf = (sha: string, ext: string): string => `${sha.slice(0, 24)}.${ext}`;
+
+/** The preset screenshots with their sha and ref; missing files are skipped. */
+export function loadDemoImages(dir: string): LoadedDemoImage[] {
+  const out: LoadedDemoImage[] = [];
+  for (const x of DEMO_IMAGE_SAMPLES) {
+    let bytes: Buffer;
+    try { bytes = readFileSync(join(dir, x.file)); } catch { continue; }
+    const sha = core.sha256(bytes.toString("base64"));
+    out.push({ ...x, sha, ref: imageRefOf(sha, "png"), bytes });
+  }
+  return out;
+}
+
+/** contentId -> the known content of the preset screenshots it carries (undefined: no image, or not a preset). */
+export function demoImageText(db: core.Db, presets: readonly LoadedDemoImage[]): (contentId: string) => string | undefined {
+  const byRef = new Map(presets.map((p) => [p.ref, p] as const));
+  return (contentId) => {
+    const row = db.prepare("SELECT image_refs FROM content WHERE content_id=?").get(contentId) as { image_refs: string | null } | undefined;
+    if (!row?.image_refs) return undefined;
+    const texts = (JSON.parse(row.image_refs) as string[]).map((r) => byRef.get(r)?.screenshot).filter((t): t is string => !!t);
+    return texts.length ? texts.join("\n") : undefined;
+  };
 }
 
 // ---------- session retention ----------

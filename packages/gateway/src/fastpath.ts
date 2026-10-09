@@ -16,6 +16,9 @@ export type FastpathDeps = {
   now: () => number;
   /** stage ③ minimal image channel: both set -> images are delivered to the checker; otherwise image content goes to a human */
   imageStore?: ImageStore; imageChecker?: ImageChecker;
+  /** demo mode only: image content in the middle band goes to the agent (which cannot pass it) instead of straight to a
+   *  person, so the console can show the agent's part; real mode leaves this off */
+  imageToAgent?: boolean;
 };
 
 export type FastpathOutcome = { contentId: string; decision: Decision["state"] | "judge_down" | "backpressure" | "preprocess_error" | "image_unsupported" | "image_review" | "fastpath_error" | "calib_missing" | "judge_incomplete"; reviewId: string; latencyMs: number; judgeStatus: string; blacklistHits: number; nearDup: number };
@@ -127,7 +130,7 @@ export async function runFastpath(deps: FastpathDeps, contentId: string): Promis
   const answers = core.trustedAnswersFromCalls(deps.db, contentId, judgeCallIds, deps.bundle, inputSha);
   let d = decide({ bundle: deps.bundle, scene, hasImages, imageDelivered: images.length > 0, answers, judgeOk: true, hasContext: !!(content.reply_to || content.mentions), parentMissing: core.parentMissing(deps.db, contentId) });
   // the agent has no image channel: image content that is neither auto-passed nor blocked goes to a person
-  if (images.length && d.state === "suspicious" && d.route === "agent") d = { ...d, route: "human", reason: "image_review" };
+  if (images.length && d.state === "suspicious" && d.route === "agent" && !deps.imageToAgent) d = { ...d, route: "human", reason: "image_review" };
   if ((pre.blacklistHits.length > 0 || pre.rateLimited) && d.state === "pass") d = { state: "suspicious", action: null, hits: [], reason: pre.blacklistHits.length ? "blacklist_hit" : "rate_limited", route: "agent" };
 
   // §2.2: a system cause (missing calibration, an unanswered required question) goes straight to a human — the agent
