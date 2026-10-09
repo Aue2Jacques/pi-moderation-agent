@@ -40,6 +40,10 @@ const VIEW = (viewArg ?? "text") as "text" | "text_strip";
 if (VIEW !== "text" && VIEW !== "text_strip") throw new Error("view: text | text_strip");
 const JEV = env("JEV_MODEL", "jev-latest");
 const { bundle } = loadBundle("rules", "config/scenes.yaml");
+// what-if for the owner's open decision (dev plan §8, double confirmation): WHATIF_CONFIRM_PASS=off scores as if the scene's
+// confirm_pass were false, in memory only (rulesVer and calibration unchanged, so it is not a release); recorded in the output
+const WHATIF_NO_CONFIRM_PASS = process.env.WHATIF_CONFIRM_PASS === "off";
+if (WHATIF_NO_CONFIRM_PASS) for (const sc of Object.values(bundle.scenes)) (sc as { confirmPass?: boolean }).confirmPass = false;
 const scene: core.Scene = "comment";
 const questions = [...core.rulesFor(bundle, scene).flatMap((r) => [r.question, ...r.exceptions.map((x) => x.question)]), ...(bundle.scenes[scene].injectionGuard ? [bundle.scenes[scene].injectionGuard!.question] : [])];
 const keyOf = new Map(questions.map((q) => [q.sha, core.questionKey(q)] as const));
@@ -147,7 +151,7 @@ if (phase === "collect") {
   const summary = { view: VIEW, rulesVer: bundle.rulesVer, calibVer: cal.calibVer, items: items.length, scored: items.length - missing, missing,
     requests: { total: req.length, failed: req.filter((x) => x.status !== "ok").length, retries: req.filter((x) => x.try > 1).length, ok_latency_p50_ms: lat[Math.floor(lat.length / 2)] ?? null, ok_latency_p95_ms: lat[Math.floor(lat.length * 0.95)] ?? null },
     platform: table("platform"), dataset: table("dataset") };
-  writeFileSync(join(outDir, `score-${VIEW}.json`), JSON.stringify(summary, null, 1));
+  writeFileSync(join(outDir, `score-${VIEW}${WHATIF_NO_CONFIRM_PASS ? "-whatif-no-confirm-pass" : ""}.json`), JSON.stringify(WHATIF_NO_CONFIRM_PASS ? { whatif: "confirm_pass=false (in memory)", ...summary } : summary, null, 1));
   console.log(JSON.stringify(summary, null, 1));
 } else if (phase === "separation") {
   // Threshold-free comparison between judges (raw answers, no calibration): per question, how well p(violate) separates
