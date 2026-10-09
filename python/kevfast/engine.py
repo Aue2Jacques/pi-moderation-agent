@@ -48,6 +48,7 @@ import torch
 import torch.nn.functional as F
 
 LAYOUTS, QUESTIONS, FP8_MODES, BRANCH_MODES = ("native", "rules_first"), ("full", "short"), ("off", "on", "auto"), ("two_pass", "rows", "auto")
+IMAGE_MARK = "@@KF_IMAGE@@"   # where a request's image sits in its rendered content text (common.to_engine_request)
 SDPA_GATHER_BYTES = int(os.environ.get("KF_SDPA_GATHER_MB", 1024)) << 20   # per attention layer: gather the shared prefix per segment (fused SDPA) up to this size, else LSE merge
 
 
@@ -119,10 +120,14 @@ class Lin:
 # ---------------------------------------------------------------- packed segments
 @dataclass
 class Level:
-    """One pass: segments packed back to back. parent[i] indexes the previous level's segments (None: no parent)."""
+    """One pass: segments packed back to back. parent[i] indexes the previous level's segments (None: no parent).
+    pos3 (optional): per segment the [3, L] M-RoPE positions (temporal, height, width) when it holds image tokens; inject
+    (optional): (segment, offset, embeddings [n, d]) written over the token embeddings (the image's vision features)."""
     ids: list[list[int]]
     pos: list[list[int]]
     parent: list[int] | None = None
+    pos3: list | None = None
+    inject: list | None = None
 
 
 @dataclass
@@ -221,7 +226,15 @@ class Engine:
 
         self.tick(f"{lvl}:embed")
         x = self.lm.embed_tokens(ids)                                     # [T, d]
-        cos, sin = self.lm.rotary_emb(x[None], pos[None, None].expand(3, 1, T))
+        if level.inject:
+            x = x.clone()
+            for seg_i, off, emb in level.inject: x[cu[seg_i] + off: cu[seg_i] + off + emb.shape[0]] = emb.to(x.dtype)
+        if level.pos3 is not None:                                        # M-RoPE: image tokens carry (t, h, w) positions
+            p3 = torch.cat([torch.as_tensor(p, dtype=torch.long) if p is not None else torch.tensor(level.pos[i]).expand(3, -1)
+                            for i, p in enumerate(level.pos3)], 1).to(dev)
+            cos, sin = self.lm.rotary_emb(x[None], p3[:, None, :])
+        else:
+            cos, sin = self.lm.rotary_emb(x[None], pos[None, None].expand(3, 1, T))
         self.tick(f"{lvl}:mask")
 
         # attention context: the parent's own keys appended to the parent's context; a segment reads its parent's
@@ -562,6 +575,42 @@ class Engine:
             if len(p) < Lb: pos[r, len(p):] = p[-1] + 1 + torch.arange(Lb - len(p))   # pads continue the positions (never read)
         g["ids"].copy_(ids, non_blocking=True); g["pos"].copy_(pos, non_blocking=True)
 
+    # ------------------------------------------------------------ images (Kev reading an image: no image training)
+    def attach_vision(self, visual, image_processor):
+        """visual: Qwen3.5's vision encoder (Qwen3_5ForConditionalGeneration.model.visual) on the same device; image
+        processor of the base. A request may then carry "image" (a PIL image) with IMAGE_MARK in its content text."""
+        self.visual, self.improc = visual, image_processor
+        self.merge = visual.spatial_merge_size
+        ids = lambda t: self.tok.convert_tokens_to_ids(t)
+        self.v_start, self.v_pad, self.v_end = ids("<|vision_start|>"), ids("<|image_pad|>"), ids("<|vision_end|>")
+
+    @torch.no_grad()
+    def image_features(self, images):
+        """-> per image (features [n, d], grid (t, h, w)): one vision pass for the whole call."""
+        im = self.improc(images=images, return_tensors="pt")
+        pv, grid = im["pixel_values"].to(self.model.device, self.visual.dtype), im["image_grid_thw"].to(self.model.device)
+        feats = self.visual(pv, grid_thw=grid, return_dict=True).pooler_output
+        sizes = (grid.prod(-1) // self.merge ** 2).tolist()
+        return list(zip(torch.split(feats, sizes), grid.tolist()))
+
+    def content_with_image(self, r, P, feat_grid):
+        """Content tokens with the image spliced in, their M-RoPE positions [3, L] and the next free position."""
+        from kev.model import user_tokens
+        before, after = r["content"].split(IMAGE_MARK, 1)
+        feat, (t, h, w) = feat_grid
+        h, w = h // self.merge, w // self.merge
+        head = ([] if P else [self.state_id]) + user_tokens(self.tok, before)
+        tail = user_tokens(self.tok, after)
+        n = feat.shape[0]
+        ids = head + [self.v_start] + [self.v_pad] * n + [self.v_end] + tail
+        p0 = P + len(head) + 1                                                  # after <|vision_start|>
+        tt, hh, ww = torch.meshgrid(torch.arange(t), torch.arange(h), torch.arange(w), indexing="ij")
+        vis = torch.stack([tt.reshape(-1) + p0, hh.reshape(-1) + p0, ww.reshape(-1) + p0])
+        nxt = int(vis.max()) + 1
+        lin = lambda a, k: torch.arange(a, a + k).expand(3, -1)
+        pos3 = torch.cat([lin(P, len(head) + 1), vis, lin(nxt, 1 + len(tail))], 1)
+        return ids, pos3, len(head) + 1, feat, nxt + 1 + len(tail)
+
     # ------------------------------------------------------------ requests
     def prefix(self, text: str) -> LevelOut:
         """The rules block as a cached root segment: [<state>] + rules text + newline."""
@@ -626,15 +675,27 @@ class Engine:
         pre = reqs[0]["prefix"]
         root = self.prefix(pre) if pre is not None else None
         P = 0 if root is None else root.cu[-1]
-        c_ids, c_pos = [], []
-        for r in reqs:
+        c_ids, c_pos, nexts = [], [], []
+        imgs = [i for i, r in enumerate(reqs) if r.get("image") is not None]
+        pos3, inject = None, None
+        if imgs:
+            if getattr(self, "visual", None) is None: raise ValueError("a request carries an image but no vision encoder is attached")
+            feats = dict(zip(imgs, self.image_features([reqs[i]["image"] for i in imgs])))
+            pos3, inject = [None] * len(reqs), []
+        for i, r in enumerate(reqs):
+            if imgs and i in feats:
+                ids, p3, off, feat, nxt = self.content_with_image(r, P, feats[i])
+                pos3[i] = p3; inject.append((i, off, feat))
+                c_ids.append(ids); c_pos.append(list(range(P, P + len(ids)))); nexts.append(nxt)
+                continue
             ids = self.content_tokens(r) if root is not None else [self.state_id] + self.content_tokens(r)
-            c_ids.append(ids); c_pos.append(list(range(P, P + len(ids))))
+            c_ids.append(ids); c_pos.append(list(range(P, P + len(ids)))); nexts.append(P + len(ids))
         mode = self.opts.branch_mode
         if mode == "auto": mode = "rows" if len(reqs) <= self.opts.rows_max_requests else "two_pass"
+        if imgs: mode = "two_pass"                                               # images: the content pass carries the vision features
         b_ids, b_pos, b_par, picks, ks = [], [], [], [], []
         for i, r in enumerate(reqs):
-            start = P + len(c_ids[i])
+            start = nexts[i]
             for q in r["questions"]:
                 b = self.branch_tokens(q)
                 lead = c_ids[i] if mode == "rows" else []             # rows: the comment again in front of each branch
@@ -651,7 +712,7 @@ class Engine:
             return out
         if mode == "rows":
             branches = self.run(Level(b_ids, b_pos, [0] * len(b_ids) if root is not None else None), root, want_state=False)
-        elif self.opts.dense:
+        elif self.opts.dense and not imgs:
             H = self.dense_graph(list(zip(c_ids, c_pos)), list(zip(b_ids, b_pos)), b_par, [[d] + oe for d, oe in picks], root)   # [NB, K, d]
             X = torch.cat([H[r, :1 + len(oe)] for r, (d, oe) in enumerate(picks)])
             ps = list(self.model._readout_many(X, ks))
@@ -659,7 +720,7 @@ class Engine:
             for r in reqs: out.append([next(it) for _ in r["questions"]])
             return out
         else:
-            content = self.run(Level(c_ids, c_pos, [0] * len(reqs) if root is not None else None), root, want_state=True)
+            content = self.run(Level(c_ids, c_pos, [0] * len(reqs) if root is not None else None, pos3, inject), root, want_state=True)
             branches = self.run(Level(b_ids, b_pos, b_par), content, want_state=False)
         self.tick("call:readout")
         rows = []

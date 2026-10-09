@@ -68,18 +68,11 @@ def proc(text, images=None, return_tensors="pt"):
     enc.update(extra)
     enc["mm_token_type_ids"] = (enc["input_ids"] == btok.convert_tokens_to_ids("<|image_pad|>")).long()   # 0 text, 1 image (M-RoPE)
     return enc
-font = ImageFont.truetype(font_path, 26)
 
 
 def shot(text):
-    """A plain chat-style screenshot of the comment (what a user would post as an image)."""
-    lines = sum((textwrap.wrap(p, 22) or [""] for p in text.split("\n")), [])[:14]
-    W, H = 720, 120 + 40 * len(lines)
-    im = Image.new("RGB", (W, H), (245, 246, 248)); d = ImageDraw.Draw(im)
-    d.rounded_rectangle((24, 24, W - 24, H - 24), 18, fill=(255, 255, 255))
-    d.ellipse((44, 44, 84, 84), fill=(200, 205, 214)); d.text((100, 50), "用户评论", font=font, fill=(120, 124, 132))
-    for i, ln in enumerate(lines): d.text((48, 100 + 40 * i), ln, font=font, fill=(20, 22, 26))
-    return im
+    from kevfast.render import shot as _shot
+    return _shot(text, font_path)
 
 
 @torch.no_grad()
@@ -116,6 +109,7 @@ def auroc(pos, neg):
 
 # 2 text vs image, 3 speed
 res = {k: {"text": ([], []), "image": ([], [])} for k in qs}
+ref_out = open("/hy-tmp/train/vision-ref.jsonl", "w")                      # per-image answers: the reference for kevfast
 agree, lat, ntok = {k: 0 for k in qs}, [], []
 for r in rows:
     t = probs(state(r["text"]))
@@ -124,6 +118,7 @@ for r in rows:
     v = probs(state(image=True), img)
     torch.cuda.synchronize(); lat.append((time.time() - a) * 1000)
     ntok.append(v["ABUSE-001"][1])
+    ref_out.write(json.dumps({"id": r["id"], **{k: v[k][0].tolist() for k in qs}}) + "\n")
     for k in qs:
         y = lab[key2lab[k]].get(r["id"])
         pt, pv = float(t[k][0][0]), float(v[k][0][0])          # option 0 = violate
