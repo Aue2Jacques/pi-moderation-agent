@@ -43,9 +43,10 @@ const keyOf = new Map(questions.map((q) => [q.sha, core.questionKey(q)] as const
 const byKey = new Map(questions.map((q) => [core.questionKey(q), q] as const));
 const sha = (t: string | Buffer) => createHash("sha256").update(t).digest("hex").slice(0, 16);
 type Item = { id: string; text: string; text_strip: string; group: string; slice: string; source: string; label_bin: number };
-// EVAL_SPLIT=val only for choosing settings (e.g. agent-stage thresholds); judges are scored on test (the default).
+// EVAL_SPLIT=val only for choosing settings (e.g. agent-stage thresholds); EVAL_SPLIT=train only for data cleaning
+// (finding train items whose label disagrees with a confident judge answer); judges are scored on test (the default).
 const PART = process.env.EVAL_SPLIT ?? "test";
-if (PART !== "test" && PART !== "val") throw new Error("EVAL_SPLIT: test | val");
+if (PART !== "test" && PART !== "val" && PART !== "train") throw new Error("EVAL_SPLIT: test | val | train");
 const testIds = new Set(readFileSync("data/eval/split-v1.jsonl", "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { id: string; split: string }).filter((r) => r.split === PART).map((r) => r.id));
 const items = readFileSync("data/eval/eval20k.jsonl", "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Item).filter((x) => testIds.has(x.id));
 mkdirSync(outDir, { recursive: true });
