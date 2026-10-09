@@ -8,6 +8,7 @@ import { identityCalibrator, jevModel, jevProvider, loadCalibrator } from "@mod/
 import { loadBundle } from "@mod/policy";
 import { piJudge } from "@mod/worker";
 import { Gateway, DEFAULT_GATEWAY_CONFIG } from "./gateway.ts";
+import { dirImageStore, relayImageChecker } from "./image.ts";
 import { createHttpServer } from "./http.ts";
 
 export function loadDotEnv(): void {
@@ -46,6 +47,9 @@ async function main(): Promise<void> {
     db, bundle, ruleTexts: texts, judge, prices, calibrator, evidenceVer: env("EVIDENCE_VER", "evidence@local"), judgeModel: env("JEV_MODEL", "jev-latest"),
     cfg: { ...DEFAULT_GATEWAY_CONFIG, scanMs: envNum("SCAN_MS", 2000), queueAgentMax: envNum("QUEUE_AGENT_MAX", 50), queueHumanMax: envNum("QUEUE_HUMAN_MAX", 500), outstandingMax: envNum("OUTSTANDING_MAX", 2000), maxAttempts: envNum("MAX_ATTEMPTS", 3), blacklist },
     now: () => Date.now(), gatewayId: `g-${process.pid}`,
+    // stage ③ minimal image channel, off unless both are set: IMAGE_DIR (where image refs resolve) and IMAGE_MODEL (TEMPORARY
+    // relay implementation; the online interface is the owner's decision)
+    ...(process.env["IMAGE_DIR"] && process.env["IMAGE_MODEL"] ? { imageStore: dirImageStore(env("IMAGE_DIR")), imageChecker: relayImageChecker({ baseUrl: env("RELAY_BASE_URL"), apiKey: env("RELAY_API_KEY"), model: env("IMAGE_MODEL") }) } : {}),
   });
   gateway.startLoops();
   const reviewers = (() => { try { return (JSON.parse(readFileSync("config/reviewers.json", "utf8")) as { reviewers: string[] }).reviewers; } catch { return ["rev1"]; } })();

@@ -48,8 +48,10 @@ export function decide(i: EngineInput): Decision {
  *  exceptions) must have an answer, and at least one calibrated answer. */
 function systemCause(i: EngineInput): string | undefined {
   const sc = i.bundle.scenes[i.scene];
-  const required = rulesFor(i.bundle, i.scene).filter((r) => sc.requiredCategories.includes(r.category))
-    .flatMap((r) => [r.question, ...r.exceptions.map((x) => x.question)]);
+  const required = [...rulesFor(i.bundle, i.scene).filter((r) => sc.requiredCategories.includes(r.category))
+    .flatMap((r) => [r.question, ...r.exceptions.map((x) => x.question)]),
+    // stage ③: a delivered image makes the scene's image_check a required question too (missing / uncalibrated -> system cause)
+    ...(i.hasImages && i.imageDelivered ? [sc.imageCheck.question] : [])];
   for (const q of required) {
     const got = i.answers.filter((a) => a.questionSha === q.sha);
     if (got.length === 0) return `judge_incomplete:${questionKey(q)}`;

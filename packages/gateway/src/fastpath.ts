@@ -5,6 +5,7 @@ import type { Db, PolicyBundle, PriceTable, Scene } from "@mod/core";
 import { decide, type Decision } from "@mod/policy";
 import type { JudgeClient } from "@mod/worker";
 import { preprocess, type Blacklist, type RateLimit, type SimhashIndex } from "./preprocess.ts";
+import type { ImageChecker, ImageStore, LoadedImage } from "./image.ts";
 
 export type FastpathDeps = {
   db: Db; bundle: PolicyBundle; judge: JudgeClient; prices: PriceTable;
@@ -13,9 +14,11 @@ export type FastpathDeps = {
   backpressure: () => { agentFull: boolean };
   budgetTools: number; budgetMicro: number;
   now: () => number;
+  /** stage ③ minimal image channel: both set -> images are delivered to the checker; otherwise image content goes to a human */
+  imageStore?: ImageStore; imageChecker?: ImageChecker;
 };
 
-export type FastpathOutcome = { contentId: string; decision: Decision["state"] | "judge_down" | "backpressure" | "preprocess_error" | "image_unsupported" | "fastpath_error" | "calib_missing" | "judge_incomplete"; reviewId: string; latencyMs: number; judgeStatus: string; blacklistHits: number; nearDup: number };
+export type FastpathOutcome = { contentId: string; decision: Decision["state"] | "judge_down" | "backpressure" | "preprocess_error" | "image_unsupported" | "image_review" | "fastpath_error" | "calib_missing" | "judge_incomplete"; reviewId: string; latencyMs: number; judgeStatus: string; blacklistHits: number; nearDup: number };
 
 /** Route an item straight to the human queue with a reason (G direct release), recording the judge calls made so far. */
 export function toHuman(deps: FastpathDeps, contentId: string, reason: core.ReleaseReason, judgeCallIds: string[] = []): core.ReviewRow {
@@ -47,9 +50,16 @@ export async function runFastpath(deps: FastpathDeps, contentId: string): Promis
   // round-9 item 6: the text MVP has no image channel to the judge. Content with images is never auto-disposed and never
   // gets an image_check question it cannot answer: straight to human with its own reason, zero judge calls.
   const hasImages = !!content.image_refs && (JSON.parse(content.image_refs) as unknown[]).length > 0;
+  // stage ③: with an image channel configured the images are loaded and later sent to the checker; a missing file or an
+  // unsupported type still degrades explicitly to a human (image_unsupported), never to a guess
+  let images: LoadedImage[] = [];
   if (hasImages) {
-    const r = direct("image_unsupported");
-    return { contentId, decision: "image_unsupported", reviewId: r.review_id, latencyMs: deps.now() - t0, judgeStatus: "skipped", blacklistHits: pre.blacklistHits.length, nearDup: pre.nearDuplicates.length };
+    const loaded = deps.imageChecker && deps.imageStore ? (JSON.parse(content.image_refs!) as string[]).map((ref) => deps.imageStore!.load(String(ref))) : undefined;
+    if (!loaded || loaded.some((x) => "error" in x)) {
+      const r = direct("image_unsupported");
+      return { contentId, decision: "image_unsupported", reviewId: r.review_id, latencyMs: deps.now() - t0, judgeStatus: "skipped", blacklistHits: pre.blacklistHits.length, nearDup: pre.nearDuplicates.length };
+    }
+    images = loaded as LoadedImage[];
   }
   // one judge call: every applicable rule question + its exceptions
   const rules = core.rulesFor(deps.bundle, scene);
@@ -86,15 +96,44 @@ export async function runFastpath(deps: FastpathDeps, contentId: string): Promis
     return { contentId, decision: "judge_down", reviewId: r.review_id, latencyMs: deps.now() - t0, judgeStatus: res.status, blacklistHits: pre.blacklistHits.length, nearDup: pre.nearDuplicates.length };
   }
 
+  // stage ③: the image check — the scene's image_check question, asked twice (primary + confirming copy), recorded on the
+  // content's judge calls with the same input fingerprint, calibrated like any other answer
+  if (images.length) {
+    const ic = deps.imageChecker!;
+    const q = sceneCfg.imageCheck.question;
+    const reqSha = core.sha256(core.canonical({ model: ic.model, question: q.sha, images: images.map((im) => core.sha256(im.bytes.toString("base64"))) }));
+    let firstId: string | undefined;
+    for (let k = 0; k < 2; k++) {
+      const out = await ic.check({ contentId, images, question: q });
+      const id = core.uuid();
+      const cal = out.status === "ok" ? deps.calibrator.apply({ judge: ic.model, rulesVer: deps.bundle.rulesVer, scene, nOptions: Object.keys(q.criteria).length, question: core.questionKey(q) }, out.probs) : null;
+      core.recordJudgeCall(deps.db, {
+        judgeCallId: id, reviewId: null, contentId, attempt: null, provider: ic.provider, model: out.model, api: "image", inputSha, requestSha: reqSha, evidenceSet: [], pins: deps.pins,
+        status: out.status, ...(firstId ? { confirmsCallId: firstId } : {}), latencyMs: out.latencyMs,
+        ...(out.status === "ok" ? { inputTokens: out.usage.input, outputTokens: out.usage.output, costMicro: (() => { try { return core.microOfUsage(deps.prices, `${ic.provider}/${out.model}`, out.usage); } catch { return 0; } })() } : { inputTokens: 0, outputTokens: 0, costMicro: 0 }),
+        costStatus: out.status === "ok" ? "settled" : "unknown",
+        answers: out.status === "ok" ? [{ questionSha: q.sha, ruleId: null, kind: "image_check", choice: out.choice, rawProbs: out.probs, calibratedProbs: cal ? cal.probs : null, ...(cal ? { temperature: cal.temperature } : {}) }] : [],
+      }, deps.now());
+      judgeCallIds.push(id);
+      firstId ??= id;
+      if (out.status !== "ok") {
+        const r = direct("judge_down", judgeCallIds);
+        return { contentId, decision: "judge_down", reviewId: r.review_id, latencyMs: deps.now() - t0, judgeStatus: `image_${out.status}`, blacklistHits: pre.blacklistHits.length, nearDup: pre.nearDuplicates.length };
+      }
+    }
+  }
+
   // policy: answers → three states (blacklist hits and rate limiting force suspicious; they are deterministic signals for the agent, not rulings)
   const answers = core.trustedAnswersFromCalls(deps.db, contentId, judgeCallIds, deps.bundle, inputSha);
-  let d = decide({ bundle: deps.bundle, scene, hasImages, answers, judgeOk: true, hasContext: !!(content.reply_to || content.mentions) });   // hasImages is false here (gated above)
+  let d = decide({ bundle: deps.bundle, scene, hasImages, imageDelivered: images.length > 0, answers, judgeOk: true, hasContext: !!(content.reply_to || content.mentions) });
+  // the agent has no image channel: image content that is neither auto-passed nor blocked goes to a person
+  if (images.length && d.state === "suspicious" && d.route === "agent") d = { ...d, route: "human", reason: "image_review" };
   if ((pre.blacklistHits.length > 0 || pre.rateLimited) && d.state === "pass") d = { state: "suspicious", action: null, hits: [], reason: pre.blacklistHits.length ? "blacklist_hit" : "rate_limited", route: "agent" };
 
   // §2.2: a system cause (missing calibration, an unanswered required question) goes straight to a human — the agent
   // cannot fix it by investigating and would only spend its budget
   if (d.state === "suspicious" && d.route === "human") {
-    const reason: core.ReleaseReason = d.reason.startsWith("calib_missing") ? "calib_missing" : d.reason.startsWith("judge_incomplete") ? "judge_incomplete" : d.reason === "image_unsupported" ? "image_unsupported" : "judge_down";
+    const reason: core.ReleaseReason = d.reason.startsWith("calib_missing") ? "calib_missing" : d.reason.startsWith("judge_incomplete") ? "judge_incomplete" : d.reason === "image_unsupported" ? "image_unsupported" : d.reason === "image_review" ? "image_review" : "judge_down";
     const r = direct(reason, judgeCallIds);
     return { contentId, decision: reason, reviewId: r.review_id, latencyMs: deps.now() - t0, judgeStatus: "ok", blacklistHits: pre.blacklistHits.length, nearDup: pre.nearDuplicates.length };
   }

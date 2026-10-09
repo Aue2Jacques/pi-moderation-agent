@@ -10,6 +10,7 @@ export type ReleaseReason =
   | "timeout" | "budget_tools" | "budget_cost" | "evidence_gap" | "judge_down"
   | "model_release" | "backpressure" | "revoked" | "preprocess_error"
   | "fastpath_error"   // the fast path kept failing for one item (dev plan R4): after GatewayConfig.intakeMaxAttempts tries it goes to a human
+  | "image_review"     // stage ③: the image reached the image checker, but the content was not auto-passed or blocked; the agent has no image channel, so a person looks
   | "calib_missing"    // §2.2 system cause: a required question has answers but none calibrated (strict mode without a fitted bucket)
   | "judge_incomplete" // §2.2 system cause: the judge returned no answer for a required question
   | "image_unsupported"   // content carries images and no image channel to the judge exists (text MVP): never auto-disposed

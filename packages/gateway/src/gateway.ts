@@ -4,6 +4,7 @@ import type { Db, PolicyBundle, PriceTable, ReviewRow } from "@mod/core";
 import { crashAt, type JudgeClient } from "@mod/worker";
 import { runFastpath, toHuman, type FastpathOutcome } from "./fastpath.ts";
 import { Blacklist, RateLimit, SimhashIndex } from "./preprocess.ts";
+import type { ImageChecker, ImageStore } from "./image.ts";
 
 export type GatewayConfig = {
   scanMs: number; intakeBatch: number; intakeConcurrency: number;
@@ -23,7 +24,9 @@ export const DEFAULT_GATEWAY_CONFIG: GatewayConfig = {
  *  exists for its exact config (rules, calibration, judge, agent model, prices) and only for contents whose rollout bucket
  *  is below the candidate's rollout_pct in version_pin (kind 'rules'); pct 0 is the rollback. */
 export type Candidate = { bundle: PolicyBundle; ruleTexts?: Record<string, string>; agentModel: string };
-export type GatewayDeps = { db: Db; bundle: PolicyBundle; ruleTexts?: Record<string, string>; judge: JudgeClient; prices: PriceTable; calibrator: core.Calibrator; evidenceVer: string; judgeModel: string; cfg: GatewayConfig; now: () => number; gatewayId: string; candidate?: Candidate };
+export type GatewayDeps = { db: Db; bundle: PolicyBundle; ruleTexts?: Record<string, string>; judge: JudgeClient; prices: PriceTable; calibrator: core.Calibrator; evidenceVer: string; judgeModel: string; cfg: GatewayConfig; now: () => number; gatewayId: string; candidate?: Candidate;
+  /** stage ③ minimal image channel (both or neither); the online interface is the owner's decision */
+  imageStore?: ImageStore; imageChecker?: ImageChecker };
 
 /**
  * Metric definitions (round-9 item 8). Window = last 300 s unless stated.
@@ -109,7 +112,8 @@ export class Gateway {
           const id = rows[next++]!;
           const bundle = this.bundleFor(id);
           const deps = { db, bundle, judge: this.d.judge, prices: this.d.prices, pins: { ...this.pins, rulesVer: bundle.rulesVer }, judgeModel: this.d.judgeModel, calibrator: this.d.calibrator, blacklist: this.blacklist, index: this.index, rate: this.rate,
-            backpressure: () => this.backpressure(), budgetTools: this.d.cfg.budgetTools, budgetMicro: this.d.cfg.budgetMicro, now: this.d.now };
+            backpressure: () => this.backpressure(), budgetTools: this.d.cfg.budgetTools, budgetMicro: this.d.cfg.budgetMicro, now: this.d.now,
+            ...(this.d.imageStore && this.d.imageChecker ? { imageStore: this.d.imageStore, imageChecker: this.d.imageChecker } : {}) };
           try {
             const o = await runFastpath(deps, id);
             out.push(o);

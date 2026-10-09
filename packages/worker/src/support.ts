@@ -17,8 +17,9 @@ export type Support = { allowed_now: Action[]; rules: RuleSupport[]; missing: st
 export function supportOf(db: Db, review: ReviewRow, bundle: PolicyBundle, judgeCallIds: readonly string[]): Support {
   const content = core.readContent(db, review.content_id)!;
   const scene = content.scene as core.Scene;
-  const { answers } = core.trustedAnswers(db, review, bundle, judgeCallIds, review.evidence_ver);
-  const r = core.allowedActions({ bundle, scene, hasImages: !!content.image_refs, answers });
+  const { answers, calls } = core.trustedAnswers(db, review, bundle, judgeCallIds, review.evidence_ver);
+  // same rule as the submit check: delivered only when a cited call came from the image channel
+  const r = core.allowedActions({ bundle, scene, hasImages: !!content.image_refs, imageDelivered: !!content.image_refs && calls.some((c) => c.api === "image" && c.status === "ok"), answers });
   const confirmPass = bundle.scenes[scene].confirmPass ?? true;
   const byRule = new Map(core.rulesFor(bundle, scene).map((x) => [x.ruleId, x] as const));
   const rules: RuleSupport[] = r.rules.map((v) => {

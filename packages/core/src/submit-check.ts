@@ -142,7 +142,10 @@ export function writeRulingChecked(ctx: Ctx, input: SubmitRulingInput, preloaded
       if (c.review_id !== review.review_id || c.rules_ver !== review.rules_ver || c.calib_ver !== review.calib_ver || c.evidence_ver !== review.evidence_ver) fail("E_JUDGE_FOREIGN", 10, `judge_call ${c.judge_call_id} belongs elsewhere`);
     }
     const hasImages = !!content!.image_refs && (JSON.parse(content!.image_refs) as unknown[]).length > 0;
-    allowed = allowedActions({ bundle, scene: content!.scene, hasImages, answers: trusted!.answers });
+    // stage ③: an image counts as delivered only when a cited call came from the image channel (api 'image', status ok) —
+    // a text judge's image_check answer is never coverage (round-9 item 6)
+    const imageDelivered = hasImages && trusted!.calls.some((c) => c.api === "image" && c.status === "ok");
+    allowed = allowedActions({ bundle, scene: content!.scene, hasImages, imageDelivered, answers: trusted!.answers });
     if (!allowed.allowed.has(input.action)) {
       fail("E_ACTION_NOT_SUPPORTED", 11, `${input.action} not in allowed set`, {
         allowed: [...allowed.allowed], required: allowed.required, covered: allowed.covered,
