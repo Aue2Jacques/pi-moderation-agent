@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useConsole } from "../App.tsx";
 import { api, authHeaders, errText, type Action, type ContentTimeline, type HumanQueueItem } from "../api.ts";
-import { useEventSource, useNow, usePoll } from "../hooks.ts";
+import { useEventSource, useNow } from "../hooks.ts";
+import { useLive, useLiveQuery } from "../live.tsx";
 import { ACTION, QUESTION, SCENE, reasonText } from "../labels.ts";
 import { ContentHeader, ReviewCard } from "../Timeline.tsx";
 import { ActionTag, Alert, Card, Empty, Icon, ago, clock, duration, shortId } from "../ui.tsx";
@@ -13,7 +14,8 @@ type ClaimRule = { rule_id: string; default_action: "limit" | "takedown" };
 export function Human({ selected }: { selected: string | null }) {
   const { go, reviewer } = useConsole();
   const [tab, setTab] = useState<"open" | "closed">("open");
-  const queue = usePoll<HumanQueueItem[]>(`/api/human/queue?status=${tab}`, 2500);
+  const live = useLive();
+  const queue = useLiveQuery<HumanQueueItem[]>(`/api/human/queue?status=${tab}`, live.frame?.versions.human);
   const now = useNow(1000);
   const items = queue.data ?? [];
   const current = items.find((x) => x.review_id === selected) ?? null;

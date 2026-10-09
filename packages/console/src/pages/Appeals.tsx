@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useConsole } from "../App.tsx";
 import { api, errText, type AppealItem, type ContentTimeline, type ReviewListItem } from "../api.ts";
-import { usePoll } from "../hooks.ts";
+import { useLive, useLiveQuery } from "../live.tsx";
 import { ACTOR, APPEAL_REASONS, SCENE, appealReason } from "../labels.ts";
 import { ActionTag, Alert, Card, Empty, Icon, StateTag, dateTime, shortId } from "../ui.tsx";
 
@@ -23,9 +23,10 @@ export function Appeals({ preset }: { preset: string | null }) {
     return () => clearTimeout(t);
   }, [contentId]);
 
-  const appeals = usePoll<AppealItem[]>("/api/appeals", 2500);
-  const disposed = usePoll<{ items: ReviewListItem[] }>("/api/review-list?state=disposed&limit=8", 4000);
-  const humanDone = usePoll<{ items: ReviewListItem[] }>("/api/review-list?state=human_disposed&limit=8", 4000);
+  const live = useLive();
+  const appeals = useLiveQuery<AppealItem[]>("/api/appeals", live.frame?.versions.appeals);
+  const disposed = useLiveQuery<{ items: ReviewListItem[] }>("/api/review-list?state=disposed&limit=8", live.frame?.versions.reviews, undefined, 3000);
+  const humanDone = useLiveQuery<{ items: ReviewListItem[] }>("/api/review-list?state=human_disposed&limit=8", live.frame?.versions.reviews, undefined, 3000);
   const candidates = [...(disposed.data?.items ?? []), ...(humanDone.data?.items ?? [])].sort((a, b) => b.updated_at - a.updated_at).slice(0, 10);
 
   async function submit(): Promise<void> {

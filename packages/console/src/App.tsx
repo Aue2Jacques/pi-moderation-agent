@@ -1,7 +1,8 @@
 // Console shell: sidebar navigation, top bar (title, theme, reviewer), hash routes.
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { api, loadReviewer, saveReviewer, type ConsoleConfig, type Reviewer, type Stats } from "./api.ts";
-import { useHashRoute, usePoll } from "./hooks.ts";
+import { api, loadReviewer, saveReviewer, type ConsoleConfig, type Reviewer } from "./api.ts";
+import { useHashRoute } from "./hooks.ts";
+import { LiveProvider, useLive } from "./live.tsx";
 import { Alert, Icon } from "./ui.tsx";
 import { Overview } from "./pages/Overview.tsx";
 import { Track } from "./pages/Track.tsx";
@@ -54,12 +55,16 @@ function SignIn({ onDone }: { onDone: (r: Reviewer) => void }) {
 }
 
 export function App() {
+  return <LiveProvider><Console /></LiveProvider>;
+}
+
+function Console() {
+  const live = useLive();
   const [config, setConfig] = useState<ConsoleConfig | null>(null);
   const [cfgError, setCfgError] = useState<string | null>(null);
   const [reviewer, setReviewerState] = useState<Reviewer | null>(null);
   const [parts, go] = useHashRoute();
   const [theme, toggleTheme] = useTheme();
-  const stats = usePoll<Stats>(config ? "/api/stats" : null, 4000);
 
   useEffect(() => {
     api.get<ConsoleConfig>("/api/config").then((c) => { setConfig(c); setReviewerState(loadReviewer(c)); }).catch((e) => setCfgError(String(e)));
@@ -82,7 +87,7 @@ export function App() {
     case "rules": body = <Rules />; break;
     default: body = <Overview />;
   }
-  const humanOpen = stats.data?.human.open ?? 0;
+  const humanOpen = live.frame?.stats.human.open ?? 0;
 
   return (
     <ConsoleCtx.Provider value={{ config, reviewer, setReviewer, go }}>

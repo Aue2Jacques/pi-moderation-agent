@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useConsole } from "../App.tsx";
 import type { ReviewListItem } from "../api.ts";
-import { usePoll } from "../hooks.ts";
+import { useLive, useLiveQuery } from "../live.tsx";
 import { ACTION, ACTOR, ROUTE, ROUTES, SCENE, STATE, reasonText } from "../labels.ts";
 import { ActionTag, Alert, Card, Empty, RouteTag, StateTag, dateTime, shortId, yuan } from "../ui.tsx";
 
@@ -13,7 +13,8 @@ export function Reviews() {
   const [f, setF] = useState({ route: "", state: "", scene: "", action: "", actor: "", q: "" });
   const [page, setPage] = useState(0);
   const qs = new URLSearchParams(Object.entries({ ...f, limit: String(PAGE), offset: String(page * PAGE) }).filter(([, v]) => v !== "")).toString();
-  const list = usePoll<{ items: ReviewListItem[]; total: number }>(`/api/review-list?${qs}`, 3000);
+  const live = useLive();
+  const list = useLiveQuery<{ items: ReviewListItem[]; total: number }>(`/api/review-list?${qs}`, live.frame?.versions.reviews);
   const set = (k: keyof typeof f) => (v: string): void => { setF({ ...f, [k]: v }); setPage(0); };
   const sel = (k: keyof typeof f, label: string, opts: [string, string][]) => (
     <label className="field" style={{ minWidth: 120 }}>{label}

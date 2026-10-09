@@ -2,7 +2,8 @@
 import { useState } from "react";
 import { useConsole } from "../App.tsx";
 import type { RouteKind, Stats } from "../api.ts";
-import { useEventSource, usePoll } from "../hooks.ts";
+import { useEventSource } from "../hooks.ts";
+import { useLive } from "../live.tsx";
 import { ACTION, ROUTE, ROUTES, reasonText } from "../labels.ts";
 import { Alert, Card, Empty, duration, pad2, pct, yuan } from "../ui.tsx";
 
@@ -73,11 +74,10 @@ function BarList({ rows, total }: { rows: [string, number][]; total: number }) {
 
 export function Overview() {
   const { config } = useConsole();
-  const s = usePoll<Stats>("/api/stats", 3000);
+  const live = useLive();
   const { data: m, connected } = useEventSource<Metrics>("/api/metrics");
-  if (s.error) return <Alert tone="bad">{s.error}</Alert>;
-  if (!s.data) return <Empty>加载中…</Empty>;
-  const d = s.data;
+  if (!live.frame) return <Empty>{live.connected ? "加载中…" : "正在连接实时数据流…"}</Empty>;
+  const d = live.frame.stats;
   const finished = Math.max(0, d.reviews - d.agent.open - d.human.open);
   const auto = d.routes.fast_pass + d.routes.fast_block + d.agent.disposed;
   const routeTotal = ROUTES.reduce((n, r) => n + d.routes[r], 0);
