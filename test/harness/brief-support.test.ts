@@ -182,3 +182,31 @@ describe("parent missing (dev plan §3.1 problem 3, temporary)", () => {
     expect(state).toBe("disposed");
   });
 });
+
+describe("evidence exhausted (dev plan §3.1 problem 4, temporary)", () => {
+  it("middle band after both evidence kinds were fetched: support says nothing new can be fetched and to release; with one kind left it does not", async () => {
+    const midRisk: JudgeScript = (req) => ({ status: "ok", model: "jev-recorded", answers: uniform(req.questions, 0.3), usage: { input: 480, output: 50 }, latencyMs: 250 });
+    const db = freshDb();
+    const r = suspicious(db, "ex1", "suspicious_band");
+    const steps: Step[] = [
+      { tool: "get_thread_context", args: {} },
+      { tool: "judge", args: { rule_ids: [], evidence_ids: ["$E1"] } },
+      { tool: "get_account_history", args: {} },
+      { tool: "judge", args: { rule_ids: [], evidence_ids: ["$E1", "$E2"] } },
+      { tool: "release", args: { reason: "evidence_gap" } },
+      { text: "done" },
+    ];
+    const fx = await makeWorker({ db, steps: [], judge: midRisk });
+    const seen: unknown[][] = [];
+    setScript(fx, recording(resolving(db, () => r.review_id, steps), seen));
+    await fx.worker.start();
+    await fx.worker.admitOnce();
+    await runToIdle(fx);
+    const results = toolResults(seen[seen.length - 1]!);
+    const hint = "没有新证据可取";
+    expect((results[1] as { support: { missing: string[] } }).support.missing.join("")).not.toContain(hint);
+    expect((results[3] as { support: { missing: string[] } }).support.missing.join("")).toContain(hint);
+    expect(core.requireReview(db, r.review_id)).toMatchObject({ state: "human_queue", release_reason: "evidence_gap" });
+    await fx.close();
+  });
+});

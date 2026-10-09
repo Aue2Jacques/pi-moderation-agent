@@ -45,5 +45,11 @@ export function supportOf(db: Db, review: ReviewRow, bundle: PolicyBundle, judge
     ...r.required.filter((c) => !r.covered[c] && c === "image_check").map(() => "内容带图片，没有图片通道，不能自动放行"),
     ...(core.parentMissing(db, review.content_id) ? ["回复的父内容在库里不存在（已删除或还没到达）：找到父内容前不能放行；取不到就转人工（evidence_gap）"] : []),
   ];
+  // §3.1 problem 4 (temporary): agents that ran out of the 12-tool budget kept re-asking judge / confirm on the same
+  // evidence. When nothing is allowed and both kinds of evidence were already fetched, say plainly that asking again
+  // cannot change anything and the next step is release.
+  const fetched = new Set((db.prepare("SELECT DISTINCT kind FROM evidence WHERE review_id=?").all(review.review_id) as { kind: string }[]).map((x) => x.kind));
+  if (r.allowed.size === 0 && fetched.has("thread_context") && fetched.has("account_history"))
+    missing.push("线程上下文和账号历史都已取过，没有新证据可取：再 judge / confirm 不会改变结论，现在 release(reason=evidence_gap)");
   return { allowed_now: [...r.allowed], rules, missing };
 }
