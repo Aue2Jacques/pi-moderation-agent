@@ -55,8 +55,8 @@ export function Track({ initialId }: { initialId: string | null }) {
 
   return (
     <>
-      <PageHead title="提交与追踪" desc="提交的内容进入接入队列，与线上流量走同一条链路；右侧实时显示它经过的每一步。" />
-      <div className="split">
+      <PageHead title="提交与追踪" desc="提交的内容进入接入队列，与线上流量走同一条链路；追踪面板实时显示它经过的每一步。" />
+      <div className={`split ${tracking ? "tracking" : ""}`}>
         <div className="stack" style={{ gap: 20 }}>
           <Panel title="提交内容">
             <form className="stack" style={{ gap: 14 }} onSubmit={(e) => { e.preventDefault(); onSubmit(); }}>

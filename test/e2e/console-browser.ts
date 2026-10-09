@@ -112,8 +112,10 @@ try {
   // the simulated reviewer works on simulated tasks and is marked as such
   await page.goto(`${app.base}/#/human`);
   await page.getByRole("tab", { name: "已完成" }).click();
-  await page.locator("td .sim").first().waitFor({ timeout: 30_000 });
-  check("simulated reviewer's decisions are marked", (await page.locator("td", { hasText: "sim-reviewer" }).count()) > 0);
+  // (the open list stays on screen until the closed one is read, so wait for the reviewer's name itself)
+  const bySim = page.locator("td", { hasText: "sim-reviewer" }).first();
+  await bySim.waitFor({ timeout: 30_000 });
+  check("simulated reviewer's decisions are marked", (await bySim.locator(".sim").count()) === 1);
   // traffic control: pause stops new contents, resume starts them again
   await page.getByRole("button", { name: "暂停模拟流量" }).click();
   await page.getByRole("button", { name: "继续模拟流量" }).waitFor();
