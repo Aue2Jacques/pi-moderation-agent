@@ -6,10 +6,12 @@ items are flagged.
 
   map     -> data/eval/source-labels-v1.jsonl  {id, split, source, cat, basis, variant, short, rule}; an item no rule matches
              stops the run (nothing is mapped by default)
+  sample  -> data/eval/clean-check-ids.txt: train items for an unbiased check of the mapping, stratified by basis
+             (SAMPLE_PER_BASIS), fixed hash order, no text read; label them with the frozen procedure, then `check`
   check   -> how the mapping agrees with the platform labels (frozen procedure, data/eval/labels-*.jsonl) on items that
              carry them, train and val only (the test split is not used to judge the cleaning); counts only
 
-usage (repo root, dev box): python3 scripts/map-source-labels.py map|check
+usage (repo root, dev box): python3 scripts/map-source-labels.py map|sample|check
 """
 import collections
 import json
@@ -21,6 +23,7 @@ EVAL = "data/eval/eval20k.jsonl"
 SPLIT = "data/eval/split-v1.jsonl"
 OUT = "data/eval/source-labels-v1.jsonl"
 VARIANTS = ("+injection",)
+SAMPLE_PER_BASIS = {"dataset": 80, "assumed": 50, "boundary": 30, "authored": 20, "derived": 10, "remapped": 10}
 
 
 def load_map(path=MAP_PATH):
@@ -52,6 +55,16 @@ def map_items(m, items, split):
         out.append({"id": it["id"], "split": split.get(it["id"]), "source": it["source"], "cat": r["cat"], "basis": r["basis"],
                     "variant": variant or ("perturbation" if r["basis"] == "derived" else None),
                     "short": len(it.get("text_strip") or it.get("text") or "") <= m["short_chars"], "rule": k})
+    return out
+
+
+def sample(mapped, per_basis=SAMPLE_PER_BASIS):
+    """Train items only, per basis the first n in a fixed hash order (independent of file order)."""
+    import hashlib
+    out = []
+    for basis, n in per_basis.items():
+        pool = sorted((r for r in mapped if r["split"] == "train" and r["basis"] == basis), key=lambda r: hashlib.sha256(f"clean-check-v1|{r['id']}".encode()).hexdigest())
+        out += [r["id"] for r in pool[:n]]
     return out
 
 
@@ -108,12 +121,17 @@ def main(argv):
         c = collections.Counter((r["split"], r["basis"], r["cat"]) for r in mapped)
         print(json.dumps({"map": m["version"], "items": len(mapped), "short": sum(r["short"] for r in mapped),
                           "by_split_basis_cat": {"|".join(map(str, k)): v for k, v in sorted(c.items())}}, ensure_ascii=False, indent=1))
+    elif phase == "sample":
+        ids = sample(_jsonl(OUT))
+        with open("data/eval/clean-check-ids.txt", "w") as f:
+            f.write("\n".join(ids) + "\n")
+        print(json.dumps({"sampled": len(ids), "per_basis": SAMPLE_PER_BASIS}))
     elif phase == "check":
         mapped = _jsonl(OUT)
         lab = lambda std: {r["id"]: r["label"] for r in _jsonl(f"data/eval/labels-{std}.jsonl")}
         print(json.dumps(check(mapped, lab("abuse-v4.3"), lab("marketing-v2")), ensure_ascii=False, indent=1))
     else:
-        raise SystemExit("usage: map-source-labels.py map|check")
+        raise SystemExit("usage: map-source-labels.py map|sample|check")
 
 
 if __name__ == "__main__":

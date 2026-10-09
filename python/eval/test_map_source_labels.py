@@ -59,3 +59,12 @@ def test_check_leaves_test_out_and_counts_disagreements():
     out = msl.check(mapped, ab, mk)
     assert out["basis:assumed"] == {"n": 2, "agree": 1, "SAFE->ABUSE": 1}                    # c (test) not counted
     assert out["basis:dataset"] == {"n": 2, "agree": 1, "platform_uncertain": 1}             # BOTH counts as agreeing with ABUSE
+
+
+def test_sample_is_train_only_stratified_and_order_independent():
+    mapped = [{"id": f"{b}{k}", "split": "train" if k % 4 else "val", "basis": b} for b in ("dataset", "assumed") for k in range(40)]
+    a = msl.sample(mapped, {"dataset": 5, "assumed": 3})
+    b = msl.sample(list(reversed(mapped)), {"dataset": 5, "assumed": 3})
+    assert a == b and len(a) == 8
+    assert all(int(i.lstrip("datsetum")) % 4 for i in a)                                       # val items never sampled
+    assert sum(i.startswith("dataset") for i in a) == 5
