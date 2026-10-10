@@ -109,7 +109,7 @@ async function main(): Promise<void> {
       ...(trafficApi ? { traffic: trafficApi, simPrefix: SIM_PREFIX, simReviewer: SIM_REVIEWER } : {}),
       ...(corpus ? { corpus: { judge: corpus.judge, items: corpus.items.length } } : {}),
       // HARNESS_RECORD_DB: a recorded real harness run for the Agent page (scripts/run-ac.ts output, read only)
-      ...(process.env["HARNESS_RECORD_DB"] && existsSync(env("HARNESS_RECORD_DB")) ? { harnessRecord: new HarnessRecordStore(env("HARNESS_RECORD_DB"), (v) => (v === bundle.rulesVer ? bundle : undefined)) } : {}),
+      ...(process.env["HARNESS_RECORD_DB"] && existsSync(env("HARNESS_RECORD_DB")) ? { harnessRecord: new HarnessRecordStore(env("HARNESS_RECORD_DB"), (v) => (v === bundle.rulesVer ? bundle : undefined), process.env["HARNESS_RECORD_NOTE"]) } : {}),
       // image intake: demo -> its data dir + presets; real -> IMAGE_DIR when set (then the existing image channel, or
       // image_unsupported -> a person when IMAGE_MODEL is not set); otherwise images are refused
       ...(demo ? { images: { dir: demoImgDir, note: "演示模式：图片由脚本判官模拟（预置截图按已知内容打分，其他图片给中间带概率）",

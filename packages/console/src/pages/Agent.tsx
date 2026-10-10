@@ -186,7 +186,7 @@ function Live({ rec }: { rec: HarnessRecord | null }) {
           <div className="row ag-ctl">
             <button className="btn sm" onClick={() => setRunning(!running)}>{running ? "暂停" : "继续"}</button>
             <button className="btn sm" onClick={next}>跳到下一个会话</button>
-            <span className="faint small">{rec ? "真实模型在正式 harness 上的运行记录，每一步均取自数据库。" : demo ? "演示环境中 agent 为按相同协议运行的脚本；harness、工具与提交校验均为正式代码。" : "agent 模型经中转服务调用。"}</span>
+            <span className="faint small">{rec ? `真实判官与真实 agent 模型在正式 harness 上的运行记录，每一步均取自数据库。${rec.note ?? ""}` : demo ? "演示环境中 agent 为按相同协议运行的脚本；harness、工具与提交校验均为正式代码。" : "agent 模型经中转服务调用。"}</span>
           </div>
         </div>
       </div>
@@ -247,7 +247,7 @@ function RecordStats({ rec }: { rec: HarnessRecord }) {
   const blocked = rec.blocked.reduce((a, x) => a + x.n, 0);
   const rejected = rec.rejections.reduce((a, x) => a + x.n, 0);
   return (
-    <Panel title="Harness 在这次运行中做了什么" sub={`${rec.run.contents} 条真实评论，判官 ${rec.run.judge_model}，agent ${rec.run.agent_model ?? "—"}；全部数字取自运行记录`}>
+    <Panel title="Harness 在这次运行中做了什么" sub={`${rec.run.contents} 条测试集评论，判官 ${rec.run.judge_model}，agent ${rec.run.agent_model ?? "—"}；全部数字取自运行记录${rec.note ? `。${rec.note}` : ""}`}>
       <div className="kpis rec-kpis" style={{ ["--n" as string]: 4 }}>
         <Kpi label="工具调用" value={rec.tools.reduce((a, t) => a + t.calls, 0)} foot={`其中被 hook 拦截 ${blocked} 次`} />
         <Kpi label="提交被拒" value={rejected} foot="未通过提交校验，agent 修正或转人工" />

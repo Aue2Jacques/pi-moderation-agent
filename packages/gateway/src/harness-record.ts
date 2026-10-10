@@ -21,9 +21,11 @@ export class HarnessRecordStore {
   readonly db: DatabaseSync;
   readonly bundleOf: (v: string) => PolicyBundle | undefined;
   #summary: HarnessRecord | null = null;
-  constructor(path: string, bundleOf: (v: string) => PolicyBundle | undefined) {
+  readonly note: string | null;
+  constructor(path: string, bundleOf: (v: string) => PolicyBundle | undefined, note?: string) {
     this.db = new DatabaseSync(path, { readOnly: true });
     this.bundleOf = bundleOf;
+    this.note = note ?? null;
   }
 
   summary(): HarnessRecord {
@@ -88,6 +90,7 @@ export class HarnessRecordStore {
     const firstT = Math.min(...[...firstModel.values()]);
     this.#summary = {
       available: true,
+      note: this.note,
       run: { contents: new Set(sessions.map((s) => s.content_id)).size, judge_model: r0 ? String(r0["judge_model"]) : "—", agent_model: agentReviews[0] ? String(agentReviews[0]["agent_model"] ?? "") || null : null,
         started: Number.isFinite(firstT) ? firstT : null, ended: agentReviews.length ? Math.max(...agentReviews.map((r) => Number(r["updated_at"]))) : null },
       by_category: by,
