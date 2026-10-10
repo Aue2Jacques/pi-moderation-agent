@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { loadBundle } from "../../packages/policy/src/index.ts";
 import { Gateway, DEFAULT_GATEWAY_CONFIG } from "../../packages/gateway/src/index.ts";
 import { DemoTraffic, SIM_REVIEWER, makeContent, rng } from "../../packages/gateway/src/demo-traffic.ts";
-import { demoCalibrator, demoJudge, demoJudgeModel, demoPrices, loadDemoCorpus } from "../../packages/worker/src/index.ts";
+import { corpusAgentAnswer, demoCalibrator, demoJudge, demoJudgeModel, demoPrices, loadDemoCorpus } from "../../packages/worker/src/index.ts";
 import { freshDb } from "../helpers.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
@@ -59,13 +59,27 @@ describe("demo corpus", () => {
     expect(res.answers[rule("ABUSE-001").sha]!.probs["violate"]).toBe(0.6);
     expect(res.answers[rule("ABUSE-001").sha]!.choice).toBe("violate");
     expect(res.variant!.answers[rule("ABUSE-001").sha]!.probs["violate"]).toBe(0.55);
-    // the agent's evidence call gets the same recorded answers
-    const withEv = await j.classify({ contentId: "c1", text: LINES[2]!.text, scene: "comment", evidence: [{ evidenceId: "e1", kind: "account_history", modelView: { counts: { takedown: 2 } } }], questions });
+    // in the human share, the agent's evidence call gets the same recorded answers
+    const withEv = await demoJudge({ delayMs: 0, corpus, corpusHumanPct: 100 }).classify({ contentId: "c1", text: LINES[2]!.text, scene: "comment", evidence: [{ evidenceId: "e1", kind: "account_history", modelView: { counts: { takedown: 2 } } }], questions });
     if (withEv.status === "ok") expect(withEv.answers[rule("ABUSE-001").sha]!.probs["violate"]).toBe(0.6);
     // a text the corpus does not hold: the scripted score
     const other = await j.classify({ contentId: "c2", text: "加V领优惠券，私聊", scene: "comment", evidence: [], questions });
     if (other.status === "ok") expect(other.answers[rule("MARKETING-003").sha]!.probs["violate"]).toBeGreaterThan(0.9);
     expect(demoJudgeModel()).toBe("jev-scripted");
+  });
+
+  it("the agent's evidence call is settled by the dataset label, except the human share", async () => {
+    const abuse = corpus.items.find((x) => x.id === "t3")!;
+    expect(corpusAgentAnswer(rule("ABUSE-001"), abuse, 0)).toEqual({ choice: "violate", probs: { violate: 0.999, none: 0.0009, unknown: 0.0001 } });
+    expect(corpusAgentAnswer(rule("MARKETING-003"), abuse, 0)?.choice).toBe("none");
+    expect(corpusAgentAnswer(guard, abuse, 0)).toBeUndefined();   // the guard keeps the recorded answer
+    expect(corpusAgentAnswer(rule("ABUSE-001"), abuse, 100)).toBeUndefined();   // in the human share: recorded answer
+    const j = demoJudge({ delayMs: 0, corpus, corpusHumanPct: 0 });
+    const ev = [{ evidenceId: "e1", kind: "account_history", modelView: { counts: {} } }];
+    const res = await j.classify({ contentId: "c1", text: abuse.text, scene: "comment", evidence: ev, questions });
+    if (res.status === "ok") expect(res.answers[rule("ABUSE-001").sha]!.probs["violate"]).toBe(0.999);
+    const fast = await j.classify({ contentId: "c1", text: abuse.text, scene: "comment", evidence: [], questions });
+    if (fast.status === "ok") expect(fast.answers[rule("ABUSE-001").sha]!.probs["violate"]).toBe(0.6);   // the fast path still replays
   });
 
   it("generated contents are corpus texts, all kinds drawn", () => {

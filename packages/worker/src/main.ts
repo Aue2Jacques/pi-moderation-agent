@@ -56,10 +56,10 @@ async function main(): Promise<void> {
   let judge: JudgeClient;
   let agent: { provider: string; modelId: string };
   if (demo) {
-    const scripted = demoAgentProvider({ delayMs: envNum("DEMO_AGENT_MS", 700) });
+    const scripted = demoAgentProvider({ delayMs: envNum("DEMO_AGENT_MS", 400) });
     models.setProvider(scripted.provider);
     agent = scripted.model;
-    judge = demoJudge({ delayMs: envNum("DEMO_JUDGE_MS", 350), imageText: demoImageText(db, loadDemoImages(env("DEMO_IMAGES_DIR", "demo/images"))), ...(corpus ? { corpus } : {}) });
+    judge = demoJudge({ delayMs: envNum("DEMO_JUDGE_MS", 350), imageText: demoImageText(db, loadDemoImages(env("DEMO_IMAGES_DIR", "demo/images"))), ...(corpus ? { corpus, corpusHumanPct: envNum("DEMO_CORPUS_HUMAN_PCT", 10) } : {}) });
   } else {
     models.setProvider(relayProvider({ baseUrl: env("RELAY_BASE_URL"), apiKey: env("RELAY_API_KEY") }));
     models.setProvider(jevProvider({ baseUrl: env("JEV_BASE_URL"), apiKey: env("JEV_API_KEY"), modelId: env("JEV_MODEL", "jev-latest") }));

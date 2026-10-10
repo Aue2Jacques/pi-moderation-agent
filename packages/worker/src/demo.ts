@@ -12,7 +12,7 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseFact
 import * as core from "@mod/core";
 import type { Question } from "@mod/core";
 import type { JudgeAnswers, JudgeClient, JudgeRequest, JudgeResponse } from "./judge-client.ts";
-import { corpusAnswer, type DemoCorpus } from "./demo-corpus.ts";
+import { corpusAgentAnswer, corpusAnswer, type DemoCorpus } from "./demo-corpus.ts";
 
 export const DEMO_JUDGE_PROVIDER = "demo";
 export const DEMO_JUDGE_MODEL = "jev-scripted";
@@ -86,8 +86,9 @@ const jitter = (seed: string): number => ((parseInt(core.sha256(seed).slice(0, 4
 /** `imageText`: demo mode's stand-in for a judge that reads images (Kev reads screenshots, reports/2026-10-09-kev-
  *  inference-speed.md §11): the known content of a preset screenshot attached to the content, judged with its text. */
 /** `corpus` (DEMO_CORPUS): for a text it holds, the recorded answers of a real judge run replace the scripted scores, question
- *  by question (demo-corpus.ts); the agent's evidence calls get the same answers, since that run saw no evidence. */
-export function demoJudge(o: { delayMs?: number; imageText?: (contentId: string) => string | undefined; corpus?: DemoCorpus } = {}): JudgeClient {
+ *  by question (demo-corpus.ts). The agent's evidence calls are answered from the dataset label instead, except for
+ *  `corpusHumanPct` percent of the items, which keep the recorded answers and so go to a person (corpusAgentAnswer). */
+export function demoJudge(o: { delayMs?: number; imageText?: (contentId: string) => string | undefined; corpus?: DemoCorpus; corpusHumanPct?: number } = {}): JudgeClient {
   const delayMs = o.delayMs ?? 350;
   const model = demoJudgeModel(o.corpus);
   return {
@@ -102,6 +103,9 @@ export function demoJudge(o: { delayMs?: number; imageText?: (contentId: string)
       const copy: JudgeAnswers = {};
       const known = seen ? undefined : o.corpus?.lookup(req.text ?? "");
       for (const q of req.questions) {
+        // the agent's evidence call: the dataset label stands in for what the evidence settles (corpusAgentAnswer)
+        const settled = known && req.evidence.length > 0 ? corpusAgentAnswer(q, known, o.corpusHumanPct ?? 10) : undefined;
+        if (settled) { main[q.sha] = settled; copy[q.sha] = settled; continue; }
         const rec = known && corpusAnswer(q, known.primary);
         if (known && rec) {
           main[q.sha] = rec;

@@ -59,7 +59,7 @@ async function main(): Promise<void> {
   for (const x of presets) storeImage(demoImgDir, x.bytes, "png");
   let judge: JudgeClient;
   if (demo) {
-    judge = demoJudge({ delayMs: envNum("DEMO_JUDGE_MS", 350), imageText: demoImageText(db, presets), ...(corpus ? { corpus } : {}) });
+    judge = demoJudge({ delayMs: envNum("DEMO_JUDGE_MS", 350), imageText: demoImageText(db, presets), ...(corpus ? { corpus, corpusHumanPct: envNum("DEMO_CORPUS_HUMAN_PCT", 10) } : {}) });
     seedDemoHistory(db, Date.now());
   } else {
     const models = createModels();
