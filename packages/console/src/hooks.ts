@@ -1,6 +1,6 @@
 // Small data hooks: hash routing, polling fetch, server-sent events.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, errText } from "./api.ts";
+import { api, authHeaders, errText, type ContentTimeline, type Reviewer } from "./api.ts";
 
 export function useHashRoute(): [string[], (path: string) => void] {
   const read = (): string[] => window.location.hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
@@ -64,4 +64,22 @@ export function useNow(ms = 1000): number {
   const [now, setNow] = useState(Date.now());
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), ms); return () => clearInterval(t); }, [ms]);
   return now;
+}
+
+/**
+ * Demo mode shows the original text and the evidence directly (owner 2026-10-09: a "restricted" button keeps visitors
+ * from looking). It reads the same restricted view real mode uses — G still writes each read to the audit log — and
+ * re-reads it whenever the live timeline's version changes, so it stays live. Real mode never calls this (null).
+ */
+export function useOpenView(contentId: string | null, version: string | undefined, reviewer: Reviewer | null, demo: boolean): ContentTimeline | null {
+  const [t, setT] = useState<ContentTimeline | null>(null);
+  useEffect(() => { setT(null); }, [contentId]);
+  useEffect(() => {
+    if (!demo || !contentId || !reviewer || !version) return;
+    let live = true;
+    api.get<ContentTimeline>(`/api/contents/${encodeURIComponent(contentId)}?view=restricted`, { ...authHeaders(reviewer), "x-confirm": "yes" })
+      .then((x) => { if (live) setT(x); }).catch(() => { /* keep the masked view */ });
+    return () => { live = false; };
+  }, [contentId, version, reviewer, demo]);
+  return t;
 }

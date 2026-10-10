@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useConsole } from "../App.tsx";
 import { api, authHeaders, errText, type Action, type ContentTimeline, type HumanQueueItem } from "../api.ts";
-import { useEventSource, useNow } from "../hooks.ts";
+import { useEventSource, useNow, useOpenView } from "../hooks.ts";
 import { ACTION, QUESTION, SCENE, reasonText } from "../labels.ts";
 import { useLive, useLiveQuery } from "../live.tsx";
 import { useFreshIds } from "../motion.tsx";
@@ -93,6 +93,7 @@ export function Human({ selected }: { selected: string | null }) {
 function TaskPanel({ item, onChanged }: { item: HumanQueueItem; onChanged: () => void }) {
   const { reviewer, config, isSim } = useConsole();
   const { data: t } = useEventSource<ContentTimeline>(`/api/contents/${encodeURIComponent(item.content_id)}/stream`, "timeline");
+  const open = useOpenView(item.content_id, t?.version, reviewer, config.mode === "demo");
   const [rules, setRules] = useState<ClaimRule[] | null>(null);
   const [action, setAction] = useState<Action>("pass");
   const [ruleIds, setRuleIds] = useState<string[]>([]);
@@ -168,9 +169,9 @@ function TaskPanel({ item, onChanged }: { item: HumanQueueItem; onChanged: () =>
             <dt>时限</dt><dd>{clock(item.due_at)} 前</dd>
             <dt>规则版本</dt><dd className="mono">{item.rules_ver}</dd>
           </dl>
-          {t ? (restricted ? <ContentHeader t={restricted} /> : (
+          {t ? (restricted ?? open ? <ContentHeader t={(restricted ?? open)!} /> : (
             <div className="hidden-text">原文默认隐藏（{t.content.text_len} 字）
-              <button className="btn sm" onClick={() => void openRestricted()} disabled={!reviewer}>查看原文（受限）</button></div>
+              <button className="btn sm" onClick={() => void openRestricted()} disabled={!reviewer}>查看原文</button></div>
           )) : null}
         </div>
       </Panel>

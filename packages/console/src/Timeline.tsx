@@ -71,7 +71,7 @@ const Legend = () => (
 const VISIBILITY: Record<string, string> = { visible: "对外可见", self_only: "仅作者可见", hidden: "已隐藏" };
 const REL: Record<string, string> = { parent: "父评论", ancestor: "更早回复", reply: "回复", mentioned: "被@者发言", before: "此前", after: "此后" };
 
-function stepText(s: AgentStep): string {
+export function stepText(s: AgentStep): string {
   const r = (s.result ?? {}) as Record<string, unknown>;
   if (s.status === "blocked") return `被拦下：${s.block_reason ?? ""}`;
   if (s.status === "pending") return "进行中…";
@@ -105,7 +105,7 @@ function stepText(s: AgentStep): string {
   }
 }
 
-function StepRow({ s, t0, i }: { s: AgentStep; t0: number; i: number }) {
+export function StepRow({ s, t0, i }: { s: AgentStep; t0: number; i: number }) {
   const final = (s.tool === "dispose" || s.tool === "release") && s.status === "ok";
   const tone = s.status === "rejected" || s.status === "blocked" ? "bad" : s.status === "pending" ? "pending" : s.tool === "release" ? "warn" : final ? "final" : "ok";
   const chips: string[] = [];
@@ -271,6 +271,7 @@ export function Pipeline({ t }: { t: ContentTimeline }) {
 }
 
 export function ContentHeader({ t, text, sim }: { t: ContentTimeline; text?: string | null; sim?: boolean }) {
+  const demo = useConsole().config.mode === "demo";
   const shown = t.content.text ?? text ?? null;
   return (
     <div className="stack" style={{ gap: 10 }}>
@@ -284,7 +285,8 @@ export function ContentHeader({ t, text, sim }: { t: ContentTimeline; text?: str
       </div>
       {shown !== null ? (
         t.content.text !== null ? (
-          <div className="restricted"><div className="lbl"><Icon name="lock" size={12} />受限视图：原文（本次查看已写审计）</div><div className="content-text">{shown}</div></div>
+          demo ? <div className="content-text">{shown}</div>
+            : <div className="restricted"><div className="lbl"><Icon name="lock" size={12} />受限视图：原文（本次查看已写审计）</div><div className="content-text">{shown}</div></div>
         ) : <div className="content-text">{shown}</div>
       ) : t.content.text_len || !t.content.images.length ? <div className="hidden-text"><Icon name="lock" size={12} />原文默认不展示（{t.content.text_len} 字，sha {t.content.text_sha ?? "—"}）</div> : null}
       {t.content.images.length ? <div className="thumbs">{t.content.images.map((im) => <ImageThumb key={im.n} contentId={t.content.content_id} img={im} restricted={t.restricted} />)}</div> : null}
