@@ -3,7 +3,7 @@
 // and expand on click.
 import { useState, type ReactNode } from "react";
 import type { Action, RouteKind } from "./api.ts";
-import { ACTION, ACTOR, PHASE, ROUTE, STATE } from "./labels.ts";
+import { ACTION, ACTOR, GLOSSARY, PHASE, ROUTE, STATE } from "./labels.ts";
 
 // ---------- icons (inline SVG, 16px, stroke): navigation and a few controls only ----------
 const paths: Record<string, string> = {
@@ -14,6 +14,8 @@ const paths: Record<string, string> = {
   appeal: "M4 4v6h6M20 20v-6h-6M5.6 15A8 8 0 0019 18M18.4 9A8 8 0 005 6",
   rules: "M7 3h8l4 4v14H7zM14 3v5h5M10 13h6M10 17h4",
   capacity: "M4 6h16v4H4zM4 14h16v4H4zM7 8h.01M7 16h.01",
+  system: "M4 5h16v10H4zM9 19h6M12 15v4",
+  glossary: "M5 4h11a3 3 0 013 3v13H8a3 3 0 01-3-3zM5 17a3 3 0 013-3h11M9 8h6",
   agent: "M12 3v3M7 8h10a2 2 0 012 2v7a2 2 0 01-2 2H7a2 2 0 01-2-2v-7a2 2 0 012-2zM9.5 13h.01M14.5 13h.01M9.5 16.5h5",
   sun: "M12 16a4 4 0 100-8 4 4 0 000 8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4",
   moon: "M20.5 13.5A8.5 8.5 0 1110.5 3.5a6.5 6.5 0 0010 10z",
@@ -59,6 +61,20 @@ export function PhaseBadge({ phase }: { phase: string }) {
 export const ActorText = ({ actor }: { actor: string | null | undefined }) => <span>{actor ? (ACTOR[actor] ?? actor) : "—"}</span>;
 /** Marks generated demo traffic and the simulated reviewer. */
 export const SimTag = ({ title = "演示程序自动生成的数据" }: { title?: string }) => <span className="sim" title={title}>模拟</span>;
+
+/** A term from the glossary: dotted underline; hover shows the explanation, tap or Enter opens it in place. */
+export function Term({ k, children }: { k: string; children?: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const text = GLOSSARY[k];
+  if (!text) return <>{children ?? k}</>;
+  return (
+    <span className="term" tabIndex={0} role="button" aria-expanded={open} title={open ? undefined : text}
+      onClick={(e) => { e.stopPropagation(); setOpen(!open); }} onBlur={() => setOpen(false)}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpen(!open); } if (e.key === "Escape") setOpen(false); }}>
+      {children ?? k}{open ? <span className="term-pop" role="tooltip"><b>{k}</b>{text}</span> : null}
+    </span>
+  );
+}
 
 // ---------- layout ----------
 export function Panel({ title, sub, actions, children, flush, className, id }: { title?: ReactNode; sub?: ReactNode; actions?: ReactNode; children: ReactNode; flush?: boolean; className?: string; id?: string }) {

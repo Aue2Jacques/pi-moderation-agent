@@ -14,6 +14,8 @@ import { Appeals } from "./pages/Appeals.tsx";
 import { Rules } from "./pages/Rules.tsx";
 import { Capacity } from "./pages/Capacity.tsx";
 import { Agent } from "./pages/Agent.tsx";
+import { System } from "./pages/System.tsx";
+import { Glossary } from "./pages/Glossary.tsx";
 import { demoJudgeNote } from "./labels.ts";
 
 type Ctx = { config: ConsoleConfig; reviewer: Reviewer | null; setReviewer: (r: Reviewer | null) => void; go: (path: string) => void; isSim: (contentId: string) => boolean };
@@ -25,16 +27,18 @@ export function useConsole(): Ctx {
 }
 
 const NAV: { id: string; label: string; icon: string; group?: string }[] = [
-  { id: "overview", label: "概览", icon: "overview", group: "运行" },
+  { id: "overview", label: "概览", icon: "overview", group: "了解系统" },
   { id: "track", label: "提交与追踪", icon: "track" },
   { id: "agent", label: "Agent 与 Harness", icon: "agent" },
   { id: "capacity", label: "容量与调度", icon: "capacity" },
-  { id: "reviews", label: "审次", icon: "list" },
-  { id: "human", label: "人工复核", icon: "human", group: "处理" },
+  { id: "human", label: "人工复核", icon: "human", group: "审核后台" },
   { id: "appeals", label: "申诉", icon: "appeal" },
-  { id: "rules", label: "规则与版本", icon: "rules", group: "配置" },
+  { id: "reviews", label: "审次", icon: "list" },
+  { id: "rules", label: "规则与版本", icon: "rules" },
+  { id: "system", label: "系统状态", icon: "system", group: "其他" },
+  { id: "glossary", label: "术语表", icon: "glossary" },
 ];
-const TITLES: Record<string, string> = { overview: "概览", track: "提交与追踪", reviews: "审次", contents: "审次详情", human: "人工复核", appeals: "申诉", rules: "规则与版本", capacity: "容量与调度", agent: "Agent 与 Harness" };
+const TITLES: Record<string, string> = { overview: "概览", track: "提交与追踪", reviews: "审次", contents: "审次详情", human: "人工复核", appeals: "申诉", rules: "规则与版本", capacity: "容量与调度", agent: "Agent 与 Harness", system: "系统状态", glossary: "术语表" };
 
 /** The suggested reading order: each page ends with a link to the next one (NextStop). */
 export const TOUR: { id: string; label: string; why: string }[] = [
@@ -153,6 +157,8 @@ function Console() {
     case "rules": body = <Rules />; break;
     case "capacity": body = <Capacity />; break;
     case "agent": body = <Agent />; break;
+    case "system": body = <System />; break;
+    case "glossary": body = <Glossary />; break;
     default: body = <Overview />;
   }
   const humanOpen = live.frame?.stats.human.open ?? 0;
@@ -180,11 +186,12 @@ function Console() {
               </div>
             ))}
           </nav>
-          <div className="side-env">
+          <details className="side-env">
+            <summary>版本信息</summary>
             <div className="env-row"><span className="k">规则</span><span className="v">{config.rules_ver}</span></div>
             <div className="env-row"><span className="k">校准（{config.calib_mode}）</span><span className="v">{config.calib_ver}</span></div>
             <div className="env-row"><span className="k">判官 / agent</span><span className="v">{config.judge_model} / {config.agent_model ?? "—"}</span></div>
-          </div>
+          </details>
         </aside>
         <div className={`scrim ${drawer ? "open" : ""}`} onClick={() => setDrawer(false)} aria-hidden="true" />
         <div className="main">

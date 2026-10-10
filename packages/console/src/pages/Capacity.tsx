@@ -300,15 +300,6 @@ export function Capacity() {
         </div>
       </section>
 
-      <div className="grid g-main cap-gap">
-        <Panel title="单次切换耗时" sub="单张 5060 Ti 实测，脚本见 python/kevfast/switch_bench.py">
-          <SwitchCost sim={sim} />
-        </Panel>
-        <Panel title="调度日志" sub="模拟时间" flush>
-          <Log sim={sim} />
-        </Panel>
-      </div>
-
       <div className="grid g-2 cap-gap">
         <Panel title="延迟" sub={`目标：发布到审核完成的 p95 不超过 ${SLO_S} 秒；作者本人发布后即可看到`}>
           <Latency sim={sim} />
@@ -322,17 +313,26 @@ export function Capacity() {
         <Panel title="离线任务" sub="平台任务于零点入队，优先于其他团队的批处理">
           <Jobs sim={sim} />
         </Panel>
+        <Panel title="调度日志" sub="模拟时间" flush>
+          <Log sim={sim} />
+        </Panel>
+      </div>
+
+      <Panel title="单次切换耗时" sub="单张 5060 Ti 实测，脚本见 python/kevfast/switch_bench.py" className="cap-gap">
+        <SwitchCost sim={sim} />
+      </Panel>
+
+      <div className="grid g-2 cap-gap">
         <Panel title="实施路线" sub="尚未实施；每一步均设有真机验收标准">
           <Route />
           <p className="small faint" style={{ marginTop: 10 }}>完整方案：docs/gpu-scheduling-plan-2026-10-09.md</p>
         </Panel>
+        <Panel title="数字依据" sub="哪些是实测，哪些是假设">
+          <ul className="facts">
+            {SIM_FACTS.map((f) => <li key={f.k}><span className="faint">{f.k}</span><span className="num">{f.v}</span>{f.measured ? <Badge tone="good">实测</Badge> : <Badge>假设</Badge>}</li>)}
+          </ul>
+        </Panel>
       </div>
-
-      <Panel title="数字依据" className="cap-gap">
-        <ul className="facts">
-          {SIM_FACTS.map((f) => <li key={f.k}><span className="faint">{f.k}</span><span className="num">{f.v}</span>{f.measured ? <Badge tone="good">实测</Badge> : <Badge>假设</Badge>}</li>)}
-        </ul>
-      </Panel>
     </>
   );
 }

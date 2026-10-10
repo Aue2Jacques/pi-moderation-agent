@@ -17,53 +17,72 @@ const VERDICT: Record<QuestionScore["verdict"], { text: string; tone: Tone }> = 
 
 const pos = (x: number | null | undefined): string | undefined => (typeof x === "number" ? `${Math.min(100, Math.max(0, x * 100))}%` : undefined);
 
-function ProbRow({ q }: { q: QuestionScore }) {
+/** What a score means for this content, in a sentence (the fast path's middle band hands the content to the agent). */
+function plainVerdict(q: QuestionScore, stage: JudgeRound["stage"]): string {
+  switch (q.verdict) {
+    case "pass": return "低于放行线，放行";
+    case "block": return "达到处置线，处置";
+    case "middle": return stage === "fast" ? "无法确定，交给 agent" : "仍无法确定";
+    case "flagged": return "疑似注入";
+    case "clear": return "未发现注入";
+    case "uncalibrated": return "未校准，不自动处置";
+    default: return "未作答";
+  }
+}
+
+/** One question's score. Default: one bar, one point, the verdict in words; `detail`: primary, shuffled copy and raw. */
+function ProbRow({ q, stage, detail }: { q: QuestionScore; stage: JudgeRound["stage"]; detail: boolean }) {
   const guard = q.kind === "guard";
   const v = VERDICT[q.verdict];
   const tip = (label: string, x: number | null | undefined): string => `${label} ${p3(x)}`;
+  const shown = q.primary?.cal ?? q.mean;
   return (
-    <div className="prob">
+    <div className={`prob ${detail ? "" : "simple"}`}>
       <div className="q"><b>{QUESTION[q.key] ?? q.key}</b><span className="k">{q.key}</span></div>
-      <div className="track" role="img" aria-label={`${q.key}：主问 ${p2(q.primary?.cal)}，复问 ${p2(q.confirm?.cal)}`}>
+      <div className="track" role="img" aria-label={`${QUESTION[q.key] ?? q.key}：${p2(shown)}，${plainVerdict(q, stage)}`}>
         <div className="rail" />
         {q.lines && !guard ? <div className="zone pass" style={{ left: 0, width: pos(q.lines.pass) }} title={`放行线 < ${q.lines.pass}`} /> : null}
         {q.lines ? <div className="zone block" style={{ left: pos(q.lines.block), right: 0 }} title={`${guard ? "命中线" : "处置线"} ≥ ${q.lines.block}`} /> : null}
         {typeof q.mean === "number" ? <div className="fill" style={{ width: pos(q.mean) }} /> : null}
         {q.lines && !guard ? <div className="line" style={{ left: pos(q.lines.pass) }} /> : null}
         {q.lines ? <div className="line" style={{ left: pos(q.lines.block) }} /> : null}
-        {typeof q.primary?.raw === "number" ? <div className="mk raw" style={{ left: pos(q.primary.raw) }} title={tip("原始（主问）", q.primary.raw)} /> : null}
-        {typeof q.confirm?.cal === "number" ? <div className="mk copy" style={{ left: pos(q.confirm.cal) }} title={tip("复问（校准后）", q.confirm.cal)} /> : null}
-        {typeof q.primary?.cal === "number" ? <div className="mk" style={{ left: pos(q.primary.cal) }} title={tip("主问（校准后）", q.primary.cal)} /> : null}
+        {detail && typeof q.primary?.raw === "number" ? <div className="mk raw" style={{ left: pos(q.primary.raw) }} title={tip("原始（主问）", q.primary.raw)} /> : null}
+        {detail && typeof q.confirm?.cal === "number" ? <div className="mk copy" style={{ left: pos(q.confirm.cal) }} title={tip("复问（校准后）", q.confirm.cal)} /> : null}
+        {typeof shown === "number" ? <div className="mk" style={{ left: pos(shown) }} title={tip("校准后", shown)} /> : null}
       </div>
-      <div className="nums">
-        <span>主问 <b>{p2(q.primary?.cal)}</b></span>
-        <span>复问 <b>{p2(q.confirm?.cal)}</b></span>
-        <span title={q.temperature ? `温度 T=${q.temperature}` : undefined}>原始 {p3(q.primary?.raw)}</span>
-      </div>
-      <div><Badge tone={v.tone}>{v.text}</Badge></div>
+      {detail ? (
+        <div className="nums">
+          <span>主问 <b>{p2(q.primary?.cal)}</b></span>
+          <span>复问 <b>{p2(q.confirm?.cal)}</b></span>
+          <span title={q.temperature ? `温度 T=${q.temperature}` : undefined}>原始 {p3(q.primary?.raw)}</span>
+        </div>
+      ) : <div className="nums"><b className="num">{p2(shown)}</b></div>}
+      <div><Badge tone={v.tone}>{plainVerdict(q, stage)}</Badge></div>
     </div>
   );
 }
 
 export function JudgeRoundView({ round, compact }: { round: JudgeRound; compact?: boolean }) {
+  const [detail, setDetail] = useState(false);
   return (
     <div>
-      {!compact ? <div className="scale-row" aria-hidden="true"><div /><div className="ticks"><span>0</span><span>0.5</span><span>1</span></div><div>校准后概率</div><div /></div> : null}
-      <div className="probs">{round.questions.map((q) => <ProbRow key={q.question_sha} q={q} />)}</div>
+      {!compact ? <div className={`scale-row ${detail ? "" : "simple"}`} aria-hidden="true"><div /><div className="ticks"><span>0</span><span>0.5</span><span>1</span></div><div>{detail ? "校准后概率" : "概率"}</div><div /></div> : null}
+      <div className="probs">{round.questions.map((q) => <ProbRow key={q.question_sha} q={q} stage={round.stage} detail={detail} />)}</div>
       <div className="meta-line">
         <span>{round.channel === "image" ? "图片通道" : round.stage === "fast" ? "快判" : round.explicit_confirm_of ? "复问" : "复判"} · {round.model}</span>
-        <span>{round.status === "ok" ? "成功" : round.status}</span>
         <span>耗时 {duration(round.latency_ms)}</span>
-        <span>费用 {yuan(round.cost_micro, 6)}</span>
-        {round.copy_call_id ? <span>同一请求附带打乱选项的复问</span> : null}
+        {round.status !== "ok" ? <span>{round.status}</span> : null}
+        {detail ? <span>费用 {yuan(round.cost_micro, 6)}</span> : null}
+        {detail && round.copy_call_id ? <span>同一请求附带打乱选项的复问</span> : null}
         <span>{round.channel === "image" ? "看图片" : round.evidence_ids.length ? `证据 ${round.evidence_ids.map((e) => e.split("#").pop()).join("、")}` : "仅文本"}</span>
+        <button type="button" className="linkish" onClick={() => setDetail(!detail)}>{detail ? "收起细节" : "主问、复问与原始分"}</button>
       </div>
     </div>
   );
 }
 
 const Legend = () => (
-  <span className="mk-legend"><span><i className="f" />主问</span><span><i className="h" />复问</span><span><i className="r" />原始</span><span><i className="zp" />放行区</span><span><i className="zb" />处置区</span></span>
+  <span className="mk-legend"><span><i className="zp" />放行区</span><span><i className="zb" />处置区</span></span>
 );
 
 // ---------- agent steps ----------

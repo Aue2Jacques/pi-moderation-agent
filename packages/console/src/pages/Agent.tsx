@@ -8,7 +8,7 @@ import { api, authHeaders, type AgentStep, type ContentTimeline, type ReviewList
 import { usePoll } from "../hooks.ts";
 import { reasonText } from "../labels.ts";
 import { StepRow } from "../Timeline.tsx";
-import { ActionBadge, Badge, Id, Panel, duration, yuan } from "../ui.tsx";
+import { ActionBadge, Badge, Id, Panel, duration, yuan, Term } from "../ui.tsx";
 
 type Node = "brief" | "model" | "gate" | "tool" | "submit" | "end";
 const NODES: { id: Node; title: string; what: string }[] = [
@@ -168,21 +168,23 @@ export function Agent() {
     <>
       <div className="cap-head">
         <h1>Agent 与 Harness</h1>
-        <p>审核 agent 运行在 Pi 上，每个可疑审次对应一个持久会话。模型自行决定获取哪些证据、是否复判；harness 在每一步外设置约束，决定它能否执行、能否提交。上半部分回放近期完成的会话，下半部分介绍各项约束的实现与验证。</p>
+        <p>审核 agent 运行在 Pi 上，每个可疑<Term k="审次" />对应一个持久会话。模型自行决定获取哪些<Term k="证据" />、是否复判；<Term k="harness" /> 在每一步外设置约束，决定它能否执行、能否提交。上半部分回放近期完成的会话，下半部分介绍各项约束的实现与验证。</p>
       </div>
       <Live />
 
       <div className="cap-gap">
-        <Panel title="Harness 的约束" sub="每项约束防范的问题、实现方式与验证方法">
+        <Panel title="Harness 的约束" sub="每项约束防范一个具体问题；点开可查看实现方式与验证方法">
           <div className="guards">
             {GUARDS.map((g, i) => (
-              <article key={g.name} className="guard">
-                <div className="g-h"><span className="g-n num">{i + 1}</span><h3>{g.name}</h3></div>
-                <p className="g-p"><span className="faint">防范：</span>{g.problem}</p>
+              <details key={g.name} className="guard">
+                <summary>
+                  <div className="g-h"><span className="g-n num">{i + 1}</span><h3>{g.name}</h3><span className="g-more" aria-hidden="true">实现与验证</span></div>
+                  <p className="g-p">{g.problem}</p>
+                </summary>
                 <p className="g-w"><span className="faint">实现：</span>{g.how}</p>
                 <p className="g-v"><span className="faint">验证：</span>{g.proof}</p>
                 <p className="g-c mono">{g.code}</p>
-              </article>
+              </details>
             ))}
           </div>
         </Panel>

@@ -9,7 +9,7 @@ import { ACTION, QUESTION, SCENE, reasonText } from "../labels.ts";
 import { useLive, useLiveQuery } from "../live.tsx";
 import { useFreshIds } from "../motion.tsx";
 import { ContentHeader, ReviewCard } from "../Timeline.tsx";
-import { ActionBadge, Alert, Badge, Empty, Id, PageHead, Panel, SimTag, ago, clock, duration } from "../ui.tsx";
+import { ActionBadge, Alert, Badge, Empty, Id, PageHead, Panel, SimTag, ago, clock, duration, Term } from "../ui.tsx";
 
 const RENDER_MAX = 100;
 type ClaimRule = { rule_id: string; default_action: "limit" | "takedown" };
@@ -45,7 +45,7 @@ export function Human({ selected }: { selected: string | null }) {
 
   return (
     <>
-      <PageHead title="人工复核" desc={<>agent 无法确定或因系统原因转交人工的内容。人工裁决同样需要通过提交校验。{config.demo_traffic ? <> 演示环境中有一位模拟审核员（标记为 <SimTag />）负责处理自动生成的任务。</> : null}</>} />
+      <PageHead title="人工复核" desc={<>agent 无法确定或因系统原因转交人工的内容。人工裁决同样需要通过<Term k="提交校验" />。{config.demo_traffic ? <> 演示环境中有一位模拟审核员（标记为 <SimTag />）负责处理自动生成的任务。</> : null}</>} />
       <div className="split-wide">
         <Panel title="队列" sub={`${tab === "open" ? "按严重程度与时限排序" : "最近完成"}${all.length > RENDER_MAX ? `，显示前 ${RENDER_MAX} 条（共 ${all.length} 条）` : ""}`} flush actions={
           <>

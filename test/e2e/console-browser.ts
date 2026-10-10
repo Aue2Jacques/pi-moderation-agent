@@ -118,11 +118,11 @@ try {
   imageContent = decodeURIComponent(page.url().split("/track/")[1] ?? "");
   await shot(page, "4c-track-image-upload");
   await page.locator('input[type="file"]').setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("hello") });
-  check("a non-image file is refused before upload", (await page.locator(".alert.bad").first().innerText()).includes("只接受"));
+  check("a non-image file is refused before upload", (await page.locator(".alert.bad").first().innerText()).includes("仅支持"));
 
   // 5. overview and rules, light and dark
   await page.goto(`${app.base}/#/overview`);
-  await page.getByText("各路占比").waitFor();
+  await page.getByText("用时、转人工与申诉").waitFor();
   await page.waitForTimeout(1500);
   check("pipeline drawn: canvas and seven nodes plus the appeal source", (await page.locator(".flow canvas.dots").count()) === 1 && (await page.locator(".fnode").count()) === 8);
   check("throughput curve drawn", (await page.locator(".tput path.ln").getAttribute("d"))?.startsWith("M") ?? false);
@@ -139,7 +139,7 @@ try {
   await page.locator(".verdict").first().waitFor({ timeout: 20_000 });
   await shot(page, "9-track-dark");
   await page.goto(`${app.base}/#/overview`);
-  await page.getByText("各路占比").waitFor();
+  await page.getByText("用时、转人工与申诉").waitFor();
   await page.waitForTimeout(1000);
   await shot(page, "10-overview-dark");
   check("dark theme applied", (await page.getAttribute("html", "data-theme")) === "dark");

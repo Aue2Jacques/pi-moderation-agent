@@ -6,7 +6,7 @@ import { api, errText, type AppealItem, type ContentTimeline, type ReviewListIte
 import { ACTOR, APPEAL_REASONS, SCENE, appealReason } from "../labels.ts";
 import { useLive, useLiveQuery } from "../live.tsx";
 import { useFreshIds } from "../motion.tsx";
-import { ActionBadge, Alert, Badge, Empty, Id, PageHead, Panel, SimTag, StateBadge, dateTime } from "../ui.tsx";
+import { ActionBadge, Alert, Badge, Empty, Id, PageHead, Panel, SimTag, StateBadge, dateTime, Term } from "../ui.tsx";
 
 export function Appeals({ preset }: { preset: string | null }) {
   const { go, isSim } = useConsole();
@@ -45,7 +45,7 @@ export function Appeals({ preset }: { preset: string | null }) {
 
   return (
     <>
-      <PageHead title="申诉" desc="对已处置的内容发起申诉后，系统会新建审次并由 agent 重新审核；新裁决生效前，原裁决保持有效。" />
+      <PageHead title="申诉" desc={<>对已处置的内容发起申诉后，系统会新建<Term k="审次" />并由 agent 重新审核；新裁决生效前，原裁决保持有效。</>} />
       <div className="split">
         <div className="stack" style={{ gap: 20 }}>
           <Panel title="发起申诉">

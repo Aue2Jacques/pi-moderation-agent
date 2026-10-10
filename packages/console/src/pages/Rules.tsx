@@ -3,7 +3,7 @@
 import type { RuleInfo, RulesInfo } from "../api.ts";
 import { usePoll } from "../hooks.ts";
 import { ACTION, CATEGORY, QUESTION, SCENE } from "../labels.ts";
-import { Alert, Badge, Empty, Kpi, PageHead, Panel, dateTime, duration } from "../ui.tsx";
+import { Alert, Badge, Empty, Kpi, PageHead, Panel, dateTime, duration, Term } from "../ui.tsx";
 
 function Lines({ r }: { r: RuleInfo }) {
   const row = (label: string, l: { block: number; pass: number }) => (
@@ -23,7 +23,7 @@ function Lines({ r }: { r: RuleInfo }) {
 
 export function Rules() {
   const q = usePoll<RulesInfo>("/api/rules", 10_000);
-  const head = <PageHead title="规则与版本" desc="每条规则都写成判官可以回答的问题。判官给出概率，系统将校准后的概率与处置线比较。新规则通过 scripts/rules-release.ts 发布，依次经过影子检查、闸门与灰度。" />;
+  const head = <PageHead title="规则与版本" desc={<>每条规则都写成<Term k="判官" />可以回答的问题。判官给出概率，系统将<Term k="校准" />后的概率与<Term k="放行线" />、<Term k="处置线" />比较。新规则通过 scripts/rules-release.ts 发布，依次经过<Term k="影子检查" />、<Term k="闸门" />与<Term k="灰度" />。</>} />;
   if (q.error) return <>{head}<Alert tone="bad">{q.error}</Alert></>;
   if (!q.data) return <>{head}<Panel><Empty>加载中…</Empty></Panel></>;
   const d = q.data;

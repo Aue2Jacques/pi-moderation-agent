@@ -5,7 +5,7 @@ import type { ReviewListItem } from "../api.ts";
 import { ACTION, ACTOR, ROUTE, ROUTES, SCENE, STATE, reasonText } from "../labels.ts";
 import { useLive, useLiveQuery } from "../live.tsx";
 import { useFreshIds } from "../motion.tsx";
-import { ActionBadge, Alert, Empty, Id, PageHead, Panel, RouteBadge, SimTag, StateBadge, dateTime, yuan } from "../ui.tsx";
+import { ActionBadge, Alert, Empty, Id, PageHead, Panel, RouteBadge, SimTag, StateBadge, dateTime, yuan, Term } from "../ui.tsx";
 
 const PAGE = 50;
 const NONE = { route: "", state: "", scene: "", action: "", actor: "", q: "" };
@@ -39,7 +39,7 @@ export function Reviews() {
 
   return (
     <>
-      <PageHead title="审次" desc="每一次审核（快判、agent、人工或申诉重审）都记为一个审次。点击任一行可查看该内容的完整时间线。" />
+      <PageHead title="审次" desc={<>每一次审核（快判、agent、人工或申诉重审）都记为一个<Term k="审次" />。点击任一行可查看该内容的完整时间线。</>} />
       <Panel>
         <div className="filters">
           {sel("route", "路径", ROUTES.map((r) => [r, ROUTE[r]]))}

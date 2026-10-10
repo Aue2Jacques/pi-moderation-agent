@@ -6,7 +6,7 @@ import { localImages } from "../images.ts";
 import { useEventSource } from "../hooks.ts";
 import { SCENE } from "../labels.ts";
 import { ContentHeader, EventFeed, Pipeline, ReviewCards } from "../Timeline.tsx";
-import { Alert, Badge, Clamp, Empty, PageHead, Panel, clock } from "../ui.tsx";
+import { Alert, Badge, Clamp, Empty, PageHead, Panel, clock, Term } from "../ui.tsx";
 
 type Recent = { id: string; text: string; scene: string; at: number; image?: boolean };
 type Picked = { kind: "file"; name: string; url: string; data: string; bytes: number } | { kind: "sample"; sample: ImageSampleInfo };
@@ -85,7 +85,7 @@ export function Track({ initialId }: { initialId: string | null }) {
 
   return (
     <>
-      <PageHead title="提交与追踪" desc="提交的内容与线上流量走同一条审核流程，右侧实时展示它经过的每一步。" />
+      <PageHead title="提交与追踪" desc={<>提交的内容与线上流量走同一条审核流程：先由<Term k="快判" />判断，拿不准的再交给 agent。右侧实时展示它经过的每一步。</>} />
       <div className={`split ${tracking ? "tracking" : ""}`}>
         <div className="stack" style={{ gap: 20 }}>
           <Panel title="提交内容">
