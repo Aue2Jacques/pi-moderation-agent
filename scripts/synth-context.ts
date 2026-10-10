@@ -12,6 +12,9 @@
 //       runs each, gemini-3.8-flash tie-break when the two disagree (FROZEN procedure in lib/labeling.ts); the labeler
 //       sees the parent, the replies and the comment, never the account history. Expected disposition: any violate ->
 //       takedown (abuse) / limit (marketing only); any uncertain -> human; else pass.
+//   corpus <demo-corpus.jsonl> <out.jsonl> [conc=60]
+//       the same thread + history recipe for every line of the console's demo corpus (no relabel: the demo keeps the
+//       recorded judge answers and the dataset label); the demo traffic writes them next to each comment
 // Text stays on the server (data/); prints counts only.
 // usage: node --experimental-strip-types scripts/synth-context.ts synth|label ...   (RELAY_* from env or .env)
 import { readFileSync, writeFileSync } from "node:fs";
@@ -134,6 +137,35 @@ if (phase === "synth") {
   const by = out.reduce((m, x) => { m[x.expected.disposition] = (m[x.expected.disposition] ?? 0) + 1; return m; }, {} as Record<string, number>);
   const changed = out.filter((x) => (x.expected.disposition === "pass") !== (String(x.synth!["source_expected"]) === "pass")).length;
   console.log(JSON.stringify({ labeled: out.length, failed_calls: failed, tie_breaks: ties.length, expected: by, changed_vs_source_label: changed }));
+} else if (phase === "corpus") {
+  // the demo corpus (scripts/make-demo-corpus.py lines: id, kind, slice, text, recorded answers) gets the same recipe:
+  // a parent post and 0-3 earlier replies, an account history by the label shares above (label = the corpus kind: normal
+  // -> allowed, others -> violating); written back as corpus lines with `thread` and `history` (DEMO_CORPUS)
+  type Line = { id: string; kind: string; slice: string; text: string; [k: string]: unknown };
+  const items = readJsonl<Line>(a1!);
+  const out: Line[] = [];
+  let failed = 0;
+  await pool(items, Number(a3 ?? 60), async (it) => {
+    const [rel, relDesc] = pickRelation(it.id);
+    const k = Math.floor(h01("replies", it.id) * 4);
+    const raw = await chat("deepseek-v4.1-flash", [
+      { role: "system", content: "你在为内容审核系统构造评测用的讨论串。只输出一个 JSON 对象，不要输出其他文字。" },
+      { role: "user", content: `下面是一条来自${sceneOf(it.slice)}的用户评论。请虚构它所在的讨论串：一条父帖，以及 ${k} 条在这条评论之前出现的同线程回复。\n要求：${relDesc}；内容自然、像真实用户写的；不要评价这条评论，不要出现“违规”“举报”“审核”“规则”等词；不要改写评论本身；每条不超过 60 字。\n输出格式：{"parent": "父帖内容", "replies": ["回复1", "..."]}\n\n评论：${it.text}` },
+    ]);
+    const j = json(raw);
+    const parent = typeof j?.["parent"] === "string" ? (j["parent"] as string).slice(0, 120) : undefined;
+    if (!parent) { failed++; out.push(it); return; }
+    const replies = (Array.isArray(j?.["replies"]) ? (j!["replies"] as unknown[]) : []).filter((x): x is string => typeof x === "string").slice(0, k).map((x) => x.slice(0, 120));
+    const hist = pickHistory(it.id, it.kind === "normal" ? "allow" : "violate");
+    const rule = it.kind === "marketing" ? "MARKETING-003" : "ABUSE-001";
+    const history = hist === "repeat" ? [1, 2, 3].slice(0, 2 + Math.floor(h01("n", it.id) * 2)).map((d, i) => ({ action: i === 0 ? "takedown" : "limit", rule_ids: [rule], offset_days: d * 2 }))
+      : hist === "warned" ? [{ action: "limit", rule_ids: [rule], offset_days: 4 }] : [];
+    out.push({ ...it, thread: { parent, replies, relation: rel }, history, history_kind: hist });
+  });
+  const order = new Map(items.map((x, i) => [x.id, i]));
+  out.sort((x, y) => order.get(x.id)! - order.get(y.id)!);
+  writeFileSync(a2!, out.map((x) => JSON.stringify(x)).join("\n") + "\n");
+  console.log(JSON.stringify({ items: out.length, failed, with_thread: out.filter((x) => x["thread"]).length }));
 } else {
-  throw new Error("usage: synth-context.ts synth <cases> <out> [conc] | label <synth> <out> [conc]");
+  throw new Error("usage: synth-context.ts synth <cases> <out> [conc] | label <synth> <out> [conc] | corpus <corpus> <out> [conc]");
 }
