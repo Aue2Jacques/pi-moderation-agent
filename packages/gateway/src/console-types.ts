@@ -271,5 +271,7 @@ export type HarnessRecord = {
   latency_ms: { agent_p50: number | null; agent_p95: number | null };
   /** the finished agent sessions the replay can play, newest first, at most 300 (the counts above cover every row) */
   sessions: RecordSession[];
+  /** GET /api/harness/record: the newest session's full timeline, so the replay can start without another request */
+  first_timeline?: ContentTimeline | null;
 };
 

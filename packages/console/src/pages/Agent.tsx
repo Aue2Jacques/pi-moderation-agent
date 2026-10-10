@@ -161,7 +161,7 @@ function Live({ rec }: { rec: HarnessRecord | null }) {
   const source = useMemo<Source>(() => hasRec ? {
     record: true,
     list: async () => recRef.current!.sessions.map((x) => ({ content_id: x.content_id, review_id: x.review_id, category: x.category })),
-    timeline: (id) => api.get<ContentTimeline>(`/api/harness/record/contents/${encodeURIComponent(id)}`),
+    timeline: (id) => { const f = recRef.current?.first_timeline; return f && f.content.content_id === id ? Promise.resolve(f) : api.get<ContentTimeline>(`/api/harness/record/contents/${encodeURIComponent(id)}`); },
   } : {
     record: false,
     list: async () => (await api.get<{ items: ReviewListItem[] }>("/api/review-list?route=agent&limit=40")).items.filter((x) => x.state !== "queued" && x.state !== "investigating").map((x) => ({ content_id: x.content_id, review_id: x.review_id, category: "live" })),
@@ -313,7 +313,9 @@ const TOOLS: { name: string; what: string; ev: boolean; ext: boolean }[] = [
 
 export function Agent() {
   const recQ = usePoll<HarnessRecord | { available: false }>("/api/harness/record", 10_000);
-  const rec = recQ.data;
+  // the first snapshot rides along with index.html (window.__HARNESS_RECORD__); the poll replaces it every 10 s
+  const [pre] = useState(() => (window as { __HARNESS_RECORD__?: HarnessRecord | { available: false } }).__HARNESS_RECORD__ ?? null);
+  const rec = recQ.data ?? pre;
   const record = rec && rec.available ? rec : null;
   // the replay starts once it is known whether a record exists, so it does not start on the fallback and restart
   const ready = rec !== null || recQ.error !== null;

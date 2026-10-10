@@ -2,6 +2,7 @@
 // Console API (2026-10-09): content intake, per-content timeline (JSON + SSE), review / human-queue / appeal lists,
 // stats, rules view, config; the built web console (packages/console/dist) is served at / when present.
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { gzipSync } from "node:zlib";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, normalize, sep } from "node:path";
 import * as core from "@mod/core";
@@ -50,15 +51,33 @@ const MAX_TEXT = 2000;
 
 const MIME: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".json": "application/json", ".woff2": "font/woff2" };
 
-/** Serve a file of the built console; false when it does not exist (path traversal is refused the same way). */
-function serveStatic(res: ServerResponse, dir: string, urlPath: string): boolean {
+const gzCache = new Map<string, { mtime: number; body: Buffer }>();
+/** gzip a text body once per file version (the demo is reached through a slow proxy: the 380 KB bundle is ~110 KB gzipped) */
+function gzipped(full: string, raw: Buffer): Buffer {
+  const mtime = statSync(full).mtimeMs;
+  const hit = gzCache.get(full);
+  if (hit && hit.mtime === mtime) return hit.body;
+  const body = gzipSync(raw, { level: 9 });
+  gzCache.set(full, { mtime, body });
+  return body;
+}
+const acceptsGzip = (req: IncomingMessage | undefined): boolean => /\bgzip\b/.test(String(req?.headers["accept-encoding"] ?? ""));
+
+/** Serve a file of the built console; false when it does not exist (path traversal is refused the same way). `inject`:
+ *  text placed before </head> of index.html (the console config, so the page needs no extra round trip for it). */
+function serveStatic(res: ServerResponse, dir: string, urlPath: string, req?: IncomingMessage, inject?: string): boolean {
   const rel = normalize(decodeURIComponent(urlPath)).replace(/^([/\\])+/, "");
   const full = join(dir, rel || "index.html");
   if (!full.startsWith(dir.endsWith(sep) ? dir : dir + sep)) return false;
   try {
     if (!existsSync(full) || !statSync(full).isFile()) return false;
-    res.writeHead(200, { "content-type": MIME[extname(full)] ?? "application/octet-stream", "cache-control": rel.startsWith("assets/") ? "public, max-age=31536000, immutable" : "no-cache" });
-    res.end(readFileSync(full));
+    let body = readFileSync(full);
+    if (inject && full.endsWith("index.html")) body = Buffer.from(body.toString("utf8").replace("</head>", `${inject}</head>`));
+    const text = /\.(js|css|html|svg|json)$/.test(full);
+    const gz = text && acceptsGzip(req) && body.length > 1024;
+    res.writeHead(200, { "content-type": MIME[extname(full)] ?? "application/octet-stream", "cache-control": rel.startsWith("assets/") ? "public, max-age=31536000, immutable" : "no-cache",
+      ...(gz ? { "content-encoding": "gzip", vary: "accept-encoding" } : {}) });
+    res.end(gz ? (inject ? gzipSync(body) : gzipped(full, body)) : body);
     return true;
   } catch {
     return false;
@@ -127,6 +146,30 @@ export function createHttpServer(d: HttpDeps): Server {
   const imgs = cons.images;
   const imageStore = imgs ? dirImageStore(imgs.dir) : undefined;
   const presetByRef = new Map((imgs?.samples ?? []).map((x) => [x.ref, x] as const));
+  const consoleConfig = (): ConsoleConfig => {
+    const cfg: ConsoleConfig = {
+      mode: cons.mode, rules_ver: d.bundle.rulesVer, calib_ver: gateway.d.calibrator.calibVer, calib_mode: gateway.d.calibrator.mode, prices_ver: gateway.d.prices.pricesVer,
+      judge_model: gateway.d.judgeModel, agent_model: cons.agentModel ?? null,
+      scenes: textScenes(d.bundle).map((k) => ({ scene: k, allowed_actions: [...d.bundle.scenes[k as core.Scene].allowedActions] })),
+      reviewers: [...d.humanAuth.reviewers],
+      demo_auth: cons.mode === "demo" ? { reviewer: d.humanAuth.reviewers[0] ?? "rev1", token: d.humanAuth.token } : null,
+      samples: [...(cons.samples ?? [])],
+      demo_traffic: cons.mode === "demo" && cons.traffic ? { sim_prefix: cons.simPrefix ?? "sim-", sim_reviewer: cons.simReviewer ?? "sim-reviewer" } : null,
+      demo_corpus: cons.mode === "demo" && cons.corpus ? { judge: cons.corpus.judge, items: cons.corpus.items } : null,
+      images: { enabled: !!imgs, max_bytes: MAX_IMAGE_BYTES, samples: (imgs?.samples ?? []).map(({ ref: _r, file: _f, ...x }) => x), note: imgs?.note ?? null },
+    };
+    return cfg;
+  };
+  /** the harness record plus the newest session's timeline, so the Agent page can show something without another trip */
+  const recordWithFirst = (): unknown => {
+    if (!cons.harnessRecord) return { available: false };
+    const r = cons.harnessRecord.summary();
+    const first = r.sessions[0] ? cons.harnessRecord.timeline(r.sessions[0].content_id) ?? null : null;
+    return { ...r, first_timeline: first };
+  };
+  /** script injected into index.html: config and record ride along with the page (the demo sits behind a proxy that costs
+   *  ~1.5 s per request) */
+  const preload = (): string => `<script>window.__CONSOLE_CONFIG__=${JSON.stringify(consoleConfig()).replace(/</g, "\\u003c")};window.__HARNESS_RECORD__=${JSON.stringify(recordWithFirst()).replace(/</g, "\\u003c")};</script>`;
   const timelineImages: TimelineImages = { preset: (ref) => { const x = presetByRef.get(ref); return x ? { id: x.id, title: x.title, url: x.url } : null; }, note: imgs?.note ?? null };
   const live = new LiveHub({ db, now: d.now, pollMs: cons.livePollMs ?? 500, flow: () => gateway.flow(), ...(cons.traffic ? { traffic: () => cons.traffic!.status() } : {}) });
   return createServer(async (req, res) => {
@@ -135,9 +178,9 @@ export function createHttpServer(d: HttpDeps): Server {
       const path = url.pathname;
       const m = (re: RegExp): RegExpExecArray | null => re.exec(path);
       let mm0: RegExpExecArray | null;
-      if (req.method === "GET" && path === "/") return consoleDir && serveStatic(res, consoleDir, "index.html") ? undefined : html(res, DASHBOARD_HTML);
+      if (req.method === "GET" && path === "/") return consoleDir && serveStatic(res, consoleDir, "index.html", req, preload()) ? undefined : html(res, DASHBOARD_HTML);
       if (req.method === "GET" && path === "/legacy") return html(res, DASHBOARD_HTML);
-      if (req.method === "GET" && consoleDir && (path.startsWith("/assets/") || path === "/favicon.svg") && serveStatic(res, consoleDir, path)) return;
+      if (req.method === "GET" && consoleDir && (path.startsWith("/assets/") || path === "/favicon.svg") && serveStatic(res, consoleDir, path, req)) return;
       if (req.method === "GET" && path === "/human") return html(res, HUMAN_HTML);
       if (req.method === "GET" && path === "/api/health") return json(res, 200, { ok: true, version: "0.0.0", queues: core.control.backpressure(db), replay_paused: gateway.replayPaused, rules_ver: gateway.d.bundle.rulesVer, calib_ver: gateway.d.calibrator.calibVer, calib_mode: gateway.d.calibrator.mode, completion: core.reconcile.completion(db) });
       if (req.method === "GET" && path === "/api/metrics") {
@@ -158,20 +201,7 @@ export function createHttpServer(d: HttpDeps): Server {
         return json(res, 200, rows.map((r) => pick(r, REVIEW_PUBLIC)));
       }
       // ---- console API ----
-      if (req.method === "GET" && path === "/api/config") {
-        const cfg: ConsoleConfig = {
-          mode: cons.mode, rules_ver: d.bundle.rulesVer, calib_ver: gateway.d.calibrator.calibVer, calib_mode: gateway.d.calibrator.mode, prices_ver: gateway.d.prices.pricesVer,
-          judge_model: gateway.d.judgeModel, agent_model: cons.agentModel ?? null,
-          scenes: textScenes(d.bundle).map((k) => ({ scene: k, allowed_actions: [...d.bundle.scenes[k as core.Scene].allowedActions] })),
-          reviewers: [...d.humanAuth.reviewers],
-          demo_auth: cons.mode === "demo" ? { reviewer: d.humanAuth.reviewers[0] ?? "rev1", token: d.humanAuth.token } : null,
-          samples: [...(cons.samples ?? [])],
-          demo_traffic: cons.mode === "demo" && cons.traffic ? { sim_prefix: cons.simPrefix ?? "sim-", sim_reviewer: cons.simReviewer ?? "sim-reviewer" } : null,
-          demo_corpus: cons.mode === "demo" && cons.corpus ? { judge: cons.corpus.judge, items: cons.corpus.items } : null,
-          images: { enabled: !!imgs, max_bytes: MAX_IMAGE_BYTES, samples: (imgs?.samples ?? []).map(({ ref: _r, file: _f, ...x }) => x), note: imgs?.note ?? null },
-        };
-        return json(res, 200, cfg);
-      }
+      if (req.method === "GET" && path === "/api/config") return json(res, 200, consoleConfig());
       if (req.method === "GET" && path === "/api/events") {
         // the console's global live stream: stats, changed reviews, list counters, demo traffic (see live.ts)
         res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", connection: "keep-alive", "x-accel-buffering": "no" });
@@ -189,7 +219,7 @@ export function createHttpServer(d: HttpDeps): Server {
           ...(g("updated_since") !== undefined && Number.isFinite(Number(g("updated_since"))) ? { updatedSince: Number(g("updated_since")) } : {}) }));
       }
       if (req.method === "GET" && path === "/api/stats") return json(res, 200, stats(db, d.now()));
-      if (req.method === "GET" && path === "/api/harness/record") return json(res, 200, cons.harnessRecord ? cons.harnessRecord.summary() : { available: false });
+      if (req.method === "GET" && path === "/api/harness/record") return json(res, 200, recordWithFirst());
       if (req.method === "GET" && (mm0 = m(/^\/api\/harness\/record\/contents\/([^/]+)$/))) {
         const t = cons.harnessRecord?.timeline(decodeURIComponent(mm0[1]!));
         return t ? json(res, 200, t) : json(res, 404, { code: "E_CONTENT_NOT_FOUND" });

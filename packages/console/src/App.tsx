@@ -129,7 +129,8 @@ export function App() {
 
 function Console() {
   const live = useLive();
-  const [config, setConfig] = useState<ConsoleConfig | null>(null);
+  // the gateway inlines the config into index.html (window.__CONSOLE_CONFIG__): no extra round trip before the first paint
+  const [config, setConfig] = useState<ConsoleConfig | null>(() => (window as { __CONSOLE_CONFIG__?: ConsoleConfig }).__CONSOLE_CONFIG__ ?? null);
   const [cfgError, setCfgError] = useState<string | null>(null);
   const [reviewer, setReviewerState] = useState<Reviewer | null>(null);
   const [parts, go] = useHashRoute();
@@ -137,6 +138,8 @@ function Console() {
   const [drawer, setDrawer] = useState(false);
 
   useEffect(() => {
+    const pre = (window as { __CONSOLE_CONFIG__?: ConsoleConfig }).__CONSOLE_CONFIG__;
+    if (pre) { setReviewerState(loadReviewer(pre)); return; }
     api.get<ConsoleConfig>("/api/config").then((c) => { setConfig(c); setReviewerState(loadReviewer(c)); }).catch((e) => setCfgError(String(e)));
   }, []);
   const setReviewer = (r: Reviewer | null): void => { saveReviewer(r); setReviewerState(r); };
