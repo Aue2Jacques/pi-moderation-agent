@@ -27,6 +27,9 @@ export type WorkerOptions = Omit<ExtensionDeps, "grants" | "hostLoop" | "db"> & 
   instructions: string;
   /** test hook: wait function so tests can advance virtual time */
   sleep?: (ms: number) => Promise<void>;
+  /** main-model request limits (default 15 s per request, 1 retry: one generation stays under the 60 s scene deadline,
+   *  dev-doc §8.1); a slower relay needs more (2026-10-09 harness run: most stalls were "Request timed out." at 15 s) */
+  modelTimeouts?: { streamMs: number; retries: number; baseDelayMs?: number };
 };
 
 export type SessionInfo = { conversationId: string; reviewId: string; mode: Grant["mode"]; liveTasks: number; submission: string | null };
@@ -56,7 +59,7 @@ export class Worker {
     registry.install(buildModerationExtension(deps));
     const harness = await Harness.open(o.storage, {
       models: o.models, registry,
-      settings: { stream: { timeoutMs: 15_000, maxRetries: 0 }, retry: { maxRetries: 1, baseDelayMs: 2000 }, toolExecution: "sequential", compaction: { enabled: false } },
+      settings: { stream: { timeoutMs: o.modelTimeouts?.streamMs ?? 15_000, maxRetries: 0 }, retry: { maxRetries: o.modelTimeouts?.retries ?? 1, baseDelayMs: o.modelTimeouts?.baseDelayMs ?? 2000 }, toolExecution: "sequential", compaction: { enabled: false } },
       onReport: (e) => console.error("extension failure", core.redact(e)),
     }, ctx);
     core.storeBundle(o.db, o.bundle, o.ruleTexts, o.now());   // this worker's own version is always continuable

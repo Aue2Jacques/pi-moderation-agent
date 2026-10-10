@@ -84,7 +84,7 @@ const manifest = (extra: Record<string, unknown>) => ({
   gitHead: (() => { try { return execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim(); } catch { return "unknown"; } })(),
   codeSha: codeSha(),
   rulesVer: bundle.rulesVer, calibVer: calibrator.calibVer, calibDir: CALIB || "identity", pricesVer: prices.pricesVer, judge: JEV, agent: AGENT,
-  casePool: CASES, casePoolSha: sha(readFileSync(CASES)), modelView: core.MODEL_VIEW_VERSION, confirmPass: CONFIRM_OFF ? "off" : "on", contextRoute: CONTEXT_ROUTE || "off", admitMax: ADMIT, deadlineMs: DEADLINE_MS,
+  casePool: CASES, casePoolSha: sha(readFileSync(CASES)), modelView: core.MODEL_VIEW_VERSION, confirmPass: CONFIRM_OFF ? "off" : "on", contextRoute: CONTEXT_ROUTE || "off", admitMax: ADMIT, deadlineMs: DEADLINE_MS, agentStreamTimeoutMs: process.env.AGENT_STREAM_TIMEOUT_MS ?? "default", agentRetries: process.env.AGENT_RETRIES ?? "default",
   budgetTools: DEFAULT_GATEWAY_CONFIG.budgetTools, budgetMicro: DEFAULT_GATEWAY_CONFIG.budgetMicro, ...extra,
 });
 mkdirSync(outDir, { recursive: true });
@@ -189,6 +189,8 @@ if (phase === "prepare") {
     db, storage: await openNodeSqliteStorage(join(dir, "session.sqlite")), models, bundle, ruleTexts: texts, workerId: `w-ac-${arm}`, judge: judgeFor(), prices, calibrator,
     cfg: { ...core.DEFAULT_CONFIG, deadlineMs: DEADLINE_MS }, flags: { escalation: false }, maxModelCalls: 20, now, admitMax: ADMIT,
     modelFor: () => ({ provider: "a6api", modelId: AGENT }), instructions: INSTR[arm],
+    // AGENT_STREAM_TIMEOUT_MS / AGENT_RETRIES: per-request limit and retries of the main model (worker default 15 s / 1)
+    ...(process.env.AGENT_STREAM_TIMEOUT_MS ? { modelTimeouts: { streamMs: Number(env("AGENT_STREAM_TIMEOUT_MS")), retries: Number(env("AGENT_RETRIES", "1")) } } : {}),
   });
   const t0 = now();
   // a run whose queue cannot drain inside the window ends with most reviews timed out in the queue (dev plan problem 12):
