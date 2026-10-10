@@ -9,7 +9,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import * as core from "@mod/core";
 import { identityCalibrator, jevModel, jevProvider, loadCalibrator } from "@mod/judges";
 import { loadBundle } from "@mod/policy";
-import { DEMO_AGENT_MODEL, DEMO_SAMPLES, demoCalibrator, demoImageText, demoJudge, corpusCategory, demoJudgeModel, demoPrices, loadDemoCorpus, loadDemoImages, piJudge, seedDemoHistory, type JudgeClient } from "@mod/worker";
+import { DEMO_AGENT_MODEL, DEMO_SAMPLES, demoCalibrator, demoImageText, demoJudge, corpusCategory, withFastLines, demoJudgeModel, demoPrices, loadDemoCorpus, loadDemoImages, piJudge, seedDemoHistory, type JudgeClient } from "@mod/worker";
 import { Gateway, DEFAULT_GATEWAY_CONFIG } from "./gateway.ts";
 import { dirImageStore, relayImageChecker } from "./image.ts";
 import { createHttpServer } from "./http.ts";
@@ -41,11 +41,14 @@ async function main(): Promise<void> {
   mkdirSync("data", { recursive: true });
   const db = core.openAppDb(env("APP_DB", "data/app.db"), "gateway");
   core.ensureSchema(db);
-  const { bundle, texts } = loadBundle("rules", "config/scenes.yaml");
+  const loaded = loadBundle("rules", "config/scenes.yaml");
+  const texts = loaded.texts;
   // DEMO_CORPUS: real test texts with a real judge run's answers; the demo traffic draws from it and the demo judge replays
   // the answers (packages/worker/src/demo-corpus.ts). The file holds dataset text and stays on the demo server.
   const corpus = demo && process.env["DEMO_CORPUS"] ? loadDemoCorpus(env("DEMO_CORPUS"), env("DEMO_CORPUS_JUDGE", "kev4b-v1")) : undefined;
   const prices = demo ? demoPrices(loadPrices(), corpus) : loadPrices();
+  // DEMO_FAST_LINES (demo with a corpus only): the replayed judge's own fast-path operating point (withFastLines)
+  const bundle = demo && corpus && process.env["DEMO_FAST_LINES"] ? withFastLines(loaded.bundle, env("DEMO_FAST_LINES")) : loaded.bundle;
   // round-9 item 5: strict by default — answers without a fitted calibration bucket never auto-dispose.
   // CALIB_MODE=identity is the explicit smoke/联调 mode (raw probabilities, pin calib@identity).
   const calibMode = env("CALIB_MODE", "strict");

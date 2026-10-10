@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { loadBundle } from "../../packages/policy/src/index.ts";
 import { Gateway, DEFAULT_GATEWAY_CONFIG } from "../../packages/gateway/src/index.ts";
 import { DemoTraffic, SIM_REVIEWER, makeContent, rng } from "../../packages/gateway/src/demo-traffic.ts";
-import { corpusAgentAnswer, demoCalibrator, demoJudge, demoJudgeModel, demoPrices, loadDemoCorpus } from "../../packages/worker/src/index.ts";
+import { corpusAgentAnswer, withFastLines, demoCalibrator, demoJudge, demoJudgeModel, demoPrices, loadDemoCorpus } from "../../packages/worker/src/index.ts";
 import { freshDb } from "../helpers.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
@@ -80,6 +80,26 @@ describe("demo corpus", () => {
     if (res.status === "ok") expect(res.answers[rule("ABUSE-001").sha]!.probs["violate"]).toBe(0.999);
     const fast = await j.classify({ contentId: "c1", text: abuse.text, scene: "comment", evidence: [], questions });
     if (fast.status === "ok") expect(fast.answers[rule("ABUSE-001").sha]!.probs["violate"]).toBe(0.6);   // the fast path still replays
+  });
+
+  it("DEMO_FAST_LINES sets every rule's fast lines and marks the rules version; bad specs are refused", () => {
+    const b = withFastLines(bundle, "0.2/0.8");
+    expect(b.rulesVer).toBe(`${bundle.rulesVer}+lines-0.2-0.8`);
+    for (const r of b.rules) { expect(r.thresholds.pass).toBe(0.2); expect(r.thresholds.block).toBe(0.8); }
+    expect(b.rules.find((r) => r.ruleId === "ABUSE-001")!.agentThresholds).toEqual(bundle.rules.find((r) => r.ruleId === "ABUSE-001")!.agentThresholds);
+    expect(() => withFastLines(bundle, "0.8/0.2")).toThrow(/DEMO_FAST_LINES/);
+    expect(() => withFastLines(bundle, "x")).toThrow(/DEMO_FAST_LINES/);
+  });
+
+  it("the traffic follows the platform-like source mix when the corpus has those sources", () => {
+    const p = join(mkdtempSync(join(tmpdir(), "corpus-")), "mix.jsonl");
+    const lines = [...Array.from({ length: 20 }, (_, i) => ({ ...LINES[0]!, id: `e${i}`, slice: "everyday/weibo", text: `日常评论第${i}条` })), { ...LINES[2]!, id: "a1", slice: "abuse/cold" }];
+    writeFileSync(p, lines.map((x) => JSON.stringify(x)).join("\n") + "\n");
+    const c = loadDemoCorpus(p, "kev4b-v1");
+    const next = rng(11);
+    let everyday = 0;
+    for (let i = 0; i < 400; i++) if (c.lookup(makeContent(next, 1_800_000_000_000, i, c).text)?.slice.startsWith("everyday")) everyday++;
+    expect(everyday / 400).toBeGreaterThan(0.8);
   });
 
   it("generated contents are corpus texts, all kinds drawn", () => {

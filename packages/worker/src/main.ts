@@ -13,7 +13,7 @@ import { identityCalibrator, jevModel, jevProvider, loadCalibrator } from "@mod/
 import { loadBundle } from "@mod/policy";
 import { piJudge } from "./pi-judge.ts";
 import { DemoSessionRetention, demoAgentProvider, demoCalibrator, demoImageText, demoJudge, demoPrices, loadDemoImages } from "./demo.ts";
-import { loadDemoCorpus } from "./demo-corpus.ts";
+import { loadDemoCorpus, withFastLines } from "./demo-corpus.ts";
 import type { JudgeClient } from "./judge-client.ts";
 import { relayProvider } from "./relay.ts";
 import { Worker } from "./worker.ts";
@@ -46,12 +46,15 @@ async function main(): Promise<void> {
   if (!acquireSingleInstanceLock(lock)) { console.error(`another worker holds ${lock}`); process.exit(2); }
   const db = core.openAppDb(env("APP_DB", "data/app.db"), "worker");
   core.ensureSchema(db);
-  const { bundle, texts } = loadBundle("rules", "config/scenes.yaml");
+  const loaded = loadBundle("rules", "config/scenes.yaml");
+  const texts = loaded.texts;
   const pricesRaw = readFileSync("config/prices.yaml", "utf8");
   const realPrices: core.PriceTable = { pricesVer: `prices@${core.sha256(pricesRaw).slice(0, 12)}`, perMillion: (parse(pricesRaw) as { models: core.PriceTable["perMillion"] }).models };
   // DEMO_CORPUS: real test texts with a real judge run's answers, replayed by the demo judge (demo-corpus.ts)
   const corpus = demo && process.env["DEMO_CORPUS"] ? loadDemoCorpus(env("DEMO_CORPUS"), env("DEMO_CORPUS_JUDGE", "kev4b-v1")) : undefined;
   const prices = demo ? demoPrices(realPrices, corpus) : realPrices;
+  // DEMO_FAST_LINES (demo with a corpus only): the replayed judge's own fast-path operating point (withFastLines)
+  const bundle = demo && corpus && process.env["DEMO_FAST_LINES"] ? withFastLines(loaded.bundle, env("DEMO_FAST_LINES")) : loaded.bundle;
   const models = createModels();
   let judge: JudgeClient;
   let agent: { provider: string; modelId: string };

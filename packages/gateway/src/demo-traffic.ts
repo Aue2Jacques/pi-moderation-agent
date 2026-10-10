@@ -13,7 +13,7 @@ import * as core from "@mod/core";
 import type { Scene } from "@mod/core";
 import type { TrafficKind, TrafficStatus } from "./console-types.ts";
 import { claimTask, humanRule, intakeContent, openAppeal, unclaimTask, type ActionDeps } from "./console-actions.ts";
-import type { CorpusHistory, CorpusKind, DemoCorpus } from "@mod/worker";
+import type { CorpusHistory, DemoCorpus } from "@mod/worker";
 
 /** Content ids of generated traffic start with this; the console marks them as simulated. */
 export const SIM_PREFIX = "sim-";
@@ -115,20 +115,21 @@ export type GeneratedContent = { kind: TrafficKind; contentId: string; scene: Sc
 
 /** Share of each kind with a demo corpus (DEMO_CORPUS), in percent: real texts of these kinds, a platform-like mix (the
  *  test split itself is about a third violations). Abuse texts come from accounts with history a third of the time. */
-export const CORPUS_MIX: Readonly<Record<CorpusKind, number>> = { normal: 72, marketing: 12, abuse: 13, injection: 3 };
+/** A platform-like mix by source (2026-10-10): mostly everyday chatter, a few percent violations. */
+export const CORPUS_MIX: Readonly<Record<string, number>> = { everyday: 85, safe: 3, hard_negative: 2, abuse: 4, adversarial: 1, marketing: 4, injection: 1 };
 
-function pickCorpusKind(r: number): CorpusKind {
+function pickCorpusSource(r: number): string {
   let x = r * Object.values(CORPUS_MIX).reduce((a, b) => a + b, 0);
-  for (const [k, w] of Object.entries(CORPUS_MIX) as [CorpusKind, number][]) { if (x < w) return k; x -= w; }
-  return "normal";
+  for (const [k, w] of Object.entries(CORPUS_MIX)) { if (x < w) return k; x -= w; }
+  return "everyday";
 }
 
 /** One generated content (no side effects): kind by TRAFFIC_MIX, text from the pool, an account that fits the kind; with
  *  a corpus, kind by CORPUS_MIX and a real text of that kind. */
 export function makeContent(next: () => number, now: number, n: number, corpus?: DemoCorpus): GeneratedContent {
   if (corpus) {
-    const ck = pickCorpusKind(next());
-    const pool = corpus.byKind[ck].length ? corpus.byKind[ck] : corpus.items;
+    const src = pickCorpusSource(next());
+    const pool = corpus.bySource[src]?.length ? corpus.bySource[src]! : corpus.items;
     const item = pool[Math.floor(next() * pool.length)]!;
     const k = (m: number): number => 1 + Math.floor(next() * m);
     const contentId = `${SIM_PREFIX}${now.toString(36)}-${n.toString(36)}`;
