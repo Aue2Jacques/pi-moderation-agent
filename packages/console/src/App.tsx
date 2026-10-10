@@ -13,6 +13,7 @@ import { Human } from "./pages/Human.tsx";
 import { Appeals } from "./pages/Appeals.tsx";
 import { Rules } from "./pages/Rules.tsx";
 import { Capacity } from "./pages/Capacity.tsx";
+import { Agent } from "./pages/Agent.tsx";
 import { demoJudgeNote } from "./labels.ts";
 
 type Ctx = { config: ConsoleConfig; reviewer: Reviewer | null; setReviewer: (r: Reviewer | null) => void; go: (path: string) => void; isSim: (contentId: string) => boolean };
@@ -26,13 +27,43 @@ export function useConsole(): Ctx {
 const NAV: { id: string; label: string; icon: string; group?: string }[] = [
   { id: "overview", label: "概览", icon: "overview", group: "运行" },
   { id: "track", label: "提交与追踪", icon: "track" },
-  { id: "reviews", label: "审次", icon: "list" },
+  { id: "agent", label: "Agent 与 Harness", icon: "agent" },
   { id: "capacity", label: "容量与调度", icon: "capacity" },
+  { id: "reviews", label: "审次", icon: "list" },
   { id: "human", label: "人工复核", icon: "human", group: "处理" },
   { id: "appeals", label: "申诉", icon: "appeal" },
   { id: "rules", label: "规则与版本", icon: "rules", group: "配置" },
 ];
-const TITLES: Record<string, string> = { overview: "概览", track: "提交与追踪", reviews: "审次", contents: "审次详情", human: "人工复核", appeals: "申诉", rules: "规则与版本", capacity: "容量与调度" };
+const TITLES: Record<string, string> = { overview: "概览", track: "提交与追踪", reviews: "审次", contents: "审次详情", human: "人工复核", appeals: "申诉", rules: "规则与版本", capacity: "容量与调度", agent: "Agent 与 Harness" };
+
+/** The suggested reading order: each page ends with a link to the next one (NextStop). */
+export const TOUR: { id: string; label: string; why: string }[] = [
+  { id: "overview", label: "概览", why: "整条流水线实时在跑：快判、agent、人工各分走多少" },
+  { id: "track", label: "提交与追踪", why: "自己发一条评论或一张截图，看它几秒内走完哪几步" },
+  { id: "agent", label: "Agent 与 Harness", why: "回放真实 agent 会话：它查了什么证据，harness 每一步怎么管住它" },
+  { id: "capacity", label: "容量与调度", why: "早晚高峰、突发热点时 GPU 卡池怎么调度；切换耗时为实测" },
+  { id: "human", label: "人工复核", why: "agent 拿不准的交给人：领取、看证据、裁决" },
+  { id: "rules", label: "规则与版本", why: "规则、校准、灰度发布：每个结论按哪套规则判的" },
+];
+
+function NextStop({ page }: { page: string }) {
+  const i = TOUR.findIndex((x) => x.id === page);
+  if (i < 0 || i === TOUR.length - 1) return null;
+  const n = TOUR[i + 1]!;
+  return (
+    <a className="next-stop" href={`#/${n.id}`}>
+      <span className="ns-k">下一站 · {i + 2}/{TOUR.length}</span>
+      <span className="ns-t">{n.label} →</span>
+      <span className="ns-w">{n.why}</span>
+    </a>
+  );
+}
+
+/** Phones: the sidebar is a drawer, so the main pages get a tab bar at the bottom. */
+const TABS: { id: string; label: string; icon: string }[] = [
+  { id: "overview", label: "概览", icon: "overview" }, { id: "track", label: "提交", icon: "track" },
+  { id: "agent", label: "Agent", icon: "agent" }, { id: "capacity", label: "调度", icon: "capacity" },
+];
 
 function useTheme(): [string, () => void] {
   const sysDark = (): boolean => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
@@ -121,6 +152,7 @@ function Console() {
     case "appeals": body = <Appeals preset={parts[1] ?? null} />; break;
     case "rules": body = <Rules />; break;
     case "capacity": body = <Capacity />; break;
+    case "agent": body = <Agent />; break;
     default: body = <Overview />;
   }
   const humanOpen = live.frame?.stats.human.open ?? 0;
@@ -175,8 +207,14 @@ function Console() {
               <button className="btn ghost icon" onClick={toggleTheme} aria-label={theme === "dark" ? "切换到浅色" : "切换到深色"} title={theme === "dark" ? "浅色" : "深色"}><Icon name={theme === "dark" ? "sun" : "moon"} /></button>
             </div>
           </header>
-          <main className="content"><div className="page" key={`${page}/${page === "contents" ? parts[1] ?? "" : ""}`}>{body}</div></main>
+          <main className="content"><div className="page" key={`${page}/${page === "contents" ? parts[1] ?? "" : ""}`}>{body}<NextStop page={page} /></div></main>
         </div>
+        <nav className="tabbar" aria-label="常用页面">
+          {TABS.map((x) => (
+            <a key={x.id} href={`#/${x.id}`} className={page === x.id ? "on" : ""} aria-current={page === x.id ? "page" : undefined}><Icon name={x.icon} size={18} /><span>{x.label}</span></a>
+          ))}
+          <button type="button" onClick={() => setDrawer(true)} className={drawer ? "on" : ""}><Icon name="menu" size={18} /><span>全部</span></button>
+        </nav>
       </div>
     </ConsoleCtx.Provider>
   );

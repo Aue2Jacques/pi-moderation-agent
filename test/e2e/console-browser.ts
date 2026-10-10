@@ -84,16 +84,22 @@ try {
   await page.waitForTimeout(4000);
   await shot(page, "4-appeals");
 
-  // 4. review list -> detail -> restricted view (confirm dialog accepted, audited server side)
+  // 4. review list -> detail: demo mode shows the original text directly (no restricted button; G still audits the read)
   await page.goto(`${app.base}/#/reviews`);
   await page.locator(".table tbody tr.click").first().waitFor();
   check("review list has rows", (await page.locator(".table tbody tr.click").count()) >= 3);
   await shot(page, "5-reviews");
   await page.locator(".table tbody tr.click").last().click();
-  await page.getByRole("button", { name: /查看原文与证据/ }).click();
-  await page.getByText("受限视图：原文").waitFor();
-  check("restricted view shows the original text", true);
-  await shot(page, "6-detail-restricted");
+  await page.locator(".content-text").first().waitFor();
+  check("demo detail shows the original text without a button", (await page.getByRole("button", { name: /查看原文与证据/ }).count()) === 0);
+  await shot(page, "6-detail-open");
+
+  // 4a. agent & harness page: a finished agent session replays step by step; the page ends with the next stop
+  await page.goto(`${app.base}/#/agent`);
+  await page.locator(".ag-steps .step").first().waitFor({ timeout: 60_000 });
+  check("agent page replays a session", (await page.locator(".loop li.on").count()) === 1);
+  check("agent page links the next stop", (await page.locator("a.next-stop").count()) === 1);
+  await shot(page, "6b-agent");
 
   // 4b. images: a preset screenshot (agent, then takedown) and an uploaded file (agent, then a person)
   await page.goto(`${app.base}/#/track`);
