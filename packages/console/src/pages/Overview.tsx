@@ -1,7 +1,7 @@
 // Overview: the live pipeline and throughput (Flow.tsx), cumulative numbers and the latest reviews from the global live
 // stream (/api/events), G's in-memory window metrics from /api/metrics (SSE). Nothing here polls.
 import { useEffect, useRef, useState } from "react";
-import { TOUR, useConsole } from "../App.tsx";
+import { useConsole } from "../App.tsx";
 import type { ReviewListItem, Stats } from "../api.ts";
 import { ROUTE, ROUTES, demoJudgeNote, reasonText } from "../labels.ts";
 import { useLive } from "../live.tsx";
@@ -127,39 +127,17 @@ function Hero() {
   );
 }
 
-/** First visit: where to go next, in the suggested order (the sidebar is easy to miss, on phones it is a drawer). */
-function Guide() {
-  const [hidden, setHidden] = useState<boolean>(() => { try { return localStorage.getItem("console.guide.hidden") === "1"; } catch { return false; } });
-  if (hidden) return null;
-  const hide = (): void => { setHidden(true); try { localStorage.setItem("console.guide.hidden", "1"); } catch { /* not persisted */ } };
-  return (
-    <section className="guide" aria-label="从这里开始">
-      <div className="guide-h"><span>首次访问建议按以下顺序浏览，每页底部均可进入下一页</span><button className="btn sm ghost" onClick={hide}>不再显示</button></div>
-      <div className="guide-cards">
-        {TOUR.slice(1, 5).map((x, i) => (
-          <a key={x.id} className="gcard-l" href={`#/${x.id}`}>
-            <span className="gl-n num">{i + 1}</span>
-            <span className="gl-t">{x.label} →</span>
-            <span className="gl-w">{x.why}</span>
-          </a>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 export function Overview() {
   const { config } = useConsole();
   const live = useLive();
   const head = <PageHead title="概览" desc={config.mode === "demo" ? `所有数据实时更新。当前为演示环境：${demoJudgeNote(config)}。` : "所有数据实时更新。"} />;
-  if (!live.frame) return <>{head}<Guide /><Panel><Empty>{live.connected ? "加载中…" : "正在连接实时数据流…"}</Empty></Panel></>;
+  if (!live.frame) return <>{head}<Panel><Empty>{live.connected ? "加载中…" : "正在连接实时数据流…"}</Empty></Panel></>;
   const d = live.frame.stats;
   const relTotal = Object.values(d.release_reasons).reduce((a, b) => a + b, 0);
 
   return (
     <>
       {head}
-      <Guide />
       {d.contents === 0 ? <Alert tone="info">暂无内容。可在“提交与追踪”中提交一条{config.mode === "demo" ? "，或在顶栏开启模拟流量" : ""}。</Alert> : null}
       <Hero />
       <div className="kpis" style={{ ["--n" as string]: 4 }}>
