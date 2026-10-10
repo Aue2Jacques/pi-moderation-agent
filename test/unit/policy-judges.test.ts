@@ -231,11 +231,14 @@ describe("context_route scene switch (stage ② finding: the fast path cannot se
 });
 
 describe("agent-stage thresholds (dev plan 2026-10-08 §3.1 problem 1, temporary)", () => {
-  const withAgent = (a: { block: number; pass: number } | undefined): PolicyBundle => ({ ...B, rules: B.rules.map((r) => (r.ruleId === "ABUSE-001" ? { ...r, ...(a ? { agentThresholds: a } : {}) } : r)) });
+  // ABUSE-001 has agent lines since rules@a056acc526cc; the tests set or strip them explicitly
+  const withAgent = (a: { block: number; pass: number } | undefined): PolicyBundle => ({ ...B, rules: B.rules.map((r) => { if (r.ruleId !== "ABUSE-001") return r; const { agentThresholds: _drop, ...rest } = r; return a ? { ...rest, agentThresholds: a } : rest; }) });
   const mid = [ans(abuse.question.sha, "h1", 0.82, "violate"), ans(abuse.question.sha, "h2", 0.82, "violate", "h1", 1), ...pair(mkt.question.sha, "m"), ...G];
   const midLow = [ans(abuse.question.sha, "l1", 0.15, "none"), ans(abuse.question.sha, "l2", 0.15, "none", "l1", 1), ...pair(mkt.question.sha, "m"), ...G];
   it("YAML: optional, parsed, and pass must be below block", () => {
-    expect(abuse.agentThresholds).toBeUndefined();
+    const { agent_thresholds: _none, ...without } = yamlOf(abuse) as Record<string, unknown>;
+    expect(policy.ruleFromYaml(without as Parameters<typeof policy.ruleFromYaml>[0]).agentThresholds).toBeUndefined();
+    expect(abuse.agentThresholds).toEqual({ block: 0.7, pass: 0.15 });
     expect(policy.ruleFromYaml({ ...yamlOf(abuse), agent_thresholds: { block: 0.8, pass: 0.2 } }).agentThresholds).toEqual({ block: 0.8, pass: 0.2 });
     expect(() => policy.ruleFromYaml({ ...yamlOf(abuse), agent_thresholds: { block: 0.2, pass: 0.8 } })).toThrow(/agent pass threshold/);
   });

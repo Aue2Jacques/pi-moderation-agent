@@ -13,6 +13,9 @@ question:
   violation_option: violate
   pass_choices: [none]
 thresholds: { block: 0.90, pass: 0.10, keyed_by_option_count: true }
+# agent stage only (temporary, dev plan 2026-10-08 §3.1 problem 1; 2026-10-09 harness run): chosen on the same 177 labelled
+# validation items (eval-test.ts agent-lines grid), bound at most 3 errors per class; the fast path keeps the line above
+agent_thresholds: { block: 0.70, pass: 0.15 }
 contract_tests:
   - { id: c1, kind: obvious_positive,  ref: fx/a1-1, expect: violate, required: true }
   - { id: c2, kind: boundary_positive, ref: fx/a1-2, expect: violate, required: true }
