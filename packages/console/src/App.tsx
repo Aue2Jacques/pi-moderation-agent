@@ -12,6 +12,7 @@ import { ContentDetail } from "./pages/ContentDetail.tsx";
 import { Human } from "./pages/Human.tsx";
 import { Appeals } from "./pages/Appeals.tsx";
 import { Rules } from "./pages/Rules.tsx";
+import { Capacity } from "./pages/Capacity.tsx";
 import { demoJudgeNote } from "./labels.ts";
 
 type Ctx = { config: ConsoleConfig; reviewer: Reviewer | null; setReviewer: (r: Reviewer | null) => void; go: (path: string) => void; isSim: (contentId: string) => boolean };
@@ -26,11 +27,12 @@ const NAV: { id: string; label: string; icon: string; group?: string }[] = [
   { id: "overview", label: "概览", icon: "overview", group: "运行" },
   { id: "track", label: "提交与追踪", icon: "track" },
   { id: "reviews", label: "审次", icon: "list" },
+  { id: "capacity", label: "容量与调度", icon: "capacity" },
   { id: "human", label: "人工复核", icon: "human", group: "处理" },
   { id: "appeals", label: "申诉", icon: "appeal" },
   { id: "rules", label: "规则与版本", icon: "rules", group: "配置" },
 ];
-const TITLES: Record<string, string> = { overview: "概览", track: "提交与追踪", reviews: "审次", contents: "审次详情", human: "人工复核", appeals: "申诉", rules: "规则与版本" };
+const TITLES: Record<string, string> = { overview: "概览", track: "提交与追踪", reviews: "审次", contents: "审次详情", human: "人工复核", appeals: "申诉", rules: "规则与版本", capacity: "容量与调度" };
 
 function useTheme(): [string, () => void] {
   const sysDark = (): boolean => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
@@ -118,6 +120,7 @@ function Console() {
     case "human": body = <Human selected={parts[1] ?? null} />; break;
     case "appeals": body = <Appeals preset={parts[1] ?? null} />; break;
     case "rules": body = <Rules />; break;
+    case "capacity": body = <Capacity />; break;
     default: body = <Overview />;
   }
   const humanOpen = live.frame?.stats.human.open ?? 0;

@@ -13,6 +13,7 @@ const paths: Record<string, string> = {
   human: "M12 12a4 4 0 100-8 4 4 0 000 8zM5 20a7 7 0 0114 0",
   appeal: "M4 4v6h6M20 20v-6h-6M5.6 15A8 8 0 0019 18M18.4 9A8 8 0 005 6",
   rules: "M7 3h8l4 4v14H7zM14 3v5h5M10 13h6M10 17h4",
+  capacity: "M4 6h16v4H4zM4 14h16v4H4zM7 8h.01M7 16h.01",
   sun: "M12 16a4 4 0 100-8 4 4 0 000 8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4",
   moon: "M20.5 13.5A8.5 8.5 0 1110.5 3.5a6.5 6.5 0 0010 10z",
   menu: "M4 7h16M4 12h16M4 17h16",
