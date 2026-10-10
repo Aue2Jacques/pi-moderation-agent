@@ -104,6 +104,7 @@
 | [docs/methods-for-review-2026-10-08.md](docs/methods-for-review-2026-10-08.md) | **给审查用的做法说明**：参考的标准规范、数据组成、清洗、标注标准试标、切分与评测协议、图片审核计划；每部分写做法、理由、数据（仅供参考）和不足 |
 | [docs/project-status-2026-10-08.md](docs/project-status-2026-10-08.md) | 全盘状态汇总：七条线各在哪一步、待拍板、已定事项 |
 | [docs/eval-dataset-plan.md](docs/eval-dataset-plan.md) | 2 万条综合评测集方案与清洗记录（4.3：来源标签统一、可疑标签重标、验证集全量打标） |
+| [docs/capacity-plan-2026-10-09.md](docs/capacity-plan-2026-10-09.md) | 容量、高峰与空闲算力方案（未实现）：几秒内审完的三层做法、预测加卡与降级梯子、多卡负载均衡、低峰离线任务；控制台"容量与调度"页是它的前端模拟 |
 | [docs/dev-plan-2026-10-08.md](docs/dev-plan-2026-10-08.md) | **当前开发计划**：各阶段执行记录、遇到的问题（3.1 节，含 10-09 新增 13、14）、待负责人定 |
 | [reports/2026-10-09-kev4b-finetune.md](reports/2026-10-09-kev4b-finetune.md) | Kev-4B 微调 v0 / v1 |
 | [reports/2026-10-09-kev-inference-speed.md](reports/2026-10-09-kev-inference-speed.md) | 推理提速：逐项测量、kevfast 开关、一致性、阶梯、压测、单卡上限 |
