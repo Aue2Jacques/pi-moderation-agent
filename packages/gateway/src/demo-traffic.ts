@@ -13,7 +13,7 @@ import * as core from "@mod/core";
 import type { Scene } from "@mod/core";
 import type { TrafficKind, TrafficStatus } from "./console-types.ts";
 import { claimTask, humanRule, intakeContent, openAppeal, unclaimTask, type ActionDeps } from "./console-actions.ts";
-import type { CorpusKind, DemoCorpus } from "@mod/worker";
+import type { CorpusHistory, CorpusKind, DemoCorpus } from "@mod/worker";
 
 /** Content ids of generated traffic start with this; the console marks them as simulated. */
 export const SIM_PREFIX = "sim-";
@@ -109,7 +109,9 @@ export function pickKind(r: number): TrafficKind {
   return "normal";
 }
 
-export type GeneratedContent = { kind: TrafficKind; contentId: string; scene: Scene; text: string; accountId: string; parent?: { text: string; accountId: string } };
+export type GeneratedContent = { kind: TrafficKind; contentId: string; scene: Scene; text: string; accountId: string; parent?: { text: string; accountId: string };
+  /** corpus items with synthetic context: earlier replies in the thread and the account's prior rulings */
+  replies?: string[]; history?: CorpusHistory[] };
 
 /** Share of each kind with a demo corpus (DEMO_CORPUS), in percent: real texts of these kinds, a platform-like mix (the
  *  test split itself is about a third violations). Abuse texts come from accounts with history a third of the time. */
@@ -129,9 +131,14 @@ export function makeContent(next: () => number, now: number, n: number, corpus?:
     const pool = corpus.byKind[ck].length ? corpus.byKind[ck] : corpus.items;
     const item = pool[Math.floor(next() * pool.length)]!;
     const k = (m: number): number => 1 + Math.floor(next() * m);
-    const accountId = item.kind === "marketing" ? `u_sim_promo_${k(6)}` : item.kind === "injection" ? `u_sim_trick_${k(4)}`
+    const contentId = `${SIM_PREFIX}${now.toString(36)}-${n.toString(36)}`;
+    // an item with its own history gets its own account (the history belongs to that commenter)
+    const accountId = item.history?.length ? `u_sim_h_${now.toString(36)}${n.toString(36)}`
+      : item.kind === "marketing" ? `u_sim_promo_${k(6)}` : item.kind === "injection" ? `u_sim_trick_${k(4)}`
       : item.kind === "abuse" ? (next() < 1 / 3 ? `u_sim_repeat_${k(REPEAT_ACCOUNTS)}` : `u_sim_rude_${k(6)}`) : `u_sim_${String(k(NORMAL_ACCOUNTS)).padStart(4, "0")}`;
-    return { kind: item.kind, contentId: `${SIM_PREFIX}${now.toString(36)}-${n.toString(36)}`, scene: "comment", text: item.text, accountId };
+    return { kind: item.kind, contentId, scene: "comment", text: item.text, accountId,
+      ...(item.thread ? { parent: { text: item.thread.parent, accountId: `u_sim_op_${k(500)}` }, replies: item.thread.replies } : {}),
+      ...(item.history?.length ? { history: item.history } : {}) };
   }
   const kind = pickKind(next());
   const pool = TRAFFIC_POOL[kind];
@@ -267,10 +274,19 @@ export class DemoTraffic {
     const c = makeContent(this.#next, this.d.now(), this.#n++, this.#corpus);
     const out = intakeContent(this.d, { text: c.text, scene: c.scene, contentId: c.contentId, accountId: c.accountId, ...(c.parent ? { parent: c.parent } : {}) });
     if (out.status !== 201) { this.#skipped++; return undefined; }
+    this.#writeContext(c);
     this.#generated++;
     this.#byKind[c.kind]++;
     if (this.#next() * 100 < this.cfg.appealPct) this.appealOne();
     return c;
+  }
+
+  /** A corpus item's synthetic context: earlier replies in the same thread and the account's prior rulings. */
+  #writeContext(c: GeneratedContent): void {
+    const now = this.d.now();
+    const threadId = `t-${c.contentId}`;
+    c.replies?.forEach((t, i) => core.contextInsert(this.d.db, { contentId: `${c.contentId}.r${i + 1}`, scene: c.scene, text: t, accountId: `u_sim_reply_${(i + 1) * 7 + (c.contentId.length % 7)}`, threadId, eventTime: now - (20 - i * 5) * 60_000 }, now));
+    c.history?.forEach((h, i) => core.synthEventInsert(this.d.db, { eventId: `demo:${c.contentId}:h${i}`, accountId: c.accountId, kind: "prior_ruling", payload: { action: h.action, rule_ids: h.rule_ids }, eventTime: now - h.offset_days * 86_400_000 }));
   }
 
   /** Appeal a recent simulated limit / takedown that has not been appealed yet (one appeal per content). */

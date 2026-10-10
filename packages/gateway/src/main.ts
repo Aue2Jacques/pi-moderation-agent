@@ -9,7 +9,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import * as core from "@mod/core";
 import { identityCalibrator, jevModel, jevProvider, loadCalibrator } from "@mod/judges";
 import { loadBundle } from "@mod/policy";
-import { DEMO_AGENT_MODEL, DEMO_SAMPLES, demoCalibrator, demoImageText, demoJudge, demoJudgeModel, demoPrices, loadDemoCorpus, loadDemoImages, piJudge, seedDemoHistory, type JudgeClient } from "@mod/worker";
+import { DEMO_AGENT_MODEL, DEMO_SAMPLES, demoCalibrator, demoImageText, demoJudge, corpusCategory, demoJudgeModel, demoPrices, loadDemoCorpus, loadDemoImages, piJudge, seedDemoHistory, type JudgeClient } from "@mod/worker";
 import { Gateway, DEFAULT_GATEWAY_CONFIG } from "./gateway.ts";
 import { dirImageStore, relayImageChecker } from "./image.ts";
 import { createHttpServer } from "./http.ts";
@@ -109,7 +109,12 @@ async function main(): Promise<void> {
       ...(trafficApi ? { traffic: trafficApi, simPrefix: SIM_PREFIX, simReviewer: SIM_REVIEWER } : {}),
       ...(corpus ? { corpus: { judge: corpus.judge, items: corpus.items.length } } : {}),
       // HARNESS_RECORD_DB: a recorded real harness run for the Agent page (scripts/run-ac.ts output, read only)
-      ...(process.env["HARNESS_RECORD_DB"] && existsSync(env("HARNESS_RECORD_DB")) ? { harnessRecord: new HarnessRecordStore(env("HARNESS_RECORD_DB"), (v) => (v === bundle.rulesVer ? bundle : undefined), process.env["HARNESS_RECORD_NOTE"]) } : {}),
+      ...(process.env["HARNESS_RECORD_DB"] && existsSync(env("HARNESS_RECORD_DB")) ? { harnessRecord: new HarnessRecordStore(env("HARNESS_RECORD_DB"), (v) => (v === bundle.rulesVer ? bundle : undefined), process.env["HARNESS_RECORD_NOTE"]) }
+        // demo mode with a corpus: the Agent page's numbers come from this console's own app.db, the same rows every
+        // other page reads (one source, no separate record to drift from)
+        : demo && corpus ? { harnessRecord: new HarnessRecordStore(env("APP_DB", "data/app.db"), (v) => (v === bundle.rulesVer ? bundle : undefined),
+          "评论取自测试集；父帖、同线程回复与账号历史按合成方案生成；快判与复判分数为 Kev-4B 在这些评论上的实测结果回放；agent 每一步的决策由按协议运行的脚本给出。",
+          { live: true, categoryOfText: (t) => { const it = t ? corpus.lookup(t) : undefined; return it ? corpusCategory(it) : "other"; } }) } : {}),
       // image intake: demo -> its data dir + presets; real -> IMAGE_DIR when set (then the existing image channel, or
       // image_unsupported -> a person when IMAGE_MODEL is not set); otherwise images are refused
       ...(demo ? { images: { dir: demoImgDir, note: "演示模式：图片由脚本判官模拟（预置截图按已知内容打分，其他图片给中间带概率）",

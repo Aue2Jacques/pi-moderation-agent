@@ -22,18 +22,25 @@ export class HarnessRecordStore {
   readonly bundleOf: (v: string) => PolicyBundle | undefined;
   #summary: HarnessRecord | null = null;
   readonly note: string | null;
-  constructor(path: string, bundleOf: (v: string) => PolicyBundle | undefined, note?: string) {
+  readonly live: boolean;
+  readonly categoryOfText: ((text: string | null) => string) | undefined;
+  #at = 0;
+  /** `live`: the console's own app.db (demo mode) — recomputed when older than 10 s, category from the text
+   *  (`categoryOfText`, the demo corpus); otherwise a recorded run, computed once, category from the case id */
+  constructor(path: string, bundleOf: (v: string) => PolicyBundle | undefined, note?: string, o: { live?: boolean; categoryOfText?: (text: string | null) => string } = {}) {
     this.db = new DatabaseSync(path, { readOnly: true });
     this.bundleOf = bundleOf;
     this.note = note ?? null;
+    this.live = !!o.live;
+    this.categoryOfText = o.categoryOfText;
   }
 
   summary(): HarnessRecord {
-    if (this.#summary) return this.#summary;
+    if (this.#summary && (!this.live || Date.now() - this.#at < 10_000)) return this.#summary;
     const db = this.db;
     const reviews = db.prepare(`SELECT r.review_id, r.content_id, r.trigger, r.state, r.release_reason, r.suspect_reason, r.used_micro, r.budget_tools, r.budget_micro,
-        r.over_budget_micro, r.attempt, r.yield_continues, r.judge_model, r.agent_model, r.conversation_id, r.updated_at, ru.action, ru.actor, ru.created_at AS ruled_at
-      FROM review r LEFT JOIN ruling ru ON ru.review_id=r.review_id ORDER BY r.content_id, r.seq`).all() as Record<string, unknown>[];
+        r.over_budget_micro, r.attempt, r.yield_continues, r.judge_model, r.agent_model, r.conversation_id, r.updated_at, ru.action, ru.actor, ru.created_at AS ruled_at, c.text AS text
+      FROM review r LEFT JOIN ruling ru ON ru.review_id=r.review_id LEFT JOIN content c ON c.content_id=r.content_id ${this.live ? "WHERE r.content_id LIKE 'sim-%'" : ""} ORDER BY r.content_id, r.seq`).all() as Record<string, unknown>[];
     const slots = db.prepare("SELECT review_id, tool, counts_toward_limit, status, block_reason FROM tool_slot").all() as { review_id: string; tool: string; counts_toward_limit: number; status: string; block_reason: string | null }[];
     const firstModel = new Map((db.prepare("SELECT review_id, MIN(created_at) AS t FROM model_call GROUP BY review_id").all() as { review_id: string; t: number }[]).map((x) => [x.review_id, x.t]));
     const stepsOf = new Map<string, number>();
@@ -48,7 +55,8 @@ export class HarnessRecordStore {
       const route: RecordSession["route"] = r["trigger"] === "fast" ? (r["action"] === "pass" ? "fast_pass" : "fast_block") : agentRan || r["suspect_reason"] ? (agentRan ? "agent" : "human_direct") : "human_direct";
       const t0 = firstModel.get(id);
       const t1 = (r["ruled_at"] as number | null) ?? (r["updated_at"] as number);
-      return { content_id: String(r["content_id"]), review_id: id, category: categoryOf(String(r["content_id"])), route, state: String(r["state"]),
+      const category = (this.categoryOfText ? this.categoryOfText((r["text"] as string | null) ?? null) : categoryOf(String(r["content_id"]))) as RecordSession["category"];
+      return { content_id: String(r["content_id"]), review_id: id, category, route, state: String(r["state"]),
         action: (r["action"] as string | null) ?? null, actor: (r["actor"] as string | null) ?? null, release_reason: (r["release_reason"] as string | null) ?? null,
         suspect_reason: (r["suspect_reason"] as string | null) ?? null, steps: stepsOf.get(id) ?? 0, tools_used: usedOf.get(id) ?? 0, used_micro: (r["used_micro"] as number | null) ?? null,
         agent_ms: t0 !== undefined && agentRan ? Math.max(0, t1 - t0) : null };
@@ -91,6 +99,7 @@ export class HarnessRecordStore {
     this.#summary = {
       available: true,
       note: this.note,
+      live: this.live,
       run: { contents: new Set(sessions.map((s) => s.content_id)).size, judge_model: r0 ? String(r0["judge_model"]) : "—", agent_model: agentReviews[0] ? String(agentReviews[0]["agent_model"] ?? "") || null : null,
         started: Number.isFinite(firstT) ? firstT : null, ended: agentReviews.length ? Math.max(...agentReviews.map((r) => Number(r["updated_at"]))) : null },
       by_category: by,
@@ -107,6 +116,7 @@ export class HarnessRecordStore {
       latency_ms: { agent_p50: pct(times, 0.5), agent_p95: pct(times, 0.95) },
       sessions,
     };
+    this.#at = Date.now();
     return this.#summary;
   }
 

@@ -114,11 +114,13 @@ export class DemoRetention {
       DELETE FROM outbox WHERE review_id IN ${R};
       DELETE FROM ruling WHERE review_id IN ${R};
       DELETE FROM synth_event WHERE event_id IN (SELECT 'appeal:' || review_id FROM prune_r);
+      DELETE FROM synth_event WHERE event_id LIKE 'demo:sim-%' AND substr(event_id, 6, instr(substr(event_id, 6), ':') - 1) IN (SELECT content_id FROM prune_c);
       DELETE FROM review WHERE review_id IN ${R};
       DELETE FROM downstream_state WHERE content_id IN ${C};
       DELETE FROM content_state WHERE content_id IN ${C};
       DELETE FROM intake WHERE content_id IN ${C};
-      DELETE FROM content WHERE content_id IN ${C} OR content_id IN (SELECT content_id || '.parent' FROM prune_c);
+      DELETE FROM content WHERE content_id IN ${C} OR content_id IN (SELECT content_id || '.parent' FROM prune_c)
+        OR content_id IN (SELECT content_id || '.r' || n FROM prune_c, (SELECT 1 AS n UNION ALL SELECT 2 UNION ALL SELECT 3));
       DELETE FROM prune_c; DELETE FROM prune_r;`);
     return ids.length;
   }

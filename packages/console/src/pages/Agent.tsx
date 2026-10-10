@@ -139,15 +139,19 @@ function Live({ rec }: { rec: HarnessRecord | null }) {
   const [running, setRunning] = useState(true);
   const [cat, setCat] = useState("all");
   const stats = usePoll<Stats>(rec ? null : "/api/stats", 5000).data;
-  const source = useMemo<Source>(() => rec ? {
+  // the record refreshes every 10 s (live mode); the feed reads the latest through a ref so it is not restarted
+  const recRef = useRef(rec);
+  recRef.current = rec;
+  const hasRec = !!rec;
+  const source = useMemo<Source>(() => hasRec ? {
     record: true,
-    list: async () => rec.sessions.filter((x) => x.route === "agent" && x.steps > 0).map((x) => ({ content_id: x.content_id, review_id: x.review_id, category: x.category })),
+    list: async () => { const rec = recRef.current!; const xs = rec.sessions.filter((x) => x.route === "agent" && x.steps > 0 && x.state !== "investigating" && x.state !== "queued").map((x) => ({ content_id: x.content_id, review_id: x.review_id, category: x.category })); return rec.live ? xs.reverse().slice(0, 300) : xs; },
     timeline: (id) => api.get<ContentTimeline>(`/api/harness/record/contents/${encodeURIComponent(id)}`),
   } : {
     record: false,
     list: async () => (await api.get<{ items: ReviewListItem[] }>("/api/review-list?route=agent&limit=40")).items.filter((x) => x.state !== "queued" && x.state !== "investigating").map((x) => ({ content_id: x.content_id, review_id: x.review_id, category: "live" })),
     timeline: (id) => api.get<ContentTimeline>(`/api/contents/${encodeURIComponent(id)}${demo && reviewer ? "?view=restricted" : ""}`, demo && reviewer ? { ...authHeaders(reviewer), "x-confirm": "yes" } : undefined),
-  }, [rec, demo, reviewer]);
+  }, [hasRec, demo, reviewer]);
   const { rows, node, cur, next } = useFeed(source, cat, running);
   const b = rec ? (cat === "all" ? Object.values(rec.by_category).reduce((a, x) => ({ n: a.n + x.n, fast: a.fast + x.fast_pass + x.fast_block, agent: a.agent + x.agent, disposed: a.disposed + x.agent_disposed, released: a.released + x.agent_released }), { n: 0, fast: 0, agent: 0, disposed: 0, released: 0 })
     : (() => { const x = rec.by_category[cat]; return x ? { n: x.n, fast: x.fast_pass + x.fast_block, agent: x.agent, disposed: x.agent_disposed, released: x.agent_released } : { n: 0, fast: 0, agent: 0, disposed: 0, released: 0 }; })()) : null;
@@ -155,7 +159,7 @@ function Live({ rec }: { rec: HarnessRecord | null }) {
     <section className="hero ag-hero" aria-label="agent 会话回放">
       <div className="ag-top">
         <div className="ag-say">
-          <span className="lbl"><span className={`dot ${running ? "pulse" : ""}`} />{rec ? `回放真实运行记录：${rec.run.contents} 条测试集真实评论，判官 ${rec.run.judge_model}，agent ${rec.run.agent_model ?? "—"}` : "回放近期完成的 agent 会话"}</span>
+          <span className="lbl"><span className={`dot ${running ? "pulse" : ""}`} />{rec ? (rec.live ? `回放演示环境中的 agent 会话：近 ${rec.run.contents.toLocaleString("en-US")} 条测试集评论` : `回放真实运行记录：${rec.run.contents} 条测试集真实评论，判官 ${rec.run.judge_model}，agent ${rec.run.agent_model ?? "—"}`) : "回放近期完成的 agent 会话"}</span>
           <h2>由模型决定查什么，<br className="show-sm-br" />由系统决定它能做什么、能提交什么。</h2>
         </div>
         {b ? (
@@ -186,7 +190,7 @@ function Live({ rec }: { rec: HarnessRecord | null }) {
           <div className="row ag-ctl">
             <button className="btn sm" onClick={() => setRunning(!running)}>{running ? "暂停" : "继续"}</button>
             <button className="btn sm" onClick={next}>跳到下一个会话</button>
-            <span className="faint small">{rec ? `真实判官与真实 agent 模型在正式 harness 上的运行记录，每一步均取自数据库。${rec.note ?? ""}` : demo ? "演示环境中 agent 为按相同协议运行的脚本；harness、工具与提交校验均为正式代码。" : "agent 模型经中转服务调用。"}</span>
+            <span className="faint small">{rec ? (rec.live ? `每一步均取自数据库，harness 为正式代码。${rec.note ?? ""}` : `真实判官与真实 agent 模型在正式 harness 上的运行记录，每一步均取自数据库。${rec.note ?? ""}`) : demo ? "演示环境中 agent 为按相同协议运行的脚本；harness、工具与提交校验均为正式代码。" : "agent 模型经中转服务调用。"}</span>
           </div>
         </div>
       </div>
@@ -247,7 +251,7 @@ function RecordStats({ rec }: { rec: HarnessRecord }) {
   const blocked = rec.blocked.reduce((a, x) => a + x.n, 0);
   const rejected = rec.rejections.reduce((a, x) => a + x.n, 0);
   return (
-    <Panel title="Harness 在这次运行中做了什么" sub={`${rec.run.contents} 条测试集评论，判官 ${rec.run.judge_model}，agent ${rec.run.agent_model ?? "—"}；全部数字取自运行记录${rec.note ? `。${rec.note}` : ""}`}>
+    <Panel title={rec.live ? "Harness 在演示环境中做了什么" : "Harness 在这次运行中做了什么"} sub={rec.live ? `近 ${rec.run.contents.toLocaleString("en-US")} 条内容，每 10 秒更新；与概览、审次列表读同一个数据库` : `${rec.run.contents} 条测试集评论，判官 ${rec.run.judge_model}，agent ${rec.run.agent_model ?? "—"}；全部数字取自运行记录${rec.note ? `。${rec.note}` : ""}`}>
       <div className="kpis rec-kpis" style={{ ["--n" as string]: 4 }}>
         <Kpi label="工具调用" value={rec.tools.reduce((a, t) => a + t.calls, 0)} foot={`其中被 hook 拦截 ${blocked} 次`} />
         <Kpi label="提交被拒" value={rejected} foot="未通过提交校验，agent 修正或转人工" />
@@ -293,7 +297,7 @@ const TOOLS: { name: string; what: string; ev: boolean; ext: boolean }[] = [
 ];
 
 export function Agent() {
-  const rec = usePoll<HarnessRecord | { available: false }>("/api/harness/record", 0).data;
+  const rec = usePoll<HarnessRecord | { available: false }>("/api/harness/record", 10_000).data;
   const record = rec && rec.available ? rec : null;
   return (
     <>
@@ -312,7 +316,7 @@ export function Agent() {
                 <summary>
                   <div className="g-h"><span className="g-n num">{i + 1}</span><h3>{g.name}</h3><span className="g-more" aria-hidden="true">实现与验证</span></div>
                   <p className="g-p">{g.problem}</p>
-                  {record && guardFact(g.name, record) ? <p className="g-r"><span>本次运行</span>{guardFact(g.name, record)}</p> : null}
+                  {record && guardFact(g.name, record) ? <p className="g-r"><span>{record.live ? "演示环境实测" : "本次运行"}</span>{guardFact(g.name, record)}</p> : null}
                 </summary>
                 <p className="g-w"><span className="faint">实现：</span>{g.how}</p>
                 <p className="g-v"><span className="faint">验证：</span>{g.proof}</p>

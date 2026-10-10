@@ -10,7 +10,11 @@ import type { JudgeAnswers } from "./judge-client.ts";
 
 export type CorpusKind = "normal" | "marketing" | "abuse" | "injection";
 type Dists = Record<string, Record<string, number>>;
-export type CorpusItem = { id: string; kind: CorpusKind; slice: string; text: string; primary: Dists; copy: Dists };
+/** synthetic thread context and account history (scripts/synth-context.ts corpus): the demo traffic writes them next to
+ *  the comment, so the agent's get_thread_context / get_account_history find real rows */
+export type CorpusThread = { parent: string; replies: string[]; relation: string };
+export type CorpusHistory = { action: string; rule_ids: string[]; offset_days: number };
+export type CorpusItem = { id: string; kind: CorpusKind; slice: string; text: string; primary: Dists; copy: Dists; thread?: CorpusThread; history?: CorpusHistory[] };
 export type DemoCorpus = {
   path: string;
   /** the judge run whose answers are replayed (DEMO_CORPUS_JUDGE), e.g. kev4b-v1 */
@@ -29,12 +33,21 @@ export function loadDemoCorpus(path: string, judge: string): DemoCorpus {
     if (!line.trim()) continue;
     const r = JSON.parse(line) as Partial<CorpusItem>;
     if (!r.id || !r.text || !r.primary || !KINDS.includes(r.kind as CorpusKind)) throw new Error(`demo corpus ${path}: malformed line`);
-    items.push({ id: r.id, kind: r.kind as CorpusKind, slice: r.slice ?? r.kind!, text: r.text, primary: r.primary, copy: r.copy ?? {} });
+    items.push({ id: r.id, kind: r.kind as CorpusKind, slice: r.slice ?? r.kind!, text: r.text, primary: r.primary, copy: r.copy ?? {},
+      ...(r.thread?.parent ? { thread: { parent: r.thread.parent, replies: r.thread.replies ?? [], relation: r.thread.relation ?? "" } } : {}), ...(r.history?.length ? { history: r.history } : {}) });
   }
   if (!items.length) throw new Error(`demo corpus ${path} is empty`);
   const byKind = Object.fromEntries(KINDS.map((k) => [k, items.filter((x) => x.kind === k)])) as Record<CorpusKind, CorpusItem[]>;
   const byView = new Map(items.map((x) => [core.modelView(x.text), x]));
   return { path, judge, items, byKind, lookup: (text) => byView.get(core.modelView(text)) };
+}
+
+/** The showcase category of a corpus item (same six as scripts/build-harness-set.py): normal, hard_negative, abuse,
+ *  adversarial, marketing, injection. */
+export function corpusCategory(item: CorpusItem): string {
+  const top = item.slice.split("/")[0] ?? "";
+  if (top === "everyday" || top === "safe") return "normal";
+  return ["hard_negative", "abuse", "adversarial", "marketing", "injection"].includes(top) ? top : item.kind;
 }
 
 /** The recorded answer to one question: the stored distribution under its question key (ABUSE-001, injection_guard, ...);

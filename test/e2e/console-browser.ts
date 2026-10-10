@@ -96,7 +96,7 @@ try {
 
   // 4a. agent & harness page: a finished agent session replays step by step; the page ends with the next stop
   await page.goto(`${app.base}/#/agent`);
-  await page.locator(".ag-steps .step").first().waitFor({ timeout: 60_000 });
+  await page.locator(".feed-box .step").first().waitFor({ timeout: 60_000 });
   check("agent page replays a session", (await page.locator(".loop li.on").count()) === 1);
   check("agent page links the next stop", (await page.locator("a.next-stop").count()) === 1);
   await shot(page, "6b-agent");

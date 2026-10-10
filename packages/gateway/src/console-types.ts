@@ -257,6 +257,8 @@ export type HarnessRecord = {
   available: true;
   /** where the record's evidence came from (HARNESS_RECORD_NOTE), shown with the replay; null: nothing to add */
   note: string | null;
+  /** true: computed from the console's own app.db (demo mode), refreshed every few seconds; false: a recorded run */
+  live: boolean;
   run: { contents: number; judge_model: string; agent_model: string | null; started: number | null; ended: number | null };
   by_category: Record<string, { n: number; fast_pass: number; fast_block: number; agent: number; agent_disposed: number; agent_released: number; human_direct: number }>;
   tools: { tool: string; calls: number; blocked: number }[];
