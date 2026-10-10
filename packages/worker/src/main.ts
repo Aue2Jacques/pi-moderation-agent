@@ -13,6 +13,7 @@ import { identityCalibrator, jevModel, jevProvider, loadCalibrator } from "@mod/
 import { loadBundle } from "@mod/policy";
 import { piJudge } from "./pi-judge.ts";
 import { DemoSessionRetention, demoAgentProvider, demoCalibrator, demoImageText, demoJudge, demoPrices, loadDemoImages } from "./demo.ts";
+import { loadDemoCorpus } from "./demo-corpus.ts";
 import type { JudgeClient } from "./judge-client.ts";
 import { relayProvider } from "./relay.ts";
 import { Worker } from "./worker.ts";
@@ -48,7 +49,9 @@ async function main(): Promise<void> {
   const { bundle, texts } = loadBundle("rules", "config/scenes.yaml");
   const pricesRaw = readFileSync("config/prices.yaml", "utf8");
   const realPrices: core.PriceTable = { pricesVer: `prices@${core.sha256(pricesRaw).slice(0, 12)}`, perMillion: (parse(pricesRaw) as { models: core.PriceTable["perMillion"] }).models };
-  const prices = demo ? demoPrices(realPrices) : realPrices;
+  // DEMO_CORPUS: real test texts with a real judge run's answers, replayed by the demo judge (demo-corpus.ts)
+  const corpus = demo && process.env["DEMO_CORPUS"] ? loadDemoCorpus(env("DEMO_CORPUS"), env("DEMO_CORPUS_JUDGE", "kev4b-v1")) : undefined;
+  const prices = demo ? demoPrices(realPrices, corpus) : realPrices;
   const models = createModels();
   let judge: JudgeClient;
   let agent: { provider: string; modelId: string };
@@ -56,7 +59,7 @@ async function main(): Promise<void> {
     const scripted = demoAgentProvider({ delayMs: envNum("DEMO_AGENT_MS", 700) });
     models.setProvider(scripted.provider);
     agent = scripted.model;
-    judge = demoJudge({ delayMs: envNum("DEMO_JUDGE_MS", 350), imageText: demoImageText(db, loadDemoImages(env("DEMO_IMAGES_DIR", "demo/images"))) });
+    judge = demoJudge({ delayMs: envNum("DEMO_JUDGE_MS", 350), imageText: demoImageText(db, loadDemoImages(env("DEMO_IMAGES_DIR", "demo/images"))), ...(corpus ? { corpus } : {}) });
   } else {
     models.setProvider(relayProvider({ baseUrl: env("RELAY_BASE_URL"), apiKey: env("RELAY_API_KEY") }));
     models.setProvider(jevProvider({ baseUrl: env("JEV_BASE_URL"), apiKey: env("JEV_API_KEY"), modelId: env("JEV_MODEL", "jev-latest") }));
@@ -67,7 +70,7 @@ async function main(): Promise<void> {
   const strong = env("STRONG_MODEL", "deepseek-v4.1-flash");   // model whitelist (owner 2026-10-08); escalation is off unless FLAG_ESCALATION=true
   const calibMode = env("CALIB_MODE", "strict");
   if (calibMode !== "strict" && calibMode !== "identity") throw new Error(`CALIB_MODE must be strict|identity, got ${calibMode}`);
-  const calibrator = demo ? demoCalibrator(env("CALIB_DIR", "calib"), env("JEV_MODEL", "jev-latest"), bundle.rulesVer)
+  const calibrator = demo ? demoCalibrator(env("CALIB_DIR", "calib"), corpus?.judge ?? env("JEV_MODEL", "jev-latest"), bundle.rulesVer)
     : calibMode === "identity" ? identityCalibrator() : loadCalibrator(env("CALIB_DIR", "calib"), env("JEV_MODEL", "jev-latest"));
   const workerId = `w-${process.pid}-${Date.now()}`;
   const sessionDb = env("SESSION_DB", "data/session.sqlite");

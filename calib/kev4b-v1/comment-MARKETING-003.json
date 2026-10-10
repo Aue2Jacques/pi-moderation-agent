@@ -1,0 +1,22 @@
+{
+ "T": 2.2463,
+ "n": 1200,
+ "ece_before": 0.04982214765100596,
+ "ece_after": 0.02748378566103767,
+ "fitted_at": 1791532887431,
+ "bucket": {
+  "judge": "kev-latest",
+  "rules_ver": "rules@0c46158a17ee",
+  "scene": "comment",
+  "n_options": 3,
+  "question": "MARKETING-003"
+ },
+ "source": "scripts/fit-calib.ts; ece_* on the 20% held out",
+ "held_out": {
+  "n": 298,
+  "nll_before": 0.2728217175257995,
+  "nll_after": 0.1586553316095412,
+  "ece_before": 0.04982214765100596,
+  "ece_after": 0.02748378566103767
+ }
+}

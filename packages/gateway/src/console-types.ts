@@ -184,6 +184,9 @@ export type ConsoleConfig = {
   samples: DemoSampleInfo[];
   /** demo mode with the traffic generator: how simulated contents and the simulated reviewer are named */
   demo_traffic: { sim_prefix: string; sim_reviewer: string } | null;
+  /** demo mode with a corpus: the traffic uses real test texts (contacts masked) and the fast path replays the answers
+   *  this judge run gave them; null: made-up texts and the scripted judge */
+  demo_corpus: { judge: string; items: number } | null;
   /** image intake: off when no image store is configured (real mode without IMAGE_DIR); demo: the preset screenshots */
   images: { enabled: boolean; max_bytes: number; samples: ImageSampleInfo[]; note: string | null };
 };

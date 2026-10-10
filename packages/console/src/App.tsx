@@ -12,6 +12,7 @@ import { ContentDetail } from "./pages/ContentDetail.tsx";
 import { Human } from "./pages/Human.tsx";
 import { Appeals } from "./pages/Appeals.tsx";
 import { Rules } from "./pages/Rules.tsx";
+import { demoJudgeNote } from "./labels.ts";
 
 type Ctx = { config: ConsoleConfig; reviewer: Reviewer | null; setReviewer: (r: Reviewer | null) => void; go: (path: string) => void; isSim: (contentId: string) => boolean };
 const ConsoleCtx = createContext<Ctx | null>(null);
@@ -161,7 +162,7 @@ function Console() {
                 <span className={`dot ${live.connected ? "pulse" : ""}`} /><span className="txt">{live.connected ? "实时" : "重连中"}</span>
               </span>
               {config.mode === "demo"
-                ? <span className="mode hide-sm" title="判官与 agent 是脚本，其余链路与真实模式相同；数字只作演示"><span className="dot" />演示模式</span>
+                ? <span className="mode hide-sm" title={`${demoJudgeNote(config)}，其余链路与真实模式相同；数字只作演示`}><span className="dot" />演示模式</span>
                 : <span className="mode real hide-sm"><span className="dot" />真实模式</span>}
               {config.mode === "demo" && traffic ? <TrafficControl status={traffic} /> : null}
               {reviewer ? (

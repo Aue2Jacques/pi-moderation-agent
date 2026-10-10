@@ -9,7 +9,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import * as core from "@mod/core";
 import { identityCalibrator, jevModel, jevProvider, loadCalibrator } from "@mod/judges";
 import { loadBundle } from "@mod/policy";
-import { DEMO_AGENT_MODEL, DEMO_JUDGE_MODEL, DEMO_SAMPLES, demoCalibrator, demoImageText, demoJudge, demoPrices, loadDemoImages, piJudge, seedDemoHistory, type JudgeClient } from "@mod/worker";
+import { DEMO_AGENT_MODEL, DEMO_SAMPLES, demoCalibrator, demoImageText, demoJudge, demoJudgeModel, demoPrices, loadDemoCorpus, loadDemoImages, piJudge, seedDemoHistory, type JudgeClient } from "@mod/worker";
 import { Gateway, DEFAULT_GATEWAY_CONFIG } from "./gateway.ts";
 import { dirImageStore, relayImageChecker } from "./image.ts";
 import { createHttpServer } from "./http.ts";
@@ -41,12 +41,15 @@ async function main(): Promise<void> {
   const db = core.openAppDb(env("APP_DB", "data/app.db"), "gateway");
   core.ensureSchema(db);
   const { bundle, texts } = loadBundle("rules", "config/scenes.yaml");
-  const prices = demo ? demoPrices(loadPrices()) : loadPrices();
+  // DEMO_CORPUS: real test texts with a real judge run's answers; the demo traffic draws from it and the demo judge replays
+  // the answers (packages/worker/src/demo-corpus.ts). The file holds dataset text and stays on the demo server.
+  const corpus = demo && process.env["DEMO_CORPUS"] ? loadDemoCorpus(env("DEMO_CORPUS"), env("DEMO_CORPUS_JUDGE", "kev4b-v1")) : undefined;
+  const prices = demo ? demoPrices(loadPrices(), corpus) : loadPrices();
   // round-9 item 5: strict by default — answers without a fitted calibration bucket never auto-dispose.
   // CALIB_MODE=identity is the explicit smoke/联调 mode (raw probabilities, pin calib@identity).
   const calibMode = env("CALIB_MODE", "strict");
   if (calibMode !== "strict" && calibMode !== "identity") throw new Error(`CALIB_MODE must be strict|identity, got ${calibMode}`);
-  const calibJudge = env("JEV_MODEL", "jev-latest");
+  const calibJudge = corpus?.judge ?? env("JEV_MODEL", "jev-latest");
   const calibrator = demo ? demoCalibrator(env("CALIB_DIR", "calib"), calibJudge, bundle.rulesVer)
     : calibMode === "identity" ? identityCalibrator() : loadCalibrator(env("CALIB_DIR", "calib"), calibJudge);
   // demo images: the preset screenshots (demo/images) go into the demo data dir's image store under their refs; the
@@ -56,14 +59,14 @@ async function main(): Promise<void> {
   for (const x of presets) storeImage(demoImgDir, x.bytes, "png");
   let judge: JudgeClient;
   if (demo) {
-    judge = demoJudge({ delayMs: envNum("DEMO_JUDGE_MS", 350), imageText: demoImageText(db, presets) });
+    judge = demoJudge({ delayMs: envNum("DEMO_JUDGE_MS", 350), imageText: demoImageText(db, presets), ...(corpus ? { corpus } : {}) });
     seedDemoHistory(db, Date.now());
   } else {
     const models = createModels();
     models.setProvider(jevProvider({ baseUrl: env("JEV_BASE_URL"), apiKey: env("JEV_API_KEY"), modelId: env("JEV_MODEL", "jev-latest") }));
     judge = piJudge(models, jevModel(models, env("JEV_MODEL", "jev-latest")), { inCallConfirm: true, timeoutMs: envNum("JUDGE_TIMEOUT_MS", 8000) });
   }
-  const judgeModel = demo ? DEMO_JUDGE_MODEL : env("JEV_MODEL", "jev-latest");
+  const judgeModel = demo ? demoJudgeModel(corpus) : env("JEV_MODEL", "jev-latest");
   const blacklist = (() => { try { return (parse(readFileSync("rules/wordlist.yaml", "utf8")) as { words: string[] }).words ?? []; } catch { return []; } })();
   const gateway = new Gateway({
     db, bundle, ruleTexts: texts, judge, prices, calibrator, evidenceVer: env("EVIDENCE_VER", "evidence@local"), judgeModel,
@@ -88,7 +91,7 @@ async function main(): Promise<void> {
   // can be switched on from the console; DEMO_TRAFFIC_PER_MIN is the older per-minute form), a simulated reviewer and
   // the occasional appeal; see demo-traffic.ts
   const perSec = process.env["DEMO_TRAFFIC_PER_SEC"] !== undefined ? envNum("DEMO_TRAFFIC_PER_SEC", 10) : process.env["DEMO_TRAFFIC_PER_MIN"] !== undefined ? envNum("DEMO_TRAFFIC_PER_MIN", 600) / 60 : 10;
-  const traffic = demo ? new DemoTraffic({ db, gateway, bundle, humanAuth, now: () => Date.now(), mode: "demo" }, {
+  const traffic = demo ? new DemoTraffic({ db, gateway, bundle, humanAuth, now: () => Date.now(), mode: "demo", ...(corpus ? { corpus } : {}) }, {
     perSec, maxPerSec: envNum("DEMO_MAX_PER_SEC", MAX_PER_SEC), simReviewsPerMin: envNum("DEMO_SIM_REVIEWS_PER_MIN", 6), simMinAgeMs: envNum("DEMO_SIM_MIN_AGE_MS", 30_000),
     simThinkMs: envNum("DEMO_SIM_THINK_MS", 4_000), humanCap: envNum("DEMO_HUMAN_CAP", 12), appealPct: envNum("DEMO_APPEAL_PCT", 0.5),
     ...(process.env["DEMO_TRAFFIC_SEED"] ? { seed: envNum("DEMO_TRAFFIC_SEED", 1) } : {}),
@@ -103,6 +106,7 @@ async function main(): Promise<void> {
       samples: demo ? DEMO_SAMPLES.map((x) => ({ id: x.id, title: x.title, route: x.route, scene: x.scene, text: x.text, account_id: x.accountId, parent: x.parent ? { text: x.parent.text, account_id: x.parent.accountId } : null })) : [],
       calibFiles: readCalibFiles(env("CALIB_DIR", "calib"), calibJudge), streamPollMs: envNum("STREAM_POLL_MS", 250), livePollMs: envNum("LIVE_POLL_MS", 500),
       ...(trafficApi ? { traffic: trafficApi, simPrefix: SIM_PREFIX, simReviewer: SIM_REVIEWER } : {}),
+      ...(corpus ? { corpus: { judge: corpus.judge, items: corpus.items.length } } : {}),
       // image intake: demo -> its data dir + presets; real -> IMAGE_DIR when set (then the existing image channel, or
       // image_unsupported -> a person when IMAGE_MODEL is not set); otherwise images are refused
       ...(demo ? { images: { dir: demoImgDir, note: "演示模式：图片由脚本判官模拟（预置截图按已知内容打分，其他图片给中间带概率）",
@@ -110,7 +114,7 @@ async function main(): Promise<void> {
         : process.env["IMAGE_DIR"] ? { images: { dir: resolve(env("IMAGE_DIR")) } } : {}),
     } });
   const port = envNum("G_PORT", 8080);
-  server.listen(port, "127.0.0.1", () => console.log(JSON.stringify({ msg: "gateway up", port, mode: demo ? "demo" : "real", ...(traffic ? { demo_traffic_per_sec: traffic.cfg.perSec } : {}), rules_ver: bundle.rulesVer, prices_ver: prices.pricesVer, calib_mode: calibrator.mode, calib_ver: calibrator.calibVer, note: demo ? "演示模式：判官与 agent 是脚本，数字只作演示" : calibrator.mode === "identity" ? "未校准联调模式：原始概率直接参与处置，结果不是校准门槛下的自动审核" : calibrator.calibVer === "calib@none" ? "strict 且无校准文件：快判只会产生疑似，不会自动放行/拦截" : "strict：按校准文件" })));
+  server.listen(port, "127.0.0.1", () => console.log(JSON.stringify({ msg: "gateway up", port, mode: demo ? "demo" : "real", ...(traffic ? { demo_traffic_per_sec: traffic.cfg.perSec } : {}), rules_ver: bundle.rulesVer, prices_ver: prices.pricesVer, calib_mode: calibrator.mode, calib_ver: calibrator.calibVer, ...(corpus ? { demo_corpus: { judge: corpus.judge, items: corpus.items.length } } : {}), note: demo ? (corpus ? `演示模式：内容取自测试集真实文本（联系方式已打码），快判回放 ${corpus.judge} 的实测打分；agent 是脚本` : "演示模式：判官与 agent 是脚本，数字只作演示") : calibrator.mode === "identity" ? "未校准联调模式：原始概率直接参与处置，结果不是校准门槛下的自动审核" : calibrator.calibVer === "calib@none" ? "strict 且无校准文件：快判只会产生疑似，不会自动放行/拦截" : "strict：按校准文件" })));
   traffic?.start();
   retention?.start();
   const stop = () => { traffic?.stop(); retention?.stop(); gateway.stopLoops(); server.close(); db.close(); process.exit(0); };

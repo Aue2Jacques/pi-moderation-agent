@@ -43,3 +43,10 @@ export const APPEAL_REASONS: { code: string; label: string }[] = [
   { code: "other", label: "其他" },
 ];
 export const appealReason = (code: string | null): string => APPEAL_REASONS.find((x) => x.code === code)?.label ?? (code ?? "—");
+
+/** How demo mode's judge works, for the mode badge and the overview: scripted, or a real judge run replayed on real texts. */
+export function demoJudgeNote(c: { demo_corpus?: { judge: string; items: number } | null }): string {
+  return c.demo_corpus
+    ? `内容取自测试集 ${c.demo_corpus.items.toLocaleString()} 条真实文本（联系方式已打码），快判回放 ${c.demo_corpus.judge} 的实测打分；agent 是脚本`
+    : "判官与 agent 是脚本";
+}

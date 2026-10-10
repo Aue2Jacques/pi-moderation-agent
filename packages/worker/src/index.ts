@@ -9,3 +9,4 @@ export * from "./relay.ts";
 export * from "./brief.ts";
 export * from "./support.ts";
 export * from "./demo.ts";
+export * from "./demo-corpus.ts";

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useConsole } from "../App.tsx";
 import type { ReviewListItem, Stats, TrafficKind, TrafficStatus } from "../api.ts";
 import { useEventSource } from "../hooks.ts";
-import { ACTION, ROUTE, ROUTES, reasonText } from "../labels.ts";
+import { ACTION, ROUTE, ROUTES, demoJudgeNote, reasonText } from "../labels.ts";
 import { useLive } from "../live.tsx";
 import { FlowPipeline, Throughput, flowSummary } from "../Flow.tsx";
 import { AnimatedNumber, useFreshIds } from "../motion.tsx";
@@ -144,7 +144,7 @@ function Hero() {
         <div className="hero-big">
           <span className="lbl"><span className={`dot ${live.connected ? "pulse" : ""}`} />每秒处理</span>
           <span className="v"><AnimatedNumber value={sum.now} format={(x) => x.toFixed(x >= 100 ? 0 : 1)} /><span className="u">条 / 秒</span></span>
-          <span className="sub">快判完成的内容，近 5 秒平均{config.mode === "demo" ? " · 演示模式，判官与 agent 为脚本" : ""}</span>
+          <span className="sub">快判完成的内容，近 5 秒平均{config.mode === "demo" ? ` · 演示模式，${config.demo_corpus ? `快判回放 ${config.demo_corpus.judge} 实测打分` : "判官与 agent 为脚本"}` : ""}</span>
         </div>
         <div className="hero-stats">
           <div><span className="k">5 分钟均值</span><span className="v num">{sum.avg.toFixed(1)}<small> /s</small></span></div>
@@ -167,7 +167,7 @@ export function Overview() {
   const { config } = useConsole();
   const live = useLive();
   const { data: m, connected } = useEventSource<Metrics>("/api/metrics");
-  const head = <PageHead title="概览" desc={config.mode === "demo" ? "处理管线、吞吐、累计数字与最新审次随实时数据流更新。演示模式下判官与 agent 是脚本，数字只作演示。" : "处理管线、吞吐、累计数字与最新审次随实时数据流更新。"} />;
+  const head = <PageHead title="概览" desc={config.mode === "demo" ? `处理管线、吞吐、累计数字与最新审次随实时数据流更新。演示模式：${demoJudgeNote(config)}，数字只作演示。` : "处理管线、吞吐、累计数字与最新审次随实时数据流更新。"} />;
   if (!live.frame) return <>{head}<Panel><Empty>{live.connected ? "加载中…" : "正在连接实时数据流…"}</Empty></Panel></>;
   const d = live.frame.stats;
   const finished = Math.max(0, d.reviews - d.agent.open - d.human.open);

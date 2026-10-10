@@ -34,6 +34,8 @@ export type ConsoleDeps = {
   /** image intake: where images are stored (the image channel's IMAGE_DIR, or the demo data dir); absent: images are
    *  refused. Demo mode adds the preset screenshots (already stored under their refs) and a note for the timeline. */
   images?: { dir: string; samples?: (ImageSampleInfo & { ref: string; file: string })[]; note?: string };
+  /** demo mode with DEMO_CORPUS: which judge run is replayed and how many real texts the traffic draws from */
+  corpus?: { judge: string; items: number };
 };
 
 export type HttpDeps = { db: Db; gateway: Gateway; bundle: PolicyBundle; humanAuth: core.HumanAuth; now: () => number; console?: ConsoleDeps };
@@ -162,6 +164,7 @@ export function createHttpServer(d: HttpDeps): Server {
           demo_auth: cons.mode === "demo" ? { reviewer: d.humanAuth.reviewers[0] ?? "rev1", token: d.humanAuth.token } : null,
           samples: [...(cons.samples ?? [])],
           demo_traffic: cons.mode === "demo" && cons.traffic ? { sim_prefix: cons.simPrefix ?? "sim-", sim_reviewer: cons.simReviewer ?? "sim-reviewer" } : null,
+          demo_corpus: cons.mode === "demo" && cons.corpus ? { judge: cons.corpus.judge, items: cons.corpus.items } : null,
           images: { enabled: !!imgs, max_bytes: MAX_IMAGE_BYTES, samples: (imgs?.samples ?? []).map(({ ref: _r, file: _f, ...x }) => x), note: imgs?.note ?? null },
         };
         return json(res, 200, cfg);

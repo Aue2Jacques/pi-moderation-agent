@@ -13,6 +13,7 @@ import * as core from "@mod/core";
 import type { Scene } from "@mod/core";
 import type { TrafficKind, TrafficStatus } from "./console-types.ts";
 import { claimTask, humanRule, intakeContent, openAppeal, unclaimTask, type ActionDeps } from "./console-actions.ts";
+import type { CorpusKind, DemoCorpus } from "@mod/worker";
 
 /** Content ids of generated traffic start with this; the console marks them as simulated. */
 export const SIM_PREFIX = "sim-";
@@ -110,8 +111,28 @@ export function pickKind(r: number): TrafficKind {
 
 export type GeneratedContent = { kind: TrafficKind; contentId: string; scene: Scene; text: string; accountId: string; parent?: { text: string; accountId: string } };
 
-/** One generated content (no side effects): kind by TRAFFIC_MIX, text from the pool, an account that fits the kind. */
-export function makeContent(next: () => number, now: number, n: number): GeneratedContent {
+/** Share of each kind with a demo corpus (DEMO_CORPUS), in percent: real texts of these kinds, a platform-like mix (the
+ *  test split itself is about a third violations). Abuse texts come from accounts with history a third of the time. */
+export const CORPUS_MIX: Readonly<Record<CorpusKind, number>> = { normal: 72, marketing: 12, abuse: 13, injection: 3 };
+
+function pickCorpusKind(r: number): CorpusKind {
+  let x = r * Object.values(CORPUS_MIX).reduce((a, b) => a + b, 0);
+  for (const [k, w] of Object.entries(CORPUS_MIX) as [CorpusKind, number][]) { if (x < w) return k; x -= w; }
+  return "normal";
+}
+
+/** One generated content (no side effects): kind by TRAFFIC_MIX, text from the pool, an account that fits the kind; with
+ *  a corpus, kind by CORPUS_MIX and a real text of that kind. */
+export function makeContent(next: () => number, now: number, n: number, corpus?: DemoCorpus): GeneratedContent {
+  if (corpus) {
+    const ck = pickCorpusKind(next());
+    const pool = corpus.byKind[ck].length ? corpus.byKind[ck] : corpus.items;
+    const item = pool[Math.floor(next() * pool.length)]!;
+    const k = (m: number): number => 1 + Math.floor(next() * m);
+    const accountId = item.kind === "marketing" ? `u_sim_promo_${k(6)}` : item.kind === "injection" ? `u_sim_trick_${k(4)}`
+      : item.kind === "abuse" ? (next() < 1 / 3 ? `u_sim_repeat_${k(REPEAT_ACCOUNTS)}` : `u_sim_rude_${k(6)}`) : `u_sim_${String(k(NORMAL_ACCOUNTS)).padStart(4, "0")}`;
+    return { kind: item.kind, contentId: `${SIM_PREFIX}${now.toString(36)}-${n.toString(36)}`, scene: "comment", text: item.text, accountId };
+  }
   const kind = pickKind(next());
   const pool = TRAFFIC_POOL[kind];
   const item = pool[Math.floor(next() * pool.length)]!;
@@ -181,10 +202,13 @@ export class DemoTraffic {
   #simTimer: NodeJS.Timeout | undefined;
   readonly #startedAt: number;
 
-  constructor(d: ActionDeps & { mode: "demo" | "real" }, cfg: Partial<TrafficConfig> = {}) {
+  readonly #corpus: DemoCorpus | undefined;
+
+  constructor(d: ActionDeps & { mode: "demo" | "real"; corpus?: DemoCorpus }, cfg: Partial<TrafficConfig> = {}) {
     if (d.mode !== "demo") throw new Error("demo traffic runs in demo mode only");
     if (!d.humanAuth.reviewers.includes(SIM_REVIEWER)) throw new Error(`reviewer list must include ${SIM_REVIEWER} for the simulated reviewer`);
     this.d = d;
+    this.#corpus = d.corpus;
     this.cfg = { ...DEFAULT_TRAFFIC, ...cfg };
     this.cfg.perSec = this.#clamp(this.cfg.perSec);
     this.#next = rng(this.cfg.seed ?? (d.now() & 0x7fffffff));
@@ -240,7 +264,7 @@ export class DemoTraffic {
   /** Put one generated content on the intake queue, and now and then appeal an earlier one. */
   contentTick(): GeneratedContent | undefined {
     if (this.paused) return undefined;
-    const c = makeContent(this.#next, this.d.now(), this.#n++);
+    const c = makeContent(this.#next, this.d.now(), this.#n++, this.#corpus);
     const out = intakeContent(this.d, { text: c.text, scene: c.scene, contentId: c.contentId, accountId: c.accountId, ...(c.parent ? { parent: c.parent } : {}) });
     if (out.status !== 201) { this.#skipped++; return undefined; }
     this.#generated++;

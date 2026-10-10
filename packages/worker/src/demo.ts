@@ -12,6 +12,7 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseFact
 import * as core from "@mod/core";
 import type { Question } from "@mod/core";
 import type { JudgeAnswers, JudgeClient, JudgeRequest, JudgeResponse } from "./judge-client.ts";
+import { corpusAnswer, type DemoCorpus } from "./demo-corpus.ts";
 
 export const DEMO_JUDGE_PROVIDER = "demo";
 export const DEMO_JUDGE_MODEL = "jev-scripted";
@@ -84,8 +85,11 @@ const jitter = (seed: string): number => ((parseInt(core.sha256(seed).slice(0, 4
 
 /** `imageText`: demo mode's stand-in for a judge that reads images (Kev reads screenshots, reports/2026-10-09-kev-
  *  inference-speed.md §11): the known content of a preset screenshot attached to the content, judged with its text. */
-export function demoJudge(o: { delayMs?: number; imageText?: (contentId: string) => string | undefined } = {}): JudgeClient {
+/** `corpus` (DEMO_CORPUS): for a text it holds, the recorded answers of a real judge run replace the scripted scores, question
+ *  by question (demo-corpus.ts); the agent's evidence calls get the same answers, since that run saw no evidence. */
+export function demoJudge(o: { delayMs?: number; imageText?: (contentId: string) => string | undefined; corpus?: DemoCorpus } = {}): JudgeClient {
   const delayMs = o.delayMs ?? 350;
+  const model = demoJudgeModel(o.corpus);
   return {
     provider: DEMO_JUDGE_PROVIDER,
     api: "demo-scripted",
@@ -96,7 +100,14 @@ export function demoJudge(o: { delayMs?: number; imageText?: (contentId: string)
       const text = [req.text ?? "", seen ? core.modelView(seen) : ""].filter(Boolean).join("\n");
       const main: JudgeAnswers = {};
       const copy: JudgeAnswers = {};
+      const known = seen ? undefined : o.corpus?.lookup(req.text ?? "");
       for (const q of req.questions) {
+        const rec = known && corpusAnswer(q, known.primary);
+        if (known && rec) {
+          main[q.sha] = rec;
+          copy[q.sha] = corpusAnswer(q, known.copy) ?? rec;
+          continue;
+        }
         const p = demoScore(q, text, req.evidence);
         main[q.sha] = answerOf(q, p);
         const pc = Math.min(0.999, Math.max(0.001, p + jitter(`${q.sha}|${text}|${req.evidence.length}`)));
@@ -104,11 +115,14 @@ export function demoJudge(o: { delayMs?: number; imageText?: (contentId: string)
       }
       const usage = { input: 420 + 60 * req.questions.length + 180 * req.evidence.length, output: 4 * req.questions.length };
       // an explicit confirm call returns only the shuffled copy, a primary call returns both (Jev's in-call confirm)
-      if (req.shuffleSeed !== undefined) return { status: "ok", model: DEMO_JUDGE_MODEL, answers: copy, usage, latencyMs: delayMs };
-      return { status: "ok", model: DEMO_JUDGE_MODEL, answers: main, variant: { shuffleSeed: 17, answers: copy }, usage, latencyMs: delayMs };
+      if (req.shuffleSeed !== undefined) return { status: "ok", model, answers: copy, usage, latencyMs: delayMs };
+      return { status: "ok", model, answers: main, variant: { shuffleSeed: 17, answers: copy }, usage, latencyMs: delayMs };
     },
   };
 }
+
+/** The judge model name demo mode reports: the scripted judge, or the replayed run when a corpus is loaded. */
+export const demoJudgeModel = (corpus?: DemoCorpus): string => (corpus ? `${corpus.judge}-replay` : DEMO_JUDGE_MODEL);
 
 // ---------- calibration and prices ----------
 
@@ -154,12 +168,14 @@ function temperature(probs: Readonly<Record<string, number>>, T: number): Record
   return Object.fromEntries(keys.map((k, i) => [k, ex[i]! / z]));
 }
 
-/** The real price table plus the two scripted models, priced like the models they stand in for (Jev, qwen3.8-flash). */
-export function demoPrices(real: core.PriceTable): core.PriceTable {
+/** The real price table plus the two scripted models, priced like the models they stand in for (Jev, qwen3.8-flash); with a
+ *  corpus, the replayed judge too (priced like Jev). */
+export function demoPrices(real: core.PriceTable, corpus?: DemoCorpus): core.PriceTable {
   const per = real.perMillion;
   const jev = per["jev/jev-latest"] ?? { input: 0, output: 0 };
   const agent = per["a6api/qwen3.8-flash"] ?? { input: 0, output: 0 };
-  const perMillion = { ...per, [`${DEMO_JUDGE_PROVIDER}/${DEMO_JUDGE_MODEL}`]: jev, [`${DEMO_AGENT_PROVIDER}/${DEMO_AGENT_MODEL}`]: agent, [`${DEMO_JUDGE_PROVIDER}/${DEMO_VISION_MODEL}`]: jev };
+  const perMillion = { ...per, [`${DEMO_JUDGE_PROVIDER}/${DEMO_JUDGE_MODEL}`]: jev, [`${DEMO_AGENT_PROVIDER}/${DEMO_AGENT_MODEL}`]: agent, [`${DEMO_JUDGE_PROVIDER}/${DEMO_VISION_MODEL}`]: jev,
+    ...(corpus ? { [`${DEMO_JUDGE_PROVIDER}/${demoJudgeModel(corpus)}`]: jev } : {}) };
   return { pricesVer: `prices@demo-${core.sha256(core.canonical(perMillion)).slice(0, 10)}`, perMillion };
 }
 
