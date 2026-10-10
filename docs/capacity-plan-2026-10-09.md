@@ -1,6 +1,6 @@
 # 容量、高峰与空闲算力：方案（2026-10-09）
 
-> 状态：**方案，后端都还没有实现**。控制台"容量与调度"页（`packages/console/src/pages/Capacity.tsx`，模型在 `packages/console/src/capacity.ts`）是纯前端模拟，用来演示这套思路；页面上标了哪些数字是实测、哪些是假设。下面的数字凡未注明"实测"的都是估计或假设，仅供参考。
+> 状态：**方案，后端都还没有实现**。GPU 调度部分（第 4.1 节加卡、第 6 节退卡）已被 [gpu-scheduling-plan-2026-10-09.md](gpu-scheduling-plan-2026-10-09.md) 取代：卡是公司自有的，不租不退，高峰时抢占离线任务的卡；切换耗时有实测。控制台"容量与调度"页（`packages/console/src/pages/Capacity.tsx`，模型在 `packages/console/src/capacity.ts`）是纯前端模拟，用来演示这套思路；页面上标了哪些数字是实测、哪些是假设。下面的数字凡未注明"实测"的都是估计或假设，仅供参考。
 
 ## 1. 要解决的问题
 
