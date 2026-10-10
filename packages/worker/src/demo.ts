@@ -211,17 +211,24 @@ export type AgentCall = { tool: string; args: Record<string, unknown> } | { text
 export function nextAgentCall(messages: readonly Msg[]): AgentCall {
   const outs = toolOutputs(messages);
   const last = outs[outs.length - 1];
+  const judgedOnce = outs.some((o) => (o.tool === "judge" || o.tool === "confirm") && !o.isError);
   if (last && (last.tool === "dispose" || last.tool === "release") && !last.isError) return { text: "完成。" };
-  if (last && last.tool === "dispose" && last.isError) return { tool: "release", args: { reason: "evidence_gap" } };
+  // a refused dispose after the evidence is in: hand over; an early one (habit, below) just goes on collecting evidence
+  if (last && last.tool === "dispose" && last.isError && judgedOnce) return { tool: "release", args: { reason: "evidence_gap" } };
   const brief = messages.filter((m) => m.role === "user").map((m) => textOf(m.content)).join("\n");
   const stuck = [...brief.matchAll(/([A-Z]+-\d+) 违规概率 ([0-9.]+)/g)].filter((x) => { const p = Number(x[2]); return p >= 0.1 && p < 0.9; }).map((x) => x[1]!);
   const loaded = new Set(outs.filter((o) => o.tool === "load_rule").map((o) => String(o.body?.["rule_id"] ?? "")));
   for (const rid of stuck) if (!loaded.has(rid)) return { tool: "load_rule", args: { rule_id: rid } };
+  const h = habitOf(brief);
+  // habit "eager": proposes a takedown before fetching any evidence; the server's submit check refuses it (no judge support)
+  if (h === "eager" && stuck.length && !outs.some((o) => o.tool === "dispose")) return { tool: "dispose", args: { action: "takedown", evidence_ids: [], rule_ids: [stuck[0]!], reason: "看起来像辱骂" } };
   const ev = (tool: string): string | undefined => { const o = outs.find((x) => x.tool === tool && x.body?.["evidence_id"]); return o ? String(o.body!["evidence_id"]) : undefined; };
   const ctx = ev("get_thread_context");
   if (!outs.some((o) => o.tool === "get_thread_context")) return { tool: "get_thread_context", args: {} };
   const hist = ev("get_account_history");
   if (!outs.some((o) => o.tool === "get_account_history")) return { tool: "get_account_history", args: {} };
+  // habit "repeat": asks for the thread context a second time; the tool returns the evidence it already has
+  if (h === "repeat" && outs.filter((o) => o.tool === "get_thread_context").length < 2) return { tool: "get_thread_context", args: {} };
   const evidenceIds = [ctx, hist].filter((x): x is string => !!x);
   const judged = outs.filter((o) => (o.tool === "judge" || o.tool === "confirm") && !o.isError && o.body?.["judge_call_id"]);
   const lastJudge = judged[judged.length - 1];
@@ -237,6 +244,18 @@ export function nextAgentCall(messages: readonly Msg[]): AgentCall {
   const needsConfirm = (support.missing ?? []).some((m) => m.includes("用 confirm"));
   if (needsConfirm && !outs.some((o) => o.tool === "confirm")) return { tool: "confirm", args: { judge_call_id: String(lastJudge.body!["judge_call_id"]), rule_ids: [], evidence_ids: cite } };
   return { tool: "release", args: { reason: "evidence_gap" } };
+}
+
+/**
+ * Demo traffic only (the brief names a sim- review): a fixed share of sessions has a habit a real model shows now and
+ * then, so the harness's own checks have something to act on — "eager" (about 15%) proposes a takedown before any
+ * evidence, "repeat" (about 10%) fetches the same context twice. Hand-submitted contents never get a habit.
+ */
+function habitOf(brief: string): "eager" | "repeat" | null {
+  const id = /审次 (sim-[^，\s]+)/.exec(brief)?.[1];
+  if (!id) return null;
+  const b = parseInt(core.sha256(id).slice(0, 6), 16) % 100;
+  return b < 15 ? "eager" : b < 25 ? "repeat" : null;
 }
 
 /** Faux response factory for the scripted agent; `delayMs` paces the steps so the console can follow them live. */

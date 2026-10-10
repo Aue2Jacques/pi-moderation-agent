@@ -93,8 +93,9 @@ describe("demo agent", () => {
     expect(nextAgentCall(t)).toEqual({ tool: "release", args: { reason: "evidence_gap" } });
   });
 
-  it("after a refused dispose it releases; after a successful dispose or release it stops", () => {
-    expect(nextAgentCall([user, result("dispose", "E_ACTION_NOT_SUPPORTED: ...", true)])).toEqual({ tool: "release", args: { reason: "evidence_gap" } });
+  it("a dispose refused after judging releases; one refused before any evidence goes on collecting; a finished one stops", () => {
+    expect(nextAgentCall([...after({ allowed_now: [], rules: [] }), result("dispose", "E_ACTION_NOT_SUPPORTED: ...", true)])).toEqual({ tool: "release", args: { reason: "evidence_gap" } });
+    expect(nextAgentCall([user, result("dispose", "E_ACTION_NOT_SUPPORTED: ...", true)])).toMatchObject({ tool: "load_rule" });
     expect(nextAgentCall([user, result("dispose", "disposed pass")])).toEqual({ text: "完成。" });
     expect(nextAgentCall([user, result("release", "released")])).toEqual({ text: "完成。" });
   });
