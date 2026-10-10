@@ -18,12 +18,12 @@ function Lines({ r }: { r: RuleInfo }) {
       <span className="v">放行 &lt; {l.pass} · 处置 ≥ {l.block}</span>
     </div>
   );
-  return <div className="lines">{row("快判", r.thresholds)}{r.agent_thresholds ? row("agent", r.agent_thresholds) : <div className="small faint">agent 阶段沿用快判的线</div>}</div>;
+  return <div className="lines">{row("快判", r.thresholds)}{r.agent_thresholds ? row("agent", r.agent_thresholds) : <div className="small faint">agent 阶段沿用快判阈值</div>}</div>;
 }
 
 export function Rules() {
   const q = usePoll<RulesInfo>("/api/rules", 10_000);
-  const head = <PageHead title="规则与版本" desc="规则写成问题，判官对每个问题给概率；处置按线比较校准后的概率。发布用 scripts/rules-release.ts：影子检查、闸门、灰度。" />;
+  const head = <PageHead title="规则与版本" desc="每条规则都写成判官可以回答的问题。判官给出概率，系统将校准后的概率与处置线比较。新规则通过 scripts/rules-release.ts 发布，依次经过影子检查、闸门与灰度。" />;
   if (q.error) return <>{head}<Alert tone="bad">{q.error}</Alert></>;
   if (!q.data) return <>{head}<Panel><Empty>加载中…</Empty></Panel></>;
   const d = q.data;
@@ -32,8 +32,8 @@ export function Rules() {
       {head}
       <div className="kpis" style={{ ["--n" as string]: 3 }}>
         <Kpi label="当前规则包" value={<span className="ver">{d.current.rules_ver}</span>} foot={`${d.current.rules.length} 条规则 · ${d.current.scenes.length} 个场景`} />
-        <Kpi label="校准" value={<span className="ver">{d.calibration.calib_ver}</span>} foot={d.calibration.mode === "strict" ? "strict：没有拟合的题只会判为疑似" : "identity：联调模式"} />
-        <Kpi label="候选包 / 灰度" value={d.candidate ? <span className="ver">{d.candidate.rules_ver}</span> : <span className="ver">无</span>} foot={d.candidate ? `灰度 ${d.candidate.rollout_pct}%（0 即回退）` : "没有候选包"} />
+        <Kpi label="校准" value={<span className="ver">{d.calibration.calib_ver}</span>} foot={d.calibration.mode === "strict" ? "strict：未拟合的题目只会判为疑似" : "identity：联调模式"} />
+        <Kpi label="候选包 / 灰度" value={d.candidate ? <span className="ver">{d.candidate.rules_ver}</span> : <span className="ver">无</span>} foot={d.candidate ? `灰度 ${d.candidate.rollout_pct}%（设为 0 即回退）` : "暂无候选包"} />
       </div>
 
       <Panel title="规则" sub={`${d.current.rules.length} 条`} flush>
@@ -64,13 +64,13 @@ export function Rules() {
       </Panel>
 
       <div className="grid g-2">
-        <Panel title="已存规则版本" sub="审次绑定自己的版本，旧审次按旧版本继续" flush>
+        <Panel title="已存规则版本" sub="每个审次绑定各自的规则版本，旧审次继续按旧版本处理" flush>
           <table className="table stackable"><thead><tr><th>版本</th><th>规则</th><th className="num">审次</th><th>首次载入</th></tr></thead>
             <tbody>{d.versions.map((v) => <tr key={v.rules_ver}><td className="lead"><span className="row" style={{ gap: 6 }}><span className="mono wrap-any">{v.rules_ver}</span>{v.current ? <Badge tone="good">当前</Badge> : null}</span></td><td data-label="规则" className="small">{v.rule_ids.join("、")}</td><td data-label="审次" className="num">{v.reviews}</td><td data-label="首次载入" className="small faint num nowrap">{dateTime(v.created_at)}</td></tr>)}</tbody>
           </table>
         </Panel>
         <Panel title="灰度与闸门" flush>
-          {d.rollouts.length === 0 && d.gate_runs.length === 0 ? <Empty>本库没有灰度或闸门记录</Empty> : (
+          {d.rollouts.length === 0 && d.gate_runs.length === 0 ? <Empty>暂无灰度或闸门记录</Empty> : (
             <table className="table stackable"><thead><tr><th>类型</th><th>版本 / 记录</th><th className="num">比例 / 结果</th><th>时间</th></tr></thead>
               <tbody>
                 {d.rollouts.map((r) => <tr key={`${r.kind}-${r.version}`}><td data-label="类型">灰度</td><td data-label="版本" className="mono wrap-any">{r.version}</td><td data-label="比例" className="num">{r.rollout_pct}%</td><td data-label="时间" className="small faint nowrap">{dateTime(r.loaded_at)}</td></tr>)}
@@ -82,8 +82,8 @@ export function Rules() {
       </div>
 
       <div className="grid g-2">
-        <Panel title="校准文件" sub="温度缩放，按判官 × 规则版本 × 场景 × 题目分桶" flush>
-          {d.calibration.files.length === 0 ? <Empty>没有校准文件</Empty> : (
+        <Panel title="校准文件" sub="温度缩放，按判官、规则版本、场景与题目分桶" flush>
+          {d.calibration.files.length === 0 ? <Empty>暂无校准文件</Empty> : (
             <div className="table-x">
               <table className="table"><thead><tr><th>题目</th><th>场景</th><th>规则版本</th><th className="num">T</th><th className="num">样本</th><th className="num">ECE 前→后</th></tr></thead>
                 <tbody>{d.calibration.files.map((f, i) => <tr key={i}><td className="nowrap">{QUESTION[f.question] ?? f.question}</td><td className="nowrap">{SCENE[f.scene] ?? f.scene}</td><td className="mono small">{f.rules_ver}</td><td className="num">{f.T}</td><td className="num">{f.n ?? "—"}</td><td className="num small nowrap">{f.ece_before?.toFixed(3) ?? "—"} → {f.ece_after?.toFixed(3) ?? "—"}</td></tr>)}</tbody>
@@ -91,8 +91,8 @@ export function Rules() {
             </div>
           )}
         </Panel>
-        <Panel title="阈值提议" sub="由人工裁决回流生成，需影子检查与批准" flush>
-          {d.proposals.length === 0 ? <Empty>还没有提议（scripts/feedback-propose.ts）</Empty> : (
+        <Panel title="阈值提议" sub="根据人工裁决生成，需经影子检查与人工批准" flush>
+          {d.proposals.length === 0 ? <Empty>暂无提议（scripts/feedback-propose.ts）</Empty> : (
             <table className="table stackable"><thead><tr><th>提议</th><th>基于</th><th>状态</th><th>时间</th></tr></thead>
               <tbody>{d.proposals.map((p) => <tr key={p.proposal_id}><td className="lead mono small">{p.proposal_id.slice(0, 8)}</td><td data-label="基于" className="mono small wrap-any">{p.base_rules_ver}</td><td data-label="状态">{p.status}</td><td data-label="时间" className="small faint nowrap">{dateTime(p.created_at)}</td></tr>)}</tbody>
             </table>

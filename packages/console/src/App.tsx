@@ -38,12 +38,12 @@ const TITLES: Record<string, string> = { overview: "概览", track: "提交与�
 
 /** The suggested reading order: each page ends with a link to the next one (NextStop). */
 export const TOUR: { id: string; label: string; why: string }[] = [
-  { id: "overview", label: "概览", why: "整条流水线实时在跑：快判、agent、人工各分走多少" },
-  { id: "track", label: "提交与追踪", why: "自己发一条评论或一张截图，看它几秒内走完哪几步" },
-  { id: "agent", label: "Agent 与 Harness", why: "回放真实 agent 会话：它查了什么证据，harness 每一步怎么管住它" },
-  { id: "capacity", label: "容量与调度", why: "早晚高峰、突发热点时 GPU 卡池怎么调度；切换耗时为实测" },
-  { id: "human", label: "人工复核", why: "agent 拿不准的交给人：领取、看证据、裁决" },
-  { id: "rules", label: "规则与版本", why: "规则、校准、灰度发布：每个结论按哪套规则判的" },
+  { id: "overview", label: "概览", why: "实时查看整条审核流水线，以及内容在各环节的分布" },
+  { id: "track", label: "提交与追踪", why: "提交一条评论或截图，几秒内即可看到它经过的每一步" },
+  { id: "agent", label: "Agent 与 Harness", why: "agent 如何逐步取证，harness 如何约束它的每一步" },
+  { id: "capacity", label: "容量与调度", why: "早晚高峰与突发热点下，GPU 资源如何调度" },
+  { id: "human", label: "人工复核", why: "agent 无法确定的内容交由人工领取、查看证据并裁决" },
+  { id: "rules", label: "规则与版本", why: "每条结论依据的规则版本，以及新规则如何逐步放量" },
 ];
 
 function NextStop({ page }: { page: string }) {
@@ -52,7 +52,7 @@ function NextStop({ page }: { page: string }) {
   const n = TOUR[i + 1]!;
   return (
     <a className="next-stop" href={`#/${n.id}`}>
-      <span className="ns-k">下一站 · {i + 2}/{TOUR.length}</span>
+      <span className="ns-k">下一页 · {i + 2}/{TOUR.length}</span>
       <span className="ns-t">{n.label} →</span>
       <span className="ns-w">{n.why}</span>
     </a>
@@ -95,7 +95,7 @@ function TrafficControl({ status }: { status: TrafficStatus }) {
   const set = (body: { per_sec?: number; paused?: boolean }): void => { api.post("/api/demo/traffic", body).then(() => setErr(null)).catch((e) => setErr(errText(e))); };
   const running = !status.paused && status.per_sec > 0;
   const tiers = status.tiers.length ? status.tiers : [1, 5, 10, 20, 50];
-  const title = err ?? `模拟流量：已生成 ${status.generated.toLocaleString("en-US")} 条，模拟审核员已处理 ${status.sim_reviewer.decided.toLocaleString("en-US")} 条`;
+  const title = err ?? `已生成 ${status.generated.toLocaleString("en-US")} 条，模拟审核员已处理 ${status.sim_reviewer.decided.toLocaleString("en-US")} 条`;
   return (
     <div className={`traffic ${running ? "" : "paused"}`} title={title}>
       <span className="tl"><span className={`dot ${running ? "pulse" : ""}`} /><span className="hide-md">模拟流量</span></span>
@@ -140,7 +140,7 @@ function Console() {
   const page = parts[0] ?? "overview";
   useEffect(() => { document.title = `${TITLES[page] ?? "控制台"} · 内容审核控制台`; setDrawer(false); }, [page, parts[1]]);
 
-  if (cfgError) return <div className="content"><Alert tone="bad">无法连接网关：{cfgError}</Alert></div>;
+  if (cfgError) return <div className="content"><Alert tone="bad">无法连接服务：{cfgError}</Alert></div>;
   if (!config) return <div className="empty">加载中…</div>;
 
   let body: ReactNode;
@@ -193,11 +193,11 @@ function Console() {
             <div className="crumb"><span className="root">内容审核</span><span className="sep">/</span><span className="cur">{TITLES[page] ?? "概览"}</span></div>
             <div className="spacer" />
             <div className="top-actions">
-              <span className={`live-ind ${live.connected ? "" : "off"}`} title={live.connected ? "已连接实时数据流" : "实时数据流已断开，正在重连"}>
+              <span className={`live-ind ${live.connected ? "" : "off"}`} title={live.connected ? "实时数据已连接" : "实时数据已断开，正在重连"}>
                 <span className={`dot ${live.connected ? "pulse" : ""}`} /><span className="txt">{live.connected ? "实时" : "重连中"}</span>
               </span>
               {config.mode === "demo"
-                ? <span className="mode hide-sm" title={`${demoJudgeNote(config)}，其余链路与真实模式相同；数字只作演示`}><span className="dot" />演示模式</span>
+                ? <span className="mode hide-sm" title={`${demoJudgeNote(config)}。其余流程与正式环境一致`}><span className="dot" />演示模式</span>
                 : <span className="mode real hide-sm"><span className="dot" />真实模式</span>}
               {config.mode === "demo" && traffic ? <TrafficControl status={traffic} /> : null}
               {reviewer ? (

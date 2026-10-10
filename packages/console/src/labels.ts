@@ -19,12 +19,12 @@ export const TOOL: Record<string, string> = {
 
 /** Reasons: why a review was suspicious, why it went to a person, why the fast path decided. */
 export const REASON: Record<string, string> = {
-  suspicious_band: "概率在中间带", injection_suspected: "疑似注入", needs_context: "需要看上下文", parent_missing: "父内容缺失",
-  blacklist_hit: "命中黑名单", rate_limited: "账号频控", evidence_gap: "证据不足", timeout: "超时", budget_tools: "工具次数用尽",
-  budget_cost: "费用预算用尽", judge_down: "判官不可用", model_release: "模型放弃", backpressure: "背压", revoked: "执行被撤销",
-  preprocess_error: "预处理失败", fastpath_error: "快判反复失败", calib_missing: "缺校准", judge_incomplete: "判官未答全",
-  image_unsupported: "含图片", image_review: "图片需人看", bundle_missing: "规则版本缺失", agent_stalled: "agent 停滞",
-  all_required_covered_and_confirmed: "全部规则低于放行线且复问一致", block_support: "达到处置线",
+  suspicious_band: "概率处于待定区间", injection_suspected: "疑似注入", needs_context: "需结合上下文", parent_missing: "缺少父内容",
+  blacklist_hit: "命中黑名单", rate_limited: "账号触发频控", evidence_gap: "证据不足", timeout: "超时", budget_tools: "工具次数用尽",
+  budget_cost: "费用预算用尽", judge_down: "判官不可用", model_release: "模型主动放弃", backpressure: "系统积压", revoked: "执行已撤销",
+  preprocess_error: "预处理失败", fastpath_error: "快判多次失败", calib_missing: "缺少校准", judge_incomplete: "判官未完整作答",
+  image_unsupported: "包含图片", image_review: "图片需人工查看", bundle_missing: "规则版本缺失", agent_stalled: "agent 无进展",
+  all_required_covered_and_confirmed: "所有规则均低于放行线，且复问一致", block_support: "达到处置线",
 };
 export function reasonText(code: string | null | undefined): string {
   if (!code) return "—";
@@ -47,6 +47,6 @@ export const appealReason = (code: string | null): string => APPEAL_REASONS.find
 /** How demo mode's judge works, for the mode badge and the overview: scripted, or a real judge run replayed on real texts. */
 export function demoJudgeNote(c: { demo_corpus?: { judge: string; items: number } | null }): string {
   return c.demo_corpus
-    ? `内容取自测试集 ${c.demo_corpus.items.toLocaleString()} 条真实文本（联系方式已打码），快判回放 ${c.demo_corpus.judge} 的实测打分；agent 是脚本`
-    : "判官与 agent 是脚本";
+    ? `评论选自测试集中的 ${c.demo_corpus.items.toLocaleString()} 条真实文本，联系方式已脱敏；快判分数为 Kev 的实测结果，agent 与审核员为模拟`
+    : "判官与 agent 均为模拟";
 }

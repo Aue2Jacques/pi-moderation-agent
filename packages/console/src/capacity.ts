@@ -23,14 +23,14 @@ export const MIN_HOLD = 15;
 
 /** Switch steps, seconds, measured on the 5060 Ti (switch_bench, page cache warm) unless marked estimate. */
 export const SWITCH = {
-  pauseInfer: { s: 0.5, measured: true, label: "推理类任务停在批边界（一批约 0.5 s）" },
-  pauseTrain: { s: 6, measured: true, label: "训练停在优化步边界（一步约 6 s）" },
-  savePoint: { s: 1.6, measured: true, label: "保存断点（LoRA + 优化器状态，620 MB 写盘）" },
-  free: { s: 0.7, measured: true, label: "进程退出、显存释放" },
-  judgeLoad: { s: 16.6, measured: true, label: "启动判官：加载模型、转 FP8" },
-  judgeWarm: { s: 12.0, measured: true, label: "录 CUDA graphs（首个请求）" },
-  drain: { s: 0.5, measured: false, label: "判官停止接新请求、清空在途" },
-  jobLoad: { s: 20, measured: false, label: "离线任务启动、读断点" },
+  pauseInfer: { s: 0.5, measured: true, label: "推理任务在当前批次结束后暂停（每批约 0.5 秒）" },
+  pauseTrain: { s: 6, measured: true, label: "训练在当前优化步结束后暂停（每步约 6 秒）" },
+  savePoint: { s: 1.6, measured: true, label: "保存断点：LoRA 与优化器状态，共 620 MB" },
+  free: { s: 0.7, measured: true, label: "进程退出并释放显存" },
+  judgeLoad: { s: 16.6, measured: true, label: "启动判官：加载模型并转换为 FP8" },
+  judgeWarm: { s: 12.0, measured: true, label: "首个请求时录制 CUDA graphs" },
+  drain: { s: 0.5, measured: false, label: "判官停止接收新请求，处理完在途请求" },
+  jobLoad: { s: 20, measured: false, label: "离线任务启动并读取断点" },
 };
 export type SwitchKind = "infer_to_judge" | "train_to_judge" | "judge_to_offline";
 export const SWITCH_STEPS: Record<SwitchKind, (keyof typeof SWITCH)[]> = {
@@ -41,14 +41,14 @@ export const SWITCH_STEPS: Record<SwitchKind, (keyof typeof SWITCH)[]> = {
 export const switchSeconds = (k: SwitchKind): number => SWITCH_STEPS[k].reduce((a, s) => a + SWITCH[s].s, 0);
 
 export const SIM_FACTS: { k: string; v: string; measured: boolean }[] = [
-  { k: "单卡吞吐（关复问，FP8）", v: `${CAP_FAST} 条/秒`, measured: true },
-  { k: "单卡吞吐（复问开）", v: `约 ${CAP_NORMAL} 条/秒`, measured: false },
-  { k: "推理任务 → 判官", v: `约 ${Math.round(switchSeconds("infer_to_judge"))} 秒`, measured: true },
-  { k: "训练 → 判官（含存断点）", v: `约 ${Math.round(switchSeconds("train_to_judge"))} 秒`, measured: true },
-  { k: "判官显存 / 训练峰值显存", v: "6.5 GB / 12.3 GB", measured: true },
+  { k: "单卡吞吐（关闭复问，FP8）", v: `${CAP_FAST} 条/秒`, measured: true },
+  { k: "单卡吞吐（开启复问）", v: `约 ${CAP_NORMAL} 条/秒`, measured: false },
+  { k: "推理任务切换为判官", v: `约 ${Math.round(switchSeconds("infer_to_judge"))} 秒`, measured: true },
+  { k: "训练切换为判官（含保存断点）", v: `约 ${Math.round(switchSeconds("train_to_judge"))} 秒`, measured: true },
+  { k: "判官显存 / 训练峰值显存", v: "6.3 GB / 12.3 GB", measured: true },
   { k: "回归评测 3,002 条（单卡）", v: "约 6 分钟", measured: true },
   { k: "Kev 训练一版（单卡）", v: "约 2.7 小时", measured: true },
-  { k: "卡池大小、平台峰值、日曲线、任务量", v: `${CARDS} 张 · ${PEAK} 条/秒`, measured: false },
+  { k: "卡池规模、平台峰值、日流量曲线与任务量", v: `${CARDS} 张 · ${PEAK} 条/秒`, measured: false },
 ];
 
 /** demand multiplier by hour (0..23), relative to PEAK; interpolated in between */
@@ -71,12 +71,12 @@ export function phaseOf(minute: number): string {
 export type JobKind = "eval" | "rescan" | "ocr" | "cluster" | "trust" | "train" | "batch";
 export const JOB_INFO: Record<JobKind, { label: string; short: string; train: boolean; maxCards: number; measured: boolean }> = {
   eval: { label: "回归评测：测试集 3,002 条", short: "评测", train: false, maxCards: 1, measured: true },
-  rescan: { label: "规则回扫：最近 7 天内容", short: "回扫", train: false, maxCards: 4, measured: false },
-  ocr: { label: "图片文字识别、语音转写积压", short: "OCR", train: false, maxCards: 4, measured: false },
-  cluster: { label: "全天评论向量聚类：找水军和引流团伙", short: "聚类", train: false, maxCards: 3, measured: false },
-  trust: { label: "账号信誉分：离线重算", short: "信誉", train: false, maxCards: 2, measured: false },
-  train: { label: "Kev 增量训练（当天 agent / 人工结论）", short: "训练", train: true, maxCards: 1, measured: true },
-  batch: { label: "公司其他团队的批处理（排队兜底）", short: "批处理", train: false, maxCards: CARDS, measured: false },
+  rescan: { label: "规则回扫：近 7 天内容", short: "回扫", train: false, maxCards: 4, measured: false },
+  ocr: { label: "图片文字识别与语音转写", short: "OCR", train: false, maxCards: 4, measured: false },
+  cluster: { label: "评论向量聚类：识别水军与引流团伙", short: "聚类", train: false, maxCards: 3, measured: false },
+  trust: { label: "账号信誉分重算", short: "信誉", train: false, maxCards: 2, measured: false },
+  train: { label: "Kev 增量训练：使用当天的 agent 与人工结论", short: "训练", train: true, maxCards: 1, measured: true },
+  batch: { label: "其他团队的批处理任务", short: "批处理", train: false, maxCards: CARDS, measured: false },
 };
 /** preemption order: the cheapest to stop first; training last (it has to save a resume point) */
 const PREEMPT: JobKind[] = ["batch", "ocr", "rescan", "cluster", "trust", "eval", "train"];
@@ -90,10 +90,10 @@ export type Role = "judge" | "offline" | "switching" | "failed";
 export type Card = { id: number; role: Role; job: JobKind | null; toward: "judge" | "offline" | null; since: number; util: number; batch: number; mixed: boolean; downFor: number };
 export type Level = 0 | 1 | 2 | 3;
 export const LEVELS: { level: Level; name: string; what: string; cost: string }[] = [
-  { level: 0, name: "正常", what: "复问开，所有内容先审后发", cost: "—" },
-  { level: 1, name: "关复问", what: "单卡吞吐约 1.5 倍（32 → 50 条/秒）", cost: "违规漏放 1.5% → 2.1%（测算）" },
-  { level: 2, name: "先限流后补审", what: "agent 排不上的可疑内容先限流（仅作者可见），低峰补审", cost: "可疑内容可见性推迟" },
-  { level: 3, name: "低风险先发后审", what: "信誉高的账号、低风险场景先发布，低峰补审", cost: "少量违规短时可见" },
+  { level: 0, name: "正常", what: "开启复问，所有内容先审后发", cost: "—" },
+  { level: 1, name: "关闭复问", what: "单卡吞吐提升约 1.5 倍（32 → 50 条/秒）", cost: "违规漏放率由 1.5% 升至 2.1%（测算）" },
+  { level: 2, name: "先限流、后补审", what: "agent 来不及处理的可疑内容先限流（仅作者可见），低峰时补审", cost: "可疑内容的可见时间推迟" },
+  { level: 3, name: "低风险先发后审", what: "信誉良好的账号与低风险场景先发布，低峰时补审", cost: "少量违规内容短时可见" },
 ];
 export type Point = { t: number; demand: number; cap: number; judges: number; offline: number; fastS: number; doneS: number; level: Level };
 export type SimEvent = { t: number; text: string; tone: "info" | "warn" | "bad" | "good" };
@@ -111,7 +111,7 @@ export const START_MIN = 6 * 60;
 export function newSim(flags: Flags = { predict: true, degrade: true, evidence: true }): Sim {
   const cards: Card[] = Array.from({ length: CARDS }, (_, i) => ({ id: i + 1, role: i < 3 ? "judge" : "offline", job: i < 3 ? null : "batch", toward: null, since: START_MIN - 60, util: 0, batch: 0, mixed: false, downFor: 0 }));
   return { t: START_MIN, cards, level: 0, calm: 0, q: 0, agentQ: 0, deferred: 0, backfilled: 0, jobs: JOBS(true), batchDone: 0, history: [],
-    events: [{ t: START_MIN, text: "06:00：3 张卡做判官，9 张在跑离线任务（昨晚的平台任务已完成，在跑其他团队的批处理）", tone: "info" }],
+    events: [{ t: START_MIN, text: "06:00：3 张卡运行判官，其余 9 张执行离线任务（昨晚的平台任务已完成，当前为其他团队的批处理）", tone: "info" }],
     spikeUntil: -1, spikeFrom: -1, minutes: 0, lastRelease: -999, switches: 0, lastSwitch: null, flags, demand: 0, fastS: 0.05, agentS: 2.5, doneS: 0.4,
     agentShare: AGENT_SHARE_EVIDENCE, poolUtil: 0, seed: 7 };
 }
@@ -129,7 +129,7 @@ function log(s: Sim, text: string, tone: SimEvent["tone"] = "info"): void {
 /** a hot topic: 2.2x the planned inflow for 25 minutes (not predicted) */
 export function spike(s: Sim): void {
   s.spikeFrom = s.t; s.spikeUntil = s.t + 25;
-  log(s, "突发热点：流量在 3 分钟内涨到计划的 2.2 倍（预测里没有）", "warn");
+  log(s, "突发热点：流量在 3 分钟内升至计划值的 2.2 倍，预测未覆盖", "warn");
 }
 /** fail one judge card: health checks remove it, its share moves to the others, the scheduler backfills from offline */
 export function failCard(s: Sim): void {
@@ -137,7 +137,7 @@ export function failCard(s: Sim): void {
   if (judges.length <= 1) return;
   const c = judges[Math.floor(rand(s) * judges.length)]!;
   c.role = "failed"; c.job = null; c.downFor = 0; c.util = 0; c.batch = 0; c.mixed = false;
-  log(s, `GPU ${c.id} 健康检查失败，已从路由摘除，流量转到其余 ${judges.length - 1} 张判官卡`, "bad");
+  log(s, `GPU ${c.id} 健康检查失败，已移出路由，流量由其余 ${judges.length - 1} 张判官卡承接`, "bad");
 }
 
 function nextJob(s: Sim): JobKind {
@@ -155,14 +155,14 @@ function toJudge(s: Sim, c: Card): void {
   const kind: SwitchKind = c.job && JOB_INFO[c.job].train ? "train_to_judge" : "infer_to_judge";
   s.lastSwitch = { t: s.t, card: c.id, kind, job: c.job };
   s.switches++;
-  log(s, `GPU ${c.id}：暂停「${JOB_INFO[c.job ?? "batch"].short}」${kind === "train_to_judge" ? "并存断点" : ""} → 加载判官，约 ${Math.round(switchSeconds(kind))} 秒`, "info");
+  log(s, `GPU ${c.id}：暂停「${JOB_INFO[c.job ?? "batch"].short}」${kind === "train_to_judge" ? "并保存断点" : ""}，切换为判官，约 ${Math.round(switchSeconds(kind))} 秒`, "info");
   c.role = "switching"; c.toward = "judge"; c.since = s.t; c.util = 0; c.batch = 0; c.mixed = false;
 }
 function toOffline(s: Sim, c: Card): void {
   const job = nextJob(s);
   s.lastSwitch = { t: s.t, card: c.id, kind: "judge_to_offline", job };
   s.switches++;
-  log(s, `GPU ${c.id}：判官退出 → 交给「${JOB_INFO[job].short}」，约 ${Math.round(switchSeconds("judge_to_offline"))} 秒`, "good");
+  log(s, `GPU ${c.id}：退出判官，转入「${JOB_INFO[job].short}」，约 ${Math.round(switchSeconds("judge_to_offline"))} 秒`, "good");
   c.role = "switching"; c.toward = "offline"; c.job = job; c.since = s.t; c.util = 0; c.batch = 0; c.mixed = false;
 }
 
@@ -173,12 +173,12 @@ export function step(s: Sim): void {
   if (s.spikeUntil > 0 && s.t === s.spikeUntil) log(s, "热点回落", "info");
   const demand = planned(s.t) * spikeMul * (0.96 + 0.08 * rand(s));
   s.demand = demand;
-  if (s.t % 1440 === 0) { s.jobs = JOBS(); log(s, "零点：今晚的平台任务入队（评测、训练、聚类、信誉分、回扫、OCR）", "info"); }
+  if (s.t % 1440 === 0) { s.jobs = JOBS(); log(s, "零点：今晚的平台任务进入队列（评测、训练、聚类、信誉分、回扫、OCR）", "info"); }
 
   // last minute's switches complete; repaired cards come back as offline workers
   for (const c of s.cards) {
     if (c.role === "switching") { c.role = c.toward === "judge" ? "judge" : "offline"; if (c.role === "judge") c.job = null; c.toward = null; }
-    if (c.role === "failed" && ++c.downFor >= 30) { c.role = "offline"; c.job = nextJob(s); c.since = s.t; log(s, `GPU ${c.id} 修复，回到卡池跑「${JOB_INFO[c.job].short}」`, "good"); }
+    if (c.role === "failed" && ++c.downFor >= 30) { c.role = "offline"; c.job = nextJob(s); c.since = s.t; log(s, `GPU ${c.id} 修复完成，回到卡池执行「${JOB_INFO[c.job].short}」`, "good"); }
   }
 
   // how many judges: now (+15%) and, with prediction, 10 minutes ahead (+10%); plus one hot spare
@@ -191,7 +191,7 @@ export function step(s: Sim): void {
     const pool = s.cards.filter((c) => c.role === "offline").sort((a, b) => PREEMPT.indexOf(a.job ?? "batch") - PREEMPT.indexOf(b.job ?? "batch"));
     const take = pool.slice(0, need - judges.length);
     for (const c of take) toJudge(s, c);
-    if (take.length) log(s, s.flags.predict && ahead > demand * 1.15 ? `预测 10 分钟后约 ${Math.round(planned(s.t + 10))} 条/秒：从离线任务借 ${take.length} 张卡` : `负载 ${Math.round(demand)} 条/秒超出余量：从离线任务借 ${take.length} 张卡`, "info");
+    if (take.length) log(s, s.flags.predict && ahead > demand * 1.15 ? `预测 10 分钟后约 ${Math.round(planned(s.t + 10))} 条/秒，从离线任务借调 ${take.length} 张卡` : `当前负载 ${Math.round(demand)} 条/秒超出余量，从离线任务借调 ${take.length} 张卡`, "info");
   } else if (judges.length > need + 1 && s.t - s.lastRelease >= 5) {
     const c = judges.filter((x) => s.t - x.since >= MIN_HOLD).pop();
     if (c) { toOffline(s, c); s.lastRelease = s.t; }
@@ -223,9 +223,9 @@ export function step(s: Sim): void {
     if (s.level < 1 && (u > 0.92 || s.q > 0)) s.level = 1;
     if (s.level < 2 && agentIn > AGENT_CAP) s.level = 2;
     if (s.level < 3 && s.fastS > SLO_S * 0.6) s.level = 3;
-    if (s.level > prev) { s.calm = 0; log(s, `降级到第 ${s.level} 档：${LEVELS[s.level]!.name}`, "warn"); }
+    if (s.level > prev) { s.calm = 0; log(s, `升至第 ${s.level} 档：${LEVELS[s.level]!.name}`, "warn"); }
     else if (u < 0.6 && s.q === 0 && agentIn < AGENT_CAP * 0.8 && s.level > 0) {
-      if (++s.calm >= 10) { s.level = (s.level - 1) as Level; s.calm = 0; log(s, `压力解除，恢复到第 ${s.level} 档：${LEVELS[s.level]!.name}`, "good"); }
+      if (++s.calm >= 10) { s.level = (s.level - 1) as Level; s.calm = 0; log(s, `压力解除，回到第 ${s.level} 档：${LEVELS[s.level]!.name}`, "good"); }
     } else s.calm = 0;
   } else if (s.level !== 0) s.level = 0;
 
@@ -234,7 +234,7 @@ export function step(s: Sim): void {
   if (spare > 0 && s.deferred > 0) {
     const n = Math.min(s.deferred, spare * capPer * 60);
     s.deferred -= n; s.backfilled += n; spare -= n / (capPer * 60);
-    if (s.deferred <= 0) log(s, `高峰暂缓的内容已补审完，在判官卡上低优先级混跑（累计约 ${s.backfilled >= 10_000 ? `${Math.round(s.backfilled / 10_000)} 万` : Math.round(s.backfilled)} 条）`, "good");
+    if (s.deferred <= 0) log(s, `高峰期暂缓的内容已全部补审，在判官卡上以低优先级执行（累计约 ${s.backfilled >= 10_000 ? `${Math.round(s.backfilled / 10_000)} 万` : Math.round(s.backfilled)} 条）`, "good");
   }
   const mixedCards = Math.floor(spare);
 

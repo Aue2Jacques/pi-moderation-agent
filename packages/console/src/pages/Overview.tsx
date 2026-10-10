@@ -85,7 +85,7 @@ function LiveFeed({ items: all }: { items: ReviewListItem[] }) {
   const { go, isSim } = useConsole();
   const items = useThrottled(all, 1500);
   const fresh = useFreshIds(items.map((r) => r.review_id), "feed");
-  if (!items.length) return <Empty>还没有审次</Empty>;
+  if (!items.length) return <Empty>暂无审核记录</Empty>;
   return (
     <div className="feed-list" aria-live="polite">
       {items.map((r) => (
@@ -121,10 +121,10 @@ function TrafficPanel({ t }: { t: TrafficStatus }) {
           ))}
         </div>
         <dl className="kv">
-          <dt>模拟审核员</dt><dd>{t.sim_reviewer.id} · 当前产能每分钟 {t.sim_reviewer.per_min} 条 · 处理中 {t.sim_reviewer.thinking} · 待处理模拟任务 {t.sim_reviewer.open_sim_tasks}</dd>
-          <dt>保留</dt><dd>{r ? <>只保留最近 {r.keep.toLocaleString("en-US")} 条模拟内容，已清理 {r.pruned.toLocaleString("en-US")} 条（累计数字不受影响）· app.db {mb(r.db_bytes)}</> : "不清理"}</dd>
+          <dt>模拟审核员</dt><dd>{t.sim_reviewer.id}，每分钟可处理 {t.sim_reviewer.per_min} 条；处理中 {t.sim_reviewer.thinking} 条，待处理 {t.sim_reviewer.open_sim_tasks} 条</dd>
+          <dt>保留</dt><dd>{r ? <>保留最近 {r.keep.toLocaleString("en-US")} 条，已清理较早的 {r.pruned.toLocaleString("en-US")} 条，累计统计不受影响。数据库 {mb(r.db_bytes)}</> : "不清理"}</dd>
         </dl>
-        <div className="small faint">内容由演示流量生成器按比例混合产生，ID 以 sim- 开头；模拟审核员只处理模拟任务，产能随流入调整，不碰手动提交的内容。</div>
+        <div className="small faint">以上内容由演示程序按设定比例自动生成，ID 以 sim- 开头。模拟审核员仅处理这些内容，不处理手动提交的内容。</div>
       </div>
     </Panel>
   );
@@ -144,19 +144,19 @@ function Hero() {
         <div className="hero-big">
           <span className="lbl"><span className={`dot ${live.connected ? "pulse" : ""}`} />每秒处理</span>
           <span className="v"><AnimatedNumber value={sum.now} format={(x) => x.toFixed(x >= 100 ? 0 : 1)} /><span className="u">条 / 秒</span></span>
-          <span className="sub">快判完成的内容，近 5 秒平均{config.mode === "demo" ? ` · 演示模式，${config.demo_corpus ? `快判回放 ${config.demo_corpus.judge} 实测打分` : "判官与 agent 为脚本"}` : ""}</span>
+          <span className="sub">近 5 秒均值{config.mode === "demo" ? (config.demo_corpus ? "；评论取自真实测试集" : "；演示数据") : ""}</span>
         </div>
         <div className="hero-stats">
           <div><span className="k">5 分钟均值</span><span className="v num">{sum.avg.toFixed(1)}<small> /s</small></span></div>
           <div><span className="k">峰值</span><span className="v num">{sum.peak}<small> /s</small></span></div>
-          <div title="近 1 分钟每条内容的快判耗时（判官调用、策略、写库；不含在接入队列里的等待）"><span className="k">快判耗时 p50 · p95</span><span className="v num">{f?.flow?.p50_ms != null ? `${duration(f.flow.p50_ms)} · ${duration(f.flow.p95_ms)}` : "—"}</span></div>
+          <div title="近 1 分钟内单条评论的快判用时，不含排队时间"><span className="k">快判用时 p50 · p95</span><span className="v num">{f?.flow?.p50_ms != null ? `${duration(f.flow.p50_ms)} · ${duration(f.flow.p95_ms)}` : "—"}</span></div>
           <div><span className="k">agent 处理中</span><span className="v num">{d ? d.agent.open : "—"}</span></div>
           {t ? <div><span className="k">模拟流量</span><span className="v num">{t.paused || t.per_sec === 0 ? "暂停" : <>{t.per_sec}<small> /s</small></>}</span></div> : null}
         </div>
       </div>
       <div className="hero-flow"><FlowPipeline frame={f ?? null} /></div>
       <div className="hero-curve">
-        <div className="hero-curve-h"><span>吞吐</span><span className="faint">近 5 分钟，每秒快判完成条数</span></div>
+        <div className="hero-curve-h"><span>处理速度</span><span className="faint">近 5 分钟每秒完成审核的条数</span></div>
         <Throughput flow={f?.flow ?? null} />
       </div>
     </section>
@@ -170,7 +170,7 @@ function Guide() {
   const hide = (): void => { setHidden(true); try { localStorage.setItem("console.guide.hidden", "1"); } catch { /* not persisted */ } };
   return (
     <section className="guide" aria-label="从这里开始">
-      <div className="guide-h"><span>第一次来？按这个顺序看，每页末尾都有"下一站"</span><button className="btn sm ghost" onClick={hide}>不再显示</button></div>
+      <div className="guide-h"><span>首次访问建议按以下顺序浏览，每页底部均可进入下一页</span><button className="btn sm ghost" onClick={hide}>不再显示</button></div>
       <div className="guide-cards">
         {TOUR.slice(1, 5).map((x, i) => (
           <a key={x.id} className="gcard-l" href={`#/${x.id}`}>
@@ -188,7 +188,7 @@ export function Overview() {
   const { config } = useConsole();
   const live = useLive();
   const { data: m, connected } = useEventSource<Metrics>("/api/metrics");
-  const head = <PageHead title="概览" desc={config.mode === "demo" ? `处理管线、吞吐、累计数字与最新审次随实时数据流更新。演示模式：${demoJudgeNote(config)}，数字只作演示。` : "处理管线、吞吐、累计数字与最新审次随实时数据流更新。"} />;
+  const head = <PageHead title="概览" desc={config.mode === "demo" ? `所有数据实时更新。当前为演示环境：${demoJudgeNote(config)}。` : "所有数据实时更新。"} />;
   if (!live.frame) return <>{head}<Guide /><Panel><Empty>{live.connected ? "加载中…" : "正在连接实时数据流…"}</Empty></Panel></>;
   const d = live.frame.stats;
   const finished = Math.max(0, d.reviews - d.agent.open - d.human.open);
@@ -201,7 +201,7 @@ export function Overview() {
     <>
       {head}
       <Guide />
-      {d.contents === 0 ? <Alert tone="info">还没有内容。到“提交与追踪”提交一条{config.mode === "demo" ? "，或点演示示例；开启顶栏的模拟流量后数字会持续变化" : ""}。</Alert> : null}
+      {d.contents === 0 ? <Alert tone="info">暂无内容。可在“提交与追踪”中提交一条{config.mode === "demo" ? "，或在顶栏开启模拟流量" : ""}。</Alert> : null}
       <Hero />
       <div className="kpis" style={{ ["--n" as string]: 5 }}>
         <Kpi label="已接入内容" value={<AnimatedNumber value={d.contents} format={big} />} foot={`已快判 ${big(d.judged)} · 审次 ${big(d.reviews)}`} />
@@ -212,10 +212,10 @@ export function Overview() {
       </div>
 
       <div className="grid g-main">
-        <Panel title="分流" sub="每分钟新建审次，近 30 分钟" actions={<Legend />} className="fill">
+        <Panel title="分流" sub="近 30 分钟，每分钟内容的流向" actions={<Legend />} className="fill">
           <MinuteBars series={d.series} />
         </Panel>
-        <Panel title="最新审次" sub="实时，每 1.5 秒刷新" flush>
+        <Panel title="最新审次" sub="实时更新" flush>
           <LiveFeed items={live.recent.slice(0, 9)} />
         </Panel>
       </div>
@@ -229,16 +229,16 @@ export function Overview() {
             </div>
           </div>
         </Panel>
-        <Panel title="耗时" sub="近 2000 条">
+        <Panel title="用时" sub="近 2000 条">
           <div className="lat">
             <span className="h">阶段</span><span className="h v">p50</span><span className="h v">p95</span>
-            <span>接入到快判结论</span><span className="v">{duration(d.latency_ms.fast_p50)}</span><span className="v">{duration(d.latency_ms.fast_p95)}</span>
-            <span>agent 审次</span><span className="v">{duration(d.latency_ms.agent_p50)}</span><span className="v">{duration(d.latency_ms.agent_p95)}</span>
+            <span>接收至快判完成</span><span className="v">{duration(d.latency_ms.fast_p50)}</span><span className="v">{duration(d.latency_ms.fast_p95)}</span>
+            <span>agent 审核</span><span className="v">{duration(d.latency_ms.agent_p50)}</span><span className="v">{duration(d.latency_ms.agent_p95)}</span>
             <span>人工处理</span><span className="v">{duration(d.latency_ms.human_p50)}</span><span className="v faint">—</span>
           </div>
         </Panel>
-        <Panel title="当前有效处置" sub={`${big(effTotal)} 条内容`}>
-          <Meter rows={Object.entries(d.effective).map(([k, n]) => [k === "pending" ? "待定（审核中）" : ACTION[k as keyof typeof ACTION] ?? k, n])} total={effTotal} />
+        <Panel title="当前处置结果" sub={`${big(effTotal)} 条内容`}>
+          <Meter rows={Object.entries(d.effective).map(([k, n]) => [k === "pending" ? "审核中" : ACTION[k as keyof typeof ACTION] ?? k, n])} total={effTotal} />
         </Panel>
         <Panel title="转人工原因" sub={`共 ${big(relTotal)} 次`}>
           <Meter rows={Object.entries(d.release_reasons).sort((a, b) => b[1] - a[1]).map(([k, n]) => [reasonText(k), n])} total={relTotal} />
@@ -254,17 +254,17 @@ export function Overview() {
               <Kpi label="改判" value={<AnimatedNumber value={d.appeals.changed} />} />
             </div>
           </Panel>
-          <Panel title="网关窗口指标" sub={connected ? "内存窗口，每秒推送" : "未连接"}>
-            {!m ? <Empty>等待推送…</Empty> : (
+          <Panel title="网关实时指标" sub={connected ? "每秒更新" : "未连接"}>
+            {!m ? <Empty>等待数据…</Empty> : (
               <dl className="kv">
                 <dt>接入速率</dt><dd className="num">{m.intake_rate.toFixed(2)} 条/秒</dd>
                 <dt>队列：接入 / agent / 人工</dt><dd className="num">{m.queue_intake} / {m.queue_agent} / {m.queue_human}</dd>
                 <dt>快判 p50 / p95</dt><dd className="num nowrap">{duration(m.p50_fast)} / {duration(m.p95_fast)}</dd>
-                <dt>未完成总量</dt><dd className="num">{m.outstanding_total}{m.replay_paused ? "（背压暂停）" : ""}</dd>
-                <dt>近 60 秒 放行 / 处置 / 疑似</dt><dd className="num">{m.pass_pct}% / {m.block_pct}% / {m.suspicious_pct}%</dd>
+                <dt>未完成</dt><dd className="num">{m.outstanding_total}{m.replay_paused ? "（积压过多，已暂停接收）" : ""}</dd>
+                <dt>近 1 分钟：放行 / 处置 / 存疑</dt><dd className="num">{m.pass_pct}% / {m.block_pct}% / {m.suspicious_pct}%</dd>
                 <dt>每千条费用</dt><dd className="num">{yuan(m.cost_micro_per_1k, 3)}</dd>
-                <dt>转人工占比（5 分钟）</dt><dd className="num">{m.release_pct}%</dd>
-                <dt>判官弃答 · 待投递</dt><dd className="num">{m.judge_abstain_pct}% · {m.outbox_pending}</dd>
+                <dt>近 5 分钟转人工占比</dt><dd className="num">{m.release_pct}%</dd>
+                <dt>判官弃答率 · 待投递</dt><dd className="num">{m.judge_abstain_pct}% · {m.outbox_pending}</dd>
               </dl>
             )}
           </Panel>

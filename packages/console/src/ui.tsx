@@ -58,7 +58,7 @@ export function PhaseBadge({ phase }: { phase: string }) {
 }
 export const ActorText = ({ actor }: { actor: string | null | undefined }) => <span>{actor ? (ACTOR[actor] ?? actor) : "—"}</span>;
 /** Marks generated demo traffic and the simulated reviewer. */
-export const SimTag = ({ title = "演示流量生成器产生的模拟数据" }: { title?: string }) => <span className="sim" title={title}>模拟</span>;
+export const SimTag = ({ title = "演示程序自动生成的数据" }: { title?: string }) => <span className="sim" title={title}>模拟</span>;
 
 // ---------- layout ----------
 export function Panel({ title, sub, actions, children, flush, className, id }: { title?: ReactNode; sub?: ReactNode; actions?: ReactNode; children: ReactNode; flush?: boolean; className?: string; id?: string }) {

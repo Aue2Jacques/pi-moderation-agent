@@ -233,16 +233,16 @@ export function FlowPipeline({ frame }: { frame: LiveFrame | null }) {
       {s && lay ? (
         <>
           {node("intake", "接入", s.contents, `${fmtRate(rates.in)} /s`, undefined, "已接入的内容")}
-          {node("judge", lay.narrow ? "快判" : "判官快判", s.judged, `p50 ${duration(frame?.flow?.p50_ms ?? s.latency_ms.fast_p50)}`, undefined, "一次请求问全部规则（主问 + 打乱选项复问）")}
+          {node("judge", lay.narrow ? "快判" : "判官快判", s.judged, `p50 ${duration(frame?.flow?.p50_ms ?? s.latency_ms.fast_p50)}`, undefined, "一次请求完成全部规则的判断（含打乱选项的复问）")}
           {node("pass", "自动放行", s.routes.fast_pass, lay.narrow ? `${fmtRate(rates.pass)} /s` : `${fmtRate(rates.pass)} /s · ${share(s.routes.fast_pass)}`, "--route-fast_pass")}
           {node("block", "自动处置", s.routes.fast_block, lay.narrow ? `${fmtRate(rates.block)} /s` : `${fmtRate(rates.block)} /s · ${share(s.routes.fast_block)}`, "--route-fast_block")}
-          {node("agent", lay.narrow ? "agent" : "agent 查证据", s.routes.agent + s.routes.appeal, `处理中 ${s.agent.open}`, "--route-agent", "疑似内容与申诉由 agent 取证后复判")}
+          {node("agent", lay.narrow ? "agent" : "agent 查证据", s.routes.agent + s.routes.appeal, `处理中 ${s.agent.open}`, "--route-agent", "可疑内容与申诉由 agent 取证后复判")}
           {node("agentDone", lay.narrow ? "agent 处置" : "agent 处置", s.agent.disposed, `${fmtRate(rates.agentDone)} /s`, "--route-agent")}
-          {node("human", "人工", s.human.closed, lay.narrow ? `待 ${s.human.open}` : `待处理 ${s.human.open}`, "--route-human_direct", "agent 证据不足或系统原因转人工；数字为已完成")}
+          {node("human", "人工", s.human.closed, lay.narrow ? `待 ${s.human.open}` : `待处理 ${s.human.open}`, "--route-human_direct", "agent 证据不足或因系统原因转人工；数字为已完成数")}
           {(() => { const b = lay.boxes.appeal; return <div className="fnode chip" style={{ left: b.x, top: b.y, width: b.w, height: b.h }} title={`申诉 ${s.appeals.total} 次，交 agent 重审`}><i className="sw" style={{ background: "var(--route-appeal)" }} />申诉</div>; })()}
         </>
       ) : null}
-      {per > 1 && !reduced ? <span className="flow-note">每个点约 {per} 条</span> : null}
+      {per > 1 && !reduced ? <span className="flow-note">每个点代表约 {per} 条</span> : null}
     </div>
   );
 }

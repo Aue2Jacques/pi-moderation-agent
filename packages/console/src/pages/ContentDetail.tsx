@@ -16,8 +16,8 @@ export function ContentDetail({ contentId }: { contentId: string }) {
   const [error, setError] = useState<string | null>(null);
 
   async function openRestricted(): Promise<void> {
-    if (!reviewer) { setError("需要先以审核员身份登录"); return; }
-    if (!window.confirm("查看原文与证据全文属于受限操作，会以你的身份写入审计日志。继续？")) return;
+    if (!reviewer) { setError("请先以审核员身份登录"); return; }
+    if (!window.confirm("查看原文与证据全文时，系统会以你的身份记录到审计日志。是否继续？")) return;
     try {
       setRestricted(await api.get<ContentTimeline>(`/api/contents/${encodeURIComponent(contentId)}?view=restricted`, { ...authHeaders(reviewer), "x-confirm": "yes" }));
       setError(null);
@@ -35,15 +35,15 @@ export function ContentDetail({ contentId }: { contentId: string }) {
   return (
     <>
       {head}
-      <Panel title="内容" sub={`接入于 ${dateTime(t.content.created_at)}`} actions={
+      <Panel title="内容" sub={`接收于 ${dateTime(t.content.created_at)}`} actions={
         demo ? null
           : restricted
-          ? <button className="btn sm" onClick={() => setRestricted(null)}>回到脱敏视图</button>
+          ? <button className="btn sm" onClick={() => setRestricted(null)}>返回脱敏视图</button>
           : <button className="btn sm" onClick={() => void openRestricted()}>查看原文与证据</button>
       }>
         <div className="stack" style={{ gap: 16 }}>
           {error ? <Alert tone="bad">{error}</Alert> : null}
-          {restricted ? <Alert tone="warn">受限视图是打开时的快照，不随后续变化刷新；回到脱敏视图恢复实时。</Alert> : null}
+          {restricted ? <Alert tone="warn">原文视图为打开时的快照，不会随后续变化更新；返回脱敏视图可恢复实时更新。</Alert> : null}
           <ContentHeader t={t} sim={isSim(t.content.content_id)} />
           <dl className="kv">
             <dt>账号</dt><dd className="mono">{t.content.account_id ?? "—"}</dd>

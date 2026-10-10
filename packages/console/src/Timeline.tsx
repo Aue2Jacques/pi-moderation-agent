@@ -11,7 +11,7 @@ import { ActionBadge, Badge, Icon, Id, PhaseBadge, RouteBadge, SimTag, StateBadg
 // ---------- probability rows ----------
 
 const VERDICT: Record<QuestionScore["verdict"], { text: string; tone: Tone }> = {
-  pass: { text: "低于放行线", tone: "good" }, block: { text: "达到处置线", tone: "bad" }, middle: { text: "中间带", tone: "warn" },
+  pass: { text: "低于放行线", tone: "good" }, block: { text: "达到处置线", tone: "bad" }, middle: { text: "待定区间", tone: "warn" },
   flagged: { text: "命中", tone: "warn" }, clear: { text: "未命中", tone: "good" }, uncalibrated: { text: "未校准", tone: "neutral" }, missing: { text: "未作答", tone: "neutral" },
 };
 
@@ -55,8 +55,8 @@ export function JudgeRoundView({ round, compact }: { round: JudgeRound; compact?
         <span>{round.status === "ok" ? "成功" : round.status}</span>
         <span>耗时 {duration(round.latency_ms)}</span>
         <span>费用 {yuan(round.cost_micro, 6)}</span>
-        {round.copy_call_id ? <span>同次请求带打乱选项复问</span> : null}
-        <span>{round.channel === "image" ? "看图片" : round.evidence_ids.length ? `证据 ${round.evidence_ids.map((e) => e.split("#").pop()).join("、")}` : "只看文本"}</span>
+        {round.copy_call_id ? <span>同一请求附带打乱选项的复问</span> : null}
+        <span>{round.channel === "image" ? "看图片" : round.evidence_ids.length ? `证据 ${round.evidence_ids.map((e) => e.split("#").pop()).join("、")}` : "仅文本"}</span>
       </div>
     </div>
   );
@@ -73,33 +73,33 @@ const REL: Record<string, string> = { parent: "父评论", ancestor: "更早回�
 
 export function stepText(s: AgentStep): string {
   const r = (s.result ?? {}) as Record<string, unknown>;
-  if (s.status === "blocked") return `被拦下：${s.block_reason ?? ""}`;
+  if (s.status === "blocked") return `已拦截：${s.block_reason ?? ""}`;
   if (s.status === "pending") return "进行中…";
-  if (s.status === "rejected") return `提交检查拒绝：${String(r["code"] ?? "")}（第 ${String(r["step"] ?? "?")} 步）`;
+  if (s.status === "rejected") return `未通过提交校验：${String(r["code"] ?? "")}（第 ${String(r["step"] ?? "?")} 项）`;
   switch (s.tool) {
     case "load_rule": {
       const t = r["thresholds"] as { block?: number; pass?: number } | undefined;
       return `${String(s.args["rule_id"] ?? "")}：默认${ACTION[String(r["default_action"]) as keyof typeof ACTION] ?? ""}，处置线 ${t?.block ?? "—"}，放行线 ${t?.pass ?? "—"}`;
     }
     case "get_thread_context": {
-      if (s.status === "reused") return "已取过，返回已有证据";
+      if (s.status === "reused") return "已获取过，返回已有证据";
       const ns = (r["neighbors"] as { relation: string; text_len: number }[] | undefined) ?? [];
-      return ns.length ? ns.map((n) => `${REL[n.relation] ?? n.relation}（${n.text_len} 字）`).join("、") : "没有可用的上下文";
+      return ns.length ? ns.map((n) => `${REL[n.relation] ?? n.relation}（${n.text_len} 字）`).join("、") : "无可用上下文";
     }
     case "get_account_history": {
-      if (s.status === "reused") return "已取过，返回已有证据";
+      if (s.status === "reused") return "已获取过，返回已有证据";
       const c = (r["counts"] as Record<string, number> | undefined) ?? {};
       const parts = Object.entries(c).map(([k, n]) => `${ACTION[k as keyof typeof ACTION] ?? k} ${n}`);
       const extra = [Number(r["warnings"] ?? 0) ? `警告 ${String(r["warnings"])}` : "", Number(r["appeals"] ?? 0) ? `申诉 ${String(r["appeals"])}` : ""].filter(Boolean);
-      return parts.length || extra.length ? `近 7 天：${[...parts, ...extra].join(" · ")}` : "近 7 天没有处置记录";
+      return parts.length || extra.length ? `近 7 天：${[...parts, ...extra].join(" · ")}` : "近 7 天无处置记录";
     }
     case "judge":
     case "confirm": {
-      if (s.status === "reused") return "同一请求已判过，返回上次结果";
+      if (s.status === "reused") return "相同请求已判定，返回上次结果";
       const sc = (r["scores"] as { key: string; mean: number | null; verdict: string }[] | undefined) ?? [];
       return sc.map((x) => `${QUESTION[x.key] ?? x.key} ${p2(x.mean)}`).join(" · ");
     }
-    case "dispose": return `处置：${ACTION[String(s.args["action"]) as keyof typeof ACTION] ?? String(s.args["action"])}${(s.args["rule_ids"] as string[] | undefined)?.length ? `，依据 ${(s.args["rule_ids"] as string[]).join("、")}` : ""}；提交检查通过`;
+    case "dispose": return `处置：${ACTION[String(s.args["action"]) as keyof typeof ACTION] ?? String(s.args["action"])}${(s.args["rule_ids"] as string[] | undefined)?.length ? `，依据 ${(s.args["rule_ids"] as string[]).join("、")}` : ""}；已通过提交校验`;
     case "release": return `原因：${reasonText(String(s.args["reason"] ?? ""))}`;
     default: return "";
   }
@@ -152,19 +152,19 @@ export function ReviewCard({ r, restricted, t }: { r: ReviewTimeline; restricted
 
       {r.appeal ? (
         <section className="sec"><div className="sec-h"><h3>申诉</h3></div>
-          <div className="small">理由代码 <span className="mono">{r.appeal.reason_code ?? "—"}</span>。重审由 agent 重新取证判断，原裁决在新裁决形成前继续有效。</div></section>
+          <div className="small">理由代码 <span className="mono">{r.appeal.reason_code ?? "—"}</span>。由 agent 重新取证并判断；新裁决生效前，原裁决保持有效。</div></section>
       ) : null}
 
       {fast.length ? (
         <section className="sec">
-          <div className="sec-h"><h3>快判打分</h3><span className="sub">{vision.length && t?.image_note ? "一次请求问全部规则（演示：脚本判官按截图的已知内容和附带文字打分），主问与打乱选项的复问都要过线" : "一次请求问全部规则，主问与打乱选项的复问都要过线"}</span><span className="end"><Legend /></span></div>
+          <div className="sec-h"><h3>快判打分</h3><span className="sub">{vision.length && t?.image_note ? "一次请求完成全部规则的判断，主问与打乱选项的复问均需过线（演示环境中，判官按截图的已知内容及附带文字打分）" : "一次请求完成全部规则的判断，主问与打乱选项的复问均需过线"}</span><span className="end"><Legend /></span></div>
           {fast.map((j) => <JudgeRoundView key={j.judge_call_id} round={j} />)}
         </section>
       ) : null}
 
       {vision.length ? (
         <section className="sec">
-          <div className="sec-h"><h3>视觉编码</h3><span className="sub">图片经视觉编码后回答图片检查题（武器、血腥、惊悚、二维码或联系方式），同样主问 + 复问</span></div>
+          <div className="sec-h"><h3>视觉编码</h3><span className="sub">图片经视觉编码后回答图片检查题（武器、血腥、惊悚、二维码或联系方式），同样包含主问与复问</span></div>
           <div className="vision">
             {t?.content.images.length ? <div className="vision-img">{t.content.images.map((im) => <ImageThumb key={im.n} contentId={t.content.content_id} img={im} restricted={t.restricted} small />)}</div> : null}
             <div className="vision-b">
@@ -183,7 +183,7 @@ export function ReviewCard({ r, restricted, t }: { r: ReviewTimeline; restricted
           <div className="sec-h"><h3>agent 调查</h3>
             <span className="sub">工具 {r.tools_used}/{r.budget_tools} 次 · 费用 {yuan(r.used_micro)}{r.cost_status === "estimated" ? "（估计）" : ""} · 模型 {r.agent_model ?? "—"}</span></div>
           {r.steps.length === 0 ? (
-            <div className="small muted row">{r.state === "queued" ? <><span className="dot pulse" style={{ background: "var(--info)" }} />排队中，等待 worker 领取</> : r.state === "investigating" ? <><span className="dot pulse" style={{ background: "var(--info)" }} />已领取，agent 正在读任务说明</> : "没有工具调用"}</div>
+            <div className="small muted row">{r.state === "queued" ? <><span className="dot pulse" style={{ background: "var(--info)" }} />排队中，等待 worker 接手</> : r.state === "investigating" ? <><span className="dot pulse" style={{ background: "var(--info)" }} />已接手，agent 正在阅读任务说明</> : "无工具调用"}</div>
           ) : <Steps r={r} />}
           {r.state === "investigating" && r.steps.length ? <div className="small muted row" style={{ marginTop: 6 }}><span className="dot pulse" style={{ background: "var(--info)" }} />等待下一步…</div> : null}
           {agentRounds.length ? (
@@ -194,7 +194,7 @@ export function ReviewCard({ r, restricted, t }: { r: ReviewTimeline; restricted
       ) : null}
 
       {r.rejections.length ? (
-        <section className="sec"><div className="sec-h"><h3 style={{ color: "var(--bad)" }}>提交检查拒绝</h3></div>
+        <section className="sec"><div className="sec-h"><h3 style={{ color: "var(--bad)" }}>未通过提交校验</h3></div>
           {r.rejections.map((x, i) => <div key={i} className="small">{clock(x.at)} · {ACTOR[x.actor] ?? x.actor} 提交 {x.action ? ACTION[x.action as keyof typeof ACTION] ?? x.action : ""} 被拒：<span className="mono">{x.code}</span>（第 {x.step} 步）</div>)}</section>
       ) : null}
 
@@ -202,8 +202,8 @@ export function ReviewCard({ r, restricted, t }: { r: ReviewTimeline; restricted
         <section className="sec"><div className="sec-h"><h3>人工</h3></div>
           <dl className="kv">
             <dt>转入原因</dt><dd>{reasonText(r.human.reason)}</dd>
-            <dt>时限</dt><dd>{clock(r.human.due_at)} 前</dd>
-            <dt>领取</dt><dd>{r.human.claimed_by ? <>{r.human.claimed_by}{r.human.claimed_by.startsWith("sim-") ? <> <SimTag title="模拟审核员（演示流量）" /></> : null}（{clock(r.human.claimed_at ?? 0)}）</> : "未领取"}</dd>
+            <dt>截止时间</dt><dd>{clock(r.human.due_at)}</dd>
+            <dt>领取</dt><dd>{r.human.claimed_by ? <>{r.human.claimed_by}{r.human.claimed_by.startsWith("sim-") ? <> <SimTag title="模拟审核员" /></> : null}（{clock(r.human.claimed_at ?? 0)}）</> : "未领取"}</dd>
             {r.human.closed_at ? <><dt>完成</dt><dd>{r.human.closed_by}（{clock(r.human.closed_at)}）{r.human.label ? `，标注 ${r.human.label}` : ""}</dd></> : null}
           </dl></section>
       ) : null}
@@ -214,7 +214,7 @@ export function ReviewCard({ r, restricted, t }: { r: ReviewTimeline; restricted
             <ActionBadge action={r.ruling.action} big />
             <span>由 <b>{ACTOR[r.ruling.actor] ?? r.ruling.actor}</b> 作出</span>
             {r.ruling.rule_ids.length ? <span>依据 <span className="mono">{r.ruling.rule_ids.join("、")}</span></span> : null}
-            <span className="muted small">提交检查允许：{r.ruling.allowed_actions.map((a) => (a === "human" ? "人工" : ACTION[a as keyof typeof ACTION] ?? a)).join("、") || "—"}</span>
+            <span className="muted small">提交校验允许：{r.ruling.allowed_actions.map((a) => (a === "human" ? "人工" : ACTION[a as keyof typeof ACTION] ?? a)).join("、") || "—"}</span>
             <span className="faint small">{clock(r.ruling.created_at)} · 用时 {duration(r.ruling.created_at - r.created_at)}</span>
           </div>
           <div className="small muted" style={{ marginTop: 8, overflowWrap: "anywhere" }}>
@@ -228,11 +228,11 @@ export function ReviewCard({ r, restricted, t }: { r: ReviewTimeline; restricted
 
 function routeLine(r: ReviewTimeline): string {
   switch (r.route.kind) {
-    case "fast_pass": return "快判直接放行，没有进入 agent。";
+    case "fast_pass": return "快判直接放行，未进入 agent。";
     case "fast_block": return `快判直接处置（${reasonText(r.route.reason)}）。`;
-    case "agent": return `转 agent 查证据：${reasonText(r.suspect_reason)}。`;
-    case "human_direct": return `系统原因，直接转人工：${reasonText(r.release_reason)}。`;
-    case "appeal": return "申诉开出的新审次，交 agent 重审。";
+    case "agent": return `转交 agent 取证：${reasonText(r.suspect_reason)}。`;
+    case "human_direct": return `因系统原因直接转人工：${reasonText(r.release_reason)}。`;
+    case "appeal": return "由申诉新建的审次，交由 agent 重新审核。";
     default: return ROUTE[r.route.kind];
   }
 }
@@ -256,7 +256,7 @@ function stages(t: ContentTimeline): Stage[] {
     { t: "快判", d: fast ? `${fast.questions.length} 题 · ${duration(fast.latency_ms)}` : first ? "未调用判官" : "等待中", s: fast || first ? "done" : "active" },
     ...(imgs ? [{ t: "视觉编码", d: vision ? `图片检查 ${p2(vision.questions[0]?.mean)}` : first ? "未调用" : "等待中", s: (vision || first ? "done" : fast ? "active" : "todo") as Stage["s"] }] : []),
     { t: "分流", d: first ? ROUTE[first.route.kind] : "—", s: first ? "done" : "todo" },
-    { t: "agent 调查", d: agentReviews.length ? (agentLive ? `进行中 · ${steps} 步` : `${steps} 步`) : "未进入", s: !agentReviews.length ? (first ? "skip" : "todo") : agentLive ? "active" : "done" },
+    { t: "agent 调查", d: agentReviews.length ? (agentLive ? `进行中 · ${steps} 步` : `${steps} 步`) : "未经过", s: !agentReviews.length ? (first ? "skip" : "todo") : agentLive ? "active" : "done" },
     { t: "结论", d: last?.ruling ? `${ACTION[last.ruling.action]} · ${ACTOR[last.ruling.actor] ?? last.ruling.actor}` : t.phase === "human" ? "等待人工" : "—", s: last?.ruling && t.phase === "done" ? "done" : t.phase === "human" ? "active" : "todo" },
   ];
 }
@@ -288,7 +288,7 @@ export function ContentHeader({ t, text, sim }: { t: ContentTimeline; text?: str
           demo ? <div className="content-text">{shown}</div>
             : <div className="restricted"><div className="lbl"><Icon name="lock" size={12} />受限视图：原文（本次查看已写审计）</div><div className="content-text">{shown}</div></div>
         ) : <div className="content-text">{shown}</div>
-      ) : t.content.text_len || !t.content.images.length ? <div className="hidden-text"><Icon name="lock" size={12} />原文默认不展示（{t.content.text_len} 字，sha {t.content.text_sha ?? "—"}）</div> : null}
+      ) : t.content.text_len || !t.content.images.length ? <div className="hidden-text"><Icon name="lock" size={12} />原文默认不显示（{t.content.text_len} 字，sha {t.content.text_sha ?? "—"}）</div> : null}
       {t.content.images.length ? <div className="thumbs">{t.content.images.map((im) => <ImageThumb key={im.n} contentId={t.content.content_id} img={im} restricted={t.restricted} />)}</div> : null}
     </div>
   );
@@ -307,14 +307,14 @@ export function ImageThumb({ contentId, img, restricted, small }: { contentId: s
   if (url) return <a className={`thumb ${small ? "sm" : ""}`} href={url} target="_blank" rel="noreferrer" title={label}><img src={url} alt={label} /><span className="cap">{label}</span></a>;
   return (
     <div className={`thumb locked ${small ? "sm" : ""}`}>
-      <span className="row" style={{ gap: 6 }}><Icon name="lock" size={12} />{label}属受限内容</span>
+      <span className="row" style={{ gap: 6 }}><Icon name="lock" size={12} />{label}需授权查看</span>
       {err ? <span className="small" style={{ color: "var(--bad)" }}>{err}</span> : null}
-      <button className="btn sm" disabled={!reviewer} onClick={() => { if (window.confirm("查看图片会写入审计记录，继续？")) load(); }}>查看图片</button>
+      <button className="btn sm" disabled={!reviewer} onClick={() => { if (window.confirm("查看图片会记录到审计日志，是否继续？")) load(); }}>查看图片</button>
     </div>
   );
 }
 
-const STEP_STATUS: Record<string, string> = { ok: "完成", reused: "复用", blocked: "被拦下", rejected: "被拒", pending: "进行中" };
+const STEP_STATUS: Record<string, string> = { ok: "完成", reused: "复用", blocked: "已拦截", rejected: "未通过", pending: "进行中" };
 
 export function EventFeed({ t }: { t: ContentTimeline }) {
   const evs = [...t.events].reverse();

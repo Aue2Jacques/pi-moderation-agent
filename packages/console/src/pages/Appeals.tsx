@@ -36,7 +36,7 @@ export function Appeals({ preset }: { preset: string | null }) {
     const id = contentId.trim();
     try {
       const out = await api.post<{ review_id: string; duplicate: boolean }>("/api/appeals", { content_id: id, trigger_request_id: `appeal-${Date.now().toString(36)}`, reason_code: reason });
-      setMsg({ tone: "good", text: `已受理，新审次 ${out.review_id}`, id });
+      setMsg({ tone: "good", text: `已受理，新审次为 ${out.review_id}`, id });
       appeals.reload();
     } catch (e) { setMsg({ tone: "bad", text: errText(e) }); } finally { setBusy(false); }
   }
@@ -45,25 +45,25 @@ export function Appeals({ preset }: { preset: string | null }) {
 
   return (
     <>
-      <PageHead title="申诉" desc="对已处置的内容发起申诉会开一个新审次由 agent 重审；新裁决形成前，原裁决继续有效。" />
+      <PageHead title="申诉" desc="对已处置的内容发起申诉后，系统会新建审次并由 agent 重新审核；新裁决生效前，原裁决保持有效。" />
       <div className="split">
         <div className="stack" style={{ gap: 20 }}>
           <Panel title="发起申诉">
             <div className="stack" style={{ gap: 14 }}>
-              <label className="field"><span className="field-l">内容 ID</span><input className="input" value={contentId} onChange={(e) => setContentId(e.target.value)} placeholder="例如 c-…，或从下面选一条" /></label>
+              <label className="field"><span className="field-l">内容 ID</span><input className="input" value={contentId} onChange={(e) => setContentId(e.target.value)} placeholder="例如 c-…，也可从下方列表选择" /></label>
               {target ? (
                 <div className="row small">当前有效处置 <ActionBadge action={target.effective?.action ?? null} />
-                  <span className="muted">· {target.reviews.length} 个审次</span>{open ? <Badge tone="warn">最新审次未结束</Badge> : null}</div>
-              ) : contentId.trim() ? <div className="small faint">没有找到这条内容</div> : null}
+                  <span className="muted">· 共 {target.reviews.length} 个审次</span>{open ? <Badge tone="warn">最新审次尚未结束</Badge> : null}</div>
+              ) : contentId.trim() ? <div className="small faint">未找到该内容</div> : null}
               <label className="field"><span className="field-l">申诉理由</span>
                 <select className="select" value={reason} onChange={(e) => setReason(e.target.value)}>{APPEAL_REASONS.map((r) => <option key={r.code} value={r.code}>{r.label}（{r.code}）</option>)}</select>
               </label>
-              {msg ? <Alert tone={msg.tone}>{msg.text}{msg.id ? <> · <a href={`#/track/${encodeURIComponent(msg.id)}`}>实时查看重审</a></> : null}</Alert> : null}
+              {msg ? <Alert tone={msg.tone}>{msg.text}{msg.id ? <> · <a href={`#/track/${encodeURIComponent(msg.id)}`}>查看重审进度</a></> : null}</Alert> : null}
               <div className="row"><button className="btn primary" disabled={busy || !contentId.trim()} onClick={() => void submit()}>提交申诉</button></div>
             </div>
           </Panel>
-          <Panel title="最近已处置的内容" sub="点选填入" flush>
-            {candidates.length === 0 ? <Empty>还没有已处置的内容</Empty> : (
+          <Panel title="最近已处置的内容" sub="点击即可填入" flush>
+            {candidates.length === 0 ? <Empty>暂无已处置的内容</Empty> : (
               <table className="table candidates"><tbody>
                 {candidates.map((r) => (
                   <tr key={r.review_id} className={`click ${r.content_id === contentId ? "sel" : ""}`} tabIndex={0} onClick={() => setContentId(r.content_id)} onKeyDown={(e) => { if (e.key === "Enter") setContentId(r.content_id); }}>
@@ -77,9 +77,9 @@ export function Appeals({ preset }: { preset: string | null }) {
           </Panel>
         </div>
 
-        <Panel title="申诉记录" sub={`${appeals.data?.length ?? 0} 条${(appeals.data?.length ?? 0) > 100 ? "，显示最近 100 条" : ""}`} flush>
+        <Panel title="申诉记录" sub={`共 ${appeals.data?.length ?? 0} 条${(appeals.data?.length ?? 0) > 100 ? "，显示最近 100 条" : ""}`} flush>
           {appeals.error ? <div className="panel-b"><Alert tone="bad">{appeals.error}</Alert></div> : null}
-          {!appeals.data ? <Empty>加载中…</Empty> : appeals.data.length === 0 ? <Empty>还没有申诉。对已处置的内容发起一次，可以看到新审次如何重审。</Empty> : (
+          {!appeals.data ? <Empty>加载中…</Empty> : appeals.data.length === 0 ? <Empty>暂无申诉记录。对已处置的内容发起申诉后，可在此查看重审过程。</Empty> : (
             <div className="table-wrap">
               <table className="table stackable">
                 <thead><tr><th>内容</th><th>理由</th><th>原裁决 → 重审结果</th><th>状态</th><th className="num">时间</th></tr></thead>

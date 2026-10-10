@@ -18,7 +18,7 @@ function Who({ id }: { id: string | null }) {
   const { config } = useConsole();
   if (!id) return <span className="faint">未领取</span>;
   const sim = id === config.demo_traffic?.sim_reviewer;
-  return <span className="row" style={{ gap: 6, flexWrap: "nowrap" }}><span className="wrap-any">{id}</span>{sim ? <SimTag title="模拟审核员：演示流量的一部分，只处理模拟内容" /> : null}</span>;
+  return <span className="row" style={{ gap: 6, flexWrap: "nowrap" }}><span className="wrap-any">{id}</span>{sim ? <SimTag title="模拟审核员，仅处理演示程序生成的内容" /> : null}</span>;
 }
 
 export function Human({ selected }: { selected: string | null }) {
@@ -45,9 +45,9 @@ export function Human({ selected }: { selected: string | null }) {
 
   return (
     <>
-      <PageHead title="人工复核" desc={<>agent 拿不准或因系统原因转人工的内容。裁决同样经过提交检查。{config.demo_traffic ? <> 演示模式下有一位模拟审核员（标 <SimTag />）处理模拟任务，产能随流入调整。</> : null}</>} />
+      <PageHead title="人工复核" desc={<>agent 无法确定或因系统原因转交人工的内容。人工裁决同样需要通过提交校验。{config.demo_traffic ? <> 演示环境中有一位模拟审核员（标记为 <SimTag />）负责处理自动生成的任务。</> : null}</>} />
       <div className="split-wide">
-        <Panel title="队列" sub={`${tab === "open" ? "按严重度和时限排序" : "最近完成"}${all.length > RENDER_MAX ? `，显示前 ${RENDER_MAX} 条（共 ${all.length} 条）` : ""}`} flush actions={
+        <Panel title="队列" sub={`${tab === "open" ? "按严重程度与时限排序" : "最近完成"}${all.length > RENDER_MAX ? `，显示前 ${RENDER_MAX} 条（共 ${all.length} 条）` : ""}`} flush actions={
           <>
             <div className="seg" role="tablist" aria-label="队列">
               <button className={tab === "open" ? "on" : ""} onClick={() => setTab("open")} role="tab" aria-selected={tab === "open"}>待处理{live.frame ? ` ${live.frame.stats.human.open}` : ""}</button>
@@ -57,7 +57,7 @@ export function Human({ selected }: { selected: string | null }) {
           </>
         }>
           {queue.error ? <div className="panel-b"><Alert tone="bad">{queue.error}</Alert></div> : null}
-          {!queue.data ? <Empty>加载中…</Empty> : items.length === 0 ? <Empty>{tab === "open" ? "队列是空的。agent 拿不准、或因系统原因转人工的内容，会出现在这里。" : "还没有完成的任务。"}</Empty> : (
+          {!queue.data ? <Empty>加载中…</Empty> : items.length === 0 ? <Empty>{tab === "open" ? "队列为空。agent 无法确定、或因系统原因转交人工的内容，将显示在这里。" : "暂无已完成的任务。"}</Empty> : (
             <div className="table-wrap">
               <table className="table stackable">
                 <thead><tr><th>内容</th><th>原因</th><th>{tab === "open" ? "剩余时限" : "结论"}</th><th>{tab === "open" ? "领取" : "处理人"}</th></tr></thead>
@@ -67,7 +67,7 @@ export function Human({ selected }: { selected: string | null }) {
                     return (
                       <tr key={x.review_id} className={`click ${x.review_id === selected ? "sel" : ""} ${fresh.has(x.review_id) ? "fresh" : ""}`} tabIndex={0} onClick={() => select(x.review_id)} onKeyDown={(e) => { if (e.key === "Enter") select(x.review_id); }}>
                         <td className="lead"><div className="cell-2"><span className="row" style={{ gap: 6 }}><Id value={x.content_id} short />{isSim(x.content_id) ? <SimTag /> : null}</span>
-                          <span className="s">{SCENE[x.scene] ?? x.scene} · {x.trigger === "appeal" ? "申诉审次" : `第 ${x.review_id.split("#").pop()} 审次`} · 严重度 {x.severity}</span></div></td>
+                          <span className="s">{SCENE[x.scene] ?? x.scene} · {x.trigger === "appeal" ? "申诉审次" : `第 ${x.review_id.split("#").pop()} 审次`} · 严重程度 {x.severity}</span></div></td>
                         <td data-label="原因" className="small" style={{ minWidth: 96 }}>{reasonText(x.reason)}</td>
                         <td data-label={tab === "open" ? "剩余时限" : "结论"} className="small num nowrap">{tab === "open"
                           ? <span style={{ color: left < 0 ? "var(--bad)" : left < 600_000 ? "var(--warn)" : undefined }}>{left < 0 ? `超时 ${duration(-left)}` : duration(left)}</span>
@@ -82,8 +82,8 @@ export function Human({ selected }: { selected: string | null }) {
           )}
         </Panel>
 
-        {selected && task ? <TaskPanel key={selected} item={task} onChanged={queue.reload} /> : selected ? <Panel title="任务"><Empty>加载中…（如果任务已完成，请切到“已完成”）</Empty></Panel> : (
-          <Panel title="任务"><Empty>从左侧选择一条任务，或点“领取下一条”。{reviewer ? null : <><br />需要先登录审核员身份。</>}</Empty></Panel>
+        {selected && task ? <TaskPanel key={selected} item={task} onChanged={queue.reload} /> : selected ? <Panel title="任务"><Empty>加载中…（若任务已完成，请切换到“已完成”）</Empty></Panel> : (
+          <Panel title="任务"><Empty>从左侧选择一条任务，或点击“领取下一条”。{reviewer ? null : <><br />请先以审核员身份登录。</>}</Empty></Panel>
         )}
       </div>
     </>
@@ -147,7 +147,7 @@ function TaskPanel({ item, onChanged }: { item: HumanQueueItem; onChanged: () =>
     } catch (e) { setMsg({ tone: "bad", text: errText(e) }); } finally { setBusy(false); }
   }
   async function openRestricted(): Promise<void> {
-    if (!reviewer || !window.confirm("查看原文属于受限操作，会写入审计日志。继续？")) return;
+    if (!reviewer || !window.confirm("查看原文会记录到审计日志，是否继续？")) return;
     try { setRestricted(await api.get<ContentTimeline>(`/api/contents/${encodeURIComponent(item.content_id)}?view=restricted`, { ...authHeaders(reviewer), "x-confirm": "yes" })); } catch (e) { setMsg({ tone: "bad", text: errText(e) }); }
   }
   const ruleOptions = rules ?? [];
@@ -165,31 +165,31 @@ function TaskPanel({ item, onChanged }: { item: HumanQueueItem; onChanged: () =>
           <dl className="kv">
             <dt>内容</dt><dd className="row" style={{ gap: 6 }}><Id value={item.content_id} />{isSim(item.content_id) ? <SimTag /> : null}</dd>
             <dt>转入原因</dt><dd>{reasonText(item.reason)}{item.suspect_reason ? <span className="faint">（快判：{reasonText(item.suspect_reason)}）</span> : null}</dd>
-            <dt>场景</dt><dd>{SCENE[item.scene] ?? item.scene} · 可用处置 {sceneActions.map((a) => ACTION[a]).join("、")}</dd>
-            <dt>时限</dt><dd>{clock(item.due_at)} 前</dd>
+            <dt>场景</dt><dd>{SCENE[item.scene] ?? item.scene}，可用处置：{sceneActions.map((a) => ACTION[a]).join("、")}</dd>
+            <dt>截止时间</dt><dd>{clock(item.due_at)}</dd>
             <dt>规则版本</dt><dd className="mono">{item.rules_ver}</dd>
           </dl>
           {t ? (restricted ?? open ? <ContentHeader t={(restricted ?? open)!} /> : (
-            <div className="hidden-text">原文默认隐藏（{t.content.text_len} 字）
+            <div className="hidden-text">原文默认不显示（{t.content.text_len} 字）
               <button className="btn sm" onClick={() => void openRestricted()} disabled={!reviewer}>查看原文</button></div>
           )) : null}
         </div>
       </Panel>
 
       {!closed ? (
-        <Panel title="裁决" sub="人工裁决同样过提交检查">
+        <Panel title="裁决" sub="人工裁决同样需要通过提交校验">
           <div className="stack" style={{ gap: 14 }}>
-            {!mine ? <Alert tone="info">{takenByOther ? "这条任务已被其他审核员领取。" : "先领取任务，再提交裁决。"}</Alert> : null}
+            {!mine ? <Alert tone="info">{takenByOther ? "该任务已被其他审核员领取。" : "请先领取任务，再提交裁决。"}</Alert> : null}
             <div className="row" style={{ gap: 12 }}>
               <div className="seg" role="radiogroup" aria-label="处置">
-                {sceneActions.map((a) => <button key={a} role="radio" aria-checked={action === a} className={action === a ? "on" : ""} disabled={!mine || !usable(a)} title={usable(a) ? undefined : "本场景的规则不支持这个处置"} onClick={() => { setAction(a); setRuleIds(a === "pass" ? [] : ruleOptions.filter((r) => r.default_action === a).map((r) => r.rule_id).slice(0, 1)); }}>{ACTION[a]}</button>)}
+                {sceneActions.map((a) => <button key={a} role="radio" aria-checked={action === a} className={action === a ? "on" : ""} disabled={!mine || !usable(a)} title={usable(a) ? undefined : "当前场景的规则不支持该处置"} onClick={() => { setAction(a); setRuleIds(a === "pass" ? [] : ruleOptions.filter((r) => r.default_action === a).map((r) => r.rule_id).slice(0, 1)); }}>{ACTION[a]}</button>)}
               </div>
               {action !== "pass" ? ruleOptions.filter((r) => r.default_action === action).map((r) => (
                 <label key={r.rule_id} className="check"><input type="checkbox" checked={ruleIds.includes(r.rule_id)} onChange={(e) => setRuleIds(e.target.checked ? [...ruleIds, r.rule_id] : ruleIds.filter((x) => x !== r.rule_id))} />{QUESTION[r.rule_id] ?? r.rule_id} <span className="mono faint">{r.rule_id}</span></label>
               )) : null}
             </div>
-            <label className="field"><span className="field-l">理由</span><textarea className="textarea" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="简要说明判断依据（受限内容，不进脱敏视图）" disabled={!mine} /></label>
-            {stuck ? <label className="check small"><input type="checkbox" checked={feedback} onChange={(e) => setFeedback(e.target.checked)} disabled={!mine} />写入回流标注：{stuck} → {action === "pass" ? "不违规" : "违规"}</label> : null}
+            <label className="field"><span className="field-l">理由</span><textarea className="textarea" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="简要说明判断依据" disabled={!mine} /></label>
+            {stuck ? <label className="check small"><input type="checkbox" checked={feedback} onChange={(e) => setFeedback(e.target.checked)} disabled={!mine} />同时记为反馈标注：{stuck} → {action === "pass" ? "不违规" : "违规"}</label> : null}
             {msg ? <Alert tone={msg.tone}>{msg.text}</Alert> : null}
             <div className="row"><button className="btn primary" disabled={!mine || busy || (action !== "pass" && ruleIds.length === 0)} onClick={() => void submit()}>提交裁决</button></div>
           </div>

@@ -39,7 +39,7 @@ export function Reviews() {
 
   return (
     <>
-      <PageHead title="审次" desc="每次审核（快判、agent、人工、申诉重审）是一个审次。点一行查看这条内容的完整时间线。" />
+      <PageHead title="审次" desc="每一次审核（快判、agent、人工或申诉重审）都记为一个审次。点击任一行可查看该内容的完整时间线。" />
       <Panel>
         <div className="filters">
           {sel("route", "路径", ROUTES.map((r) => [r, ROUTE[r]]))}
@@ -53,9 +53,9 @@ export function Reviews() {
           <button className="btn wide" onClick={() => { setF(NONE); setPage(0); }} disabled={JSON.stringify(f) === JSON.stringify(NONE)}>重置</button>
         </div>
       </Panel>
-      <Panel title="审次列表" sub={`共 ${total.toLocaleString("en-US")} 条${config.mode === "demo" ? "（演示模式只保留最近的模拟内容）" : ""}`} flush actions={
+      <Panel title="审次列表" sub={`共 ${total.toLocaleString("en-US")} 条${config.mode === "demo" ? "（演示环境仅保留最近的模拟内容）" : ""}`} flush actions={
         <div className="row small">
-          <button className={`btn sm ${following ? "" : "ghost"}`} onClick={toggleFollow} aria-pressed={follow} title={follow ? "新审次到达时自动刷新（第一页）；点一下停住列表" : "列表已停住；点一下恢复自动刷新"}>
+          <button className={`btn sm ${following ? "" : "ghost"}`} onClick={toggleFollow} aria-pressed={follow} title={follow ? "有新审次时自动刷新第一页；点击可暂停" : "已暂停刷新；点击恢复自动刷新"}>
             <span className={`dot ${following ? "pulse" : ""}`} style={{ background: following ? "var(--good)" : "var(--text-3)" }} />{follow ? "跟随最新" : "已暂停刷新"}
           </button>
           <button className="btn sm" disabled={page === 0} onClick={() => goPage(page - 1)}>上一页</button>
@@ -64,7 +64,7 @@ export function Reviews() {
         </div>
       }>
         {list.error ? <div className="panel-b"><Alert tone="bad">{list.error}</Alert></div> : null}
-        {!list.data ? <Empty>加载中…</Empty> : list.data.items.length === 0 ? <Empty>没有符合条件的审次。可以在“提交与追踪”提交一条内容。</Empty> : (
+        {!list.data ? <Empty>加载中…</Empty> : list.data.items.length === 0 ? <Empty>没有符合条件的审次。可在“提交与追踪”中提交内容。</Empty> : (
           <div className="table-wrap">
             <table className="table stackable">
               <thead><tr><th>内容</th><th>场景</th><th>路径</th><th>原因</th><th>状态</th><th>结论</th><th>处理方</th><th className="num">agent 费用</th><th className="num">创建</th></tr></thead>

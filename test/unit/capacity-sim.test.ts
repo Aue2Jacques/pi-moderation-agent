@@ -54,7 +54,7 @@ describe("capacity simulation (own pool)", () => {
     expect(s.cards.filter((c) => c.role === "judge").length).toBe(judges - 1);
     run(s, 2);
     expect(s.cards.filter((c) => c.role === "judge").length).toBeGreaterThanOrEqual(judges - 1);
-    expect(s.events.some((e) => e.text.includes("借"))).toBe(true);
+    expect(s.events.some((e) => e.text.includes("借调"))).toBe(true);
     run(s, 40);
     expect(s.cards.filter((c) => c.role === "failed")).toHaveLength(0);
   });

@@ -35,10 +35,10 @@ const sec = (s: number): string => (s < 1 ? `${Math.round(s * 1000)} ms` : s < 6
 const count = (n: number): string => (n >= 10_000 ? `${(n / 10_000).toFixed(n >= 1e6 ? 0 : 1)} 万` : Math.round(n).toLocaleString("en-US"));
 
 function cellText(c: Card): { role: string; sub: string } {
-  if (c.role === "judge") return { role: "判官", sub: c.mixed ? "混跑补审" : `批 ${c.batch}` };
+  if (c.role === "judge") return { role: "判官", sub: c.mixed ? "兼跑补审" : `批 ${c.batch}` };
   if (c.role === "offline") return { role: JOB_INFO[c.job ?? "batch"].short, sub: "离线" };
   if (c.role === "switching") return { role: c.toward === "judge" ? "→判官" : `→${JOB_INFO[c.job ?? "batch"].short}`, sub: "切换中" };
-  return { role: "故障", sub: "已摘除" };
+  return { role: "故障", sub: "已移出" };
 }
 
 /** The pool: one cell per card, coloured by role. */
@@ -47,8 +47,8 @@ function Pool({ sim }: { sim: Sim }) {
     <div className="pool" role="list" aria-label="GPU 卡池">
       {sim.cards.map((c) => {
         const t = cellText(c);
-        const title = c.role === "judge" ? `GPU ${c.id}：判官，利用率 ${Math.round(c.util * 100)}%${c.mixed ? "，余量在混跑补审 / 回扫" : ""}`
-          : c.role === "offline" ? `GPU ${c.id}：${JOB_INFO[c.job ?? "batch"].label}` : c.role === "switching" ? `GPU ${c.id}：切换中（约半分钟）` : `GPU ${c.id}：健康检查失败，已从路由摘除`;
+        const title = c.role === "judge" ? `GPU ${c.id}：判官，利用率 ${Math.round(c.util * 100)}%${c.mixed ? "，余量用于补审与回扫" : ""}`
+          : c.role === "offline" ? `GPU ${c.id}：${JOB_INFO[c.job ?? "batch"].label}` : c.role === "switching" ? `GPU ${c.id}：切换中，约需半分钟` : `GPU ${c.id}：健康检查失败，已移出路由`;
         return (
           <div key={c.id} role="listitem" className={`pc ${c.role} ${c.role === "offline" && c.job === "train" ? "train" : ""} ${c.mixed ? "mixed" : ""}`} title={title}>
             <span className="pc-id mono">{String(c.id).padStart(2, "0")}</span>
@@ -112,14 +112,14 @@ function DayChart({ sim }: { sim: Sim }) {
 }
 
 function SwitchCost({ sim }: { sim: Sim }) {
-  const kinds: [SwitchKind, string][] = [["infer_to_judge", "推理类离线任务 → 判官"], ["train_to_judge", "训练 → 判官"], ["judge_to_offline", "判官 → 离线任务"]];
+  const kinds: [SwitchKind, string][] = [["infer_to_judge", "推理任务 → 判官"], ["train_to_judge", "训练 → 判官"], ["judge_to_offline", "判官 → 离线任务"]];
   const max = Math.max(...kinds.map(([k]) => switchSeconds(k)));
   const last = sim.lastSwitch;
   return (
     <div className="swc">
       {kinds.map(([k, label]) => (
         <div key={k} className={`swc-row ${last?.kind === k ? "hit" : ""}`}>
-          <div className="swc-h"><span>{label}</span><span className="num">约 {Math.round(switchSeconds(k))} 秒{last?.kind === k ? <span className="faint">（最近：GPU {last.card}，{simClock(last.t)}）</span> : null}</span></div>
+          <div className="swc-h"><span>{label}</span><span className="num">约 {Math.round(switchSeconds(k))} 秒{last?.kind === k ? <span className="faint">（最近一次：GPU {last.card}，{simClock(last.t)}）</span> : null}</span></div>
           <div className="swc-bar" style={{ width: `${(switchSeconds(k) / max) * 100}%` }}>
             {SWITCH_STEPS[k].map((st) => <i key={st} className={`s-${st} ${SWITCH[st].measured ? "" : "est"}`} style={{ flexGrow: SWITCH[st].s }} title={`${SWITCH[st].label}：${SWITCH[st].s} s${SWITCH[st].measured ? "（实测）" : "（估计）"}`} />)}
           </div>
@@ -131,20 +131,20 @@ function SwitchCost({ sim }: { sim: Sim }) {
         ))}
       </ul>
       <p className="small faint">
-        单张 5060 Ti 实测；判官 6.3 GB + 训练 12.3 GB 超过 16 GB，所以这张卡上要整卡切换。录 CUDA graphs 占约四成，
-        它只降低单条延迟、不影响批量吞吐，先不录图就上岗约 17 秒（路线 M3）。24 GB 以上的卡可以让判官常驻，切换只剩暂停训练。
+        以上为单张 5060 Ti 的实测结果。判官占用 6.3 GB、训练峰值 12.3 GB，合计超过 16 GB，因此该型号需要整卡切换。
+        录制 CUDA graphs 约占切换时间的四成；它只降低单条延迟、不影响批量吞吐，因此可以先不录制直接上线，约 17 秒即可接收请求（路线 M3）。显存 24 GB 及以上的卡可让判官常驻，切换时只需暂停训练。
       </p>
     </div>
   );
 }
 
 const ROUTE: { id: string; name: string; what: string; accept: string }[] = [
-  { id: "M1", name: "kevfast 两级优先级", what: "在线先、离线后；离线批限大小", accept: "离线跑满时在线 p95 多不超过一批（约 0.5 s）" },
-  { id: "M2", name: "LoRA 断点续训", what: "kev.train 支持 LoRA 的 resume，响应 SIGUSR1", accept: "随机一步打断后恢复，loss 与不中断的同种子训练逐步对齐" },
-  { id: "M3", name: "判官快速上岗", what: "先不录图就服务，空闲时补录", accept: "启动到能接批量 ≤ 18 s" },
-  { id: "M4", name: "节点代理", what: "每张卡的进程管理、角色切换、超时与故障上报", accept: "单卡\"训练 → 判官 → 训练\"往返 20 次，无残留进程和显存" },
-  { id: "M5", name: "调度器 + 判官池路由", what: "预测借卡、抢占顺序、亲和路由、gpu_switch 表", accept: "回放一天流量；杀判官进程后 1 分钟内补上" },
-  { id: "M6", name: "降级档位接入", what: "关复问按请求切换，deferred 补审队列", accept: "切档时在途请求不报错，低峰清空补审队列" },
+  { id: "M1", name: "kevfast 两级优先级", what: "在线请求优先，离线请求限制批大小", accept: "离线任务满载时，在线 p95 增加不超过一个批次（约 0.5 秒）" },
+  { id: "M2", name: "LoRA 断点续训", what: "kev.train 支持 LoRA 断点恢复，并响应 SIGUSR1", accept: "在任意一步中断并恢复后，loss 与同种子的不中断训练逐步一致" },
+  { id: "M3", name: "判官快速上线", what: "先不录制 CUDA graphs 即开始服务，空闲时补录", accept: "从启动到可接收批量请求不超过 18 秒" },
+  { id: "M4", name: "节点代理", what: "管理每张卡的进程、角色切换、超时与故障上报", accept: "单卡完成 20 次“训练 → 判官 → 训练”往返，无残留进程与显存" },
+  { id: "M5", name: "调度器与判官池路由", what: "预测借调、抢占顺序、亲和路由与切换记录", accept: "回放一整天的流量；判官进程被终止后 1 分钟内补位" },
+  { id: "M6", name: "降级档位接入", what: "复问按请求开关，新增补审队列", accept: "切换档位时在途请求不报错，低峰时补审队列清空" },
 ];
 
 function Route() {
@@ -194,12 +194,12 @@ function Latency({ sim }: { sim: Sim }) {
         <span className="slo-l" style={{ top: `${(1 - SLO_S / top) * 100}%` }}>目标 {SLO_S} s</span>
       </div>
       <div className="kv4">
-        <div><span className="k">现在</span><span className={`v num ${sim.doneS > SLO_S ? "bad-t" : ""}`}>{sec(sim.doneS)}</span></div>
-        <div><span className="k">今天超目标</span><span className={`v num ${over ? "bad-t" : ""}`}>{over}<small> 分钟</small></span></div>
-        <div><span className="k">今天最差</span><span className="v num">{sec(worst)}</span></div>
+        <div><span className="k">当前</span><span className={`v num ${sim.doneS > SLO_S ? "bad-t" : ""}`}>{sec(sim.doneS)}</span></div>
+        <div><span className="k">今日超标</span><span className={`v num ${over ? "bad-t" : ""}`}>{over}<small> 分钟</small></span></div>
+        <div><span className="k">今日最差</span><span className="v num">{sec(worst)}</span></div>
         <div><span className="k">降级时长</span><span className="v num">{degraded}<small> 分钟</small></span></div>
       </div>
-      <p className="small faint">发布到审完 p95，近 4 小时（模拟时间）。agent 并发上限 {AGENT_CAP} 次/秒，当前约 {Math.round(sim.agentShare * 100)}% 的内容转 agent。</p>
+      <p className="small faint">发布到审核完成的 p95，近 4 小时（模拟时间）。agent 并发上限为每秒 {AGENT_CAP} 次，当前约 {Math.round(sim.agentShare * 100)}% 的内容转交 agent。</p>
     </div>
   );
 }
@@ -208,8 +208,8 @@ function Jobs({ sim }: { sim: Sim }) {
   return (
     <div className="jobs">
       <div className="job">
-        <div className="job-t">补审高峰暂缓的内容<span className="faint"> · 在判官卡上低优先级混跑</span></div>
-        <div className="job-v num">{count(sim.deferred)} 待补 · 已补 {count(sim.backfilled)}</div>
+        <div className="job-t">补审高峰期暂缓的内容<span className="faint"> · 在判官卡上以低优先级执行</span></div>
+        <div className="job-v num">待补审 {count(sim.deferred)} · 已补审 {count(sim.backfilled)}</div>
       </div>
       {sim.jobs.map((j) => {
         const p = Math.min(1, j.done / j.need);
@@ -218,13 +218,13 @@ function Jobs({ sim }: { sim: Sim }) {
           <div key={j.kind} className="job">
             <div className="job-t">{JOB_INFO[j.kind].label}{JOB_INFO[j.kind].measured ? <span className="m">耗时实测</span> : null}</div>
             <div className="job-bar"><span style={{ width: `${p * 100}%` }} className={p >= 1 ? "full" : ""} /></div>
-            <div className="job-v num">{p >= 1 ? "完成" : `${Math.round(p * 100)}%`} · {j.need >= 60 ? `${(j.need / 60).toFixed(1)} 卡时` : `${j.need} 卡分钟`}{on ? ` · ${on} 张卡在跑` : ""}</div>
+            <div className="job-v num">{p >= 1 ? "完成" : `${Math.round(p * 100)}%`} · {j.need >= 60 ? `${(j.need / 60).toFixed(1)} 卡时` : `${j.need} 卡分钟`}{on ? ` · ${on} 张卡运行中` : ""}</div>
           </div>
         );
       })}
       <div className="job">
-        <div className="job-t">其他团队的批处理<span className="faint"> · 卡池没有平台任务时兜底，最先被抢占</span></div>
-        <div className="job-v num">今天累计 {(sim.batchDone / 60).toFixed(1)} 卡时</div>
+        <div className="job-t">其他团队的批处理任务<span className="faint"> · 无平台任务时运行，最先被抢占</span></div>
+        <div className="job-v num">今日累计 {(sim.batchDone / 60).toFixed(1)} 卡时</div>
       </div>
     </div>
   );
@@ -236,7 +236,7 @@ function Log({ sim }: { sim: Sim }) {
   return (
     <>
       <ul className="cap-log">{rows.map((e, i) => <li key={`${e.t}-${i}`} className={e.tone}><span className="mono faint">{simClock(e.t)}</span><span>{e.text}</span></li>)}</ul>
-      {sim.events.length > 6 ? <button className="btn sm ghost log-more" onClick={() => setAll(!all)}>{all ? "收起" : "展开更多"}</button> : null}
+      {sim.events.length > 6 ? <button className="btn sm ghost log-more" onClick={() => setAll(!all)}>{all ? "收起" : "查看更多"}</button> : null}
     </>
   );
 }
@@ -252,7 +252,7 @@ export function Capacity() {
     <>
       <div className="cap-head">
         <h1>容量与调度</h1>
-        <p>公司自有的 {CARDS} 张卡一直在干活：平时跑训练、聚类、OCR 等离线任务，高峰前把它们借来做判官，过后还回去。<b>本页是前端模拟</b>，切换耗时为单卡实测，其余为假设（见页底）。</p>
+        <p>公司自有的 {CARDS} 张 GPU 始终保持运行：平时执行训练、聚类、OCR 等离线任务，高峰来临前借调为判官，高峰过后归还。<b>本页为前端模拟</b>，切换耗时为单卡实测，其余参数为假设，详见页底。</p>
       </div>
       <section className="hero cap-hero" aria-label="模拟一天">
         <div className="cap-top">
@@ -262,9 +262,9 @@ export function Capacity() {
           </div>
           <div className="cap-stats">
             <div><span className="k">流量</span><span className="v num">{Math.round(sim.demand)}<small> /s</small></span></div>
-            <div><span className="k">判官 · 离线</span><span className="v num">{judges}<small> · </small>{offline}{switching ? <small> +{switching}切</small> : null}</span></div>
-            <div><span className="k">审完 p95</span><span className={`v num ${sim.doneS > SLO_S ? "bad-t" : ""}`}>{sec(sim.doneS)}</span></div>
-            <div><span className="k">降级</span><span className={`v ${sim.level ? "warn-t" : ""}`}>{sim.level ? `${sim.level} 档` : "无"}</span></div>
+            <div><span className="k">判官 · 离线</span><span className="v num">{judges}<small> · </small>{offline}{switching ? <small> +{switching} 切换中</small> : null}</span></div>
+            <div><span className="k">审核完成 p95</span><span className={`v num ${sim.doneS > SLO_S ? "bad-t" : ""}`}>{sec(sim.doneS)}</span></div>
+            <div><span className="k">降级</span><span className={`v ${sim.level ? "warn-t" : ""}`}>{sim.level ? `第 ${sim.level} 档` : "无"}</span></div>
             <div><span className="k">卡池利用率</span><span className="v num">{Math.round(sim.poolUtil * 100)}%</span></div>
           </div>
         </div>
@@ -274,7 +274,7 @@ export function Capacity() {
             <Pool sim={sim} />
           </div>
           <div className="cap-chart">
-            <div className="cap-sec-h"><span>今天</span><span className="faint">流量与判官算力（条/秒）；下方是卡的分配</span></div>
+            <div className="cap-sec-h"><span>今天</span><span className="faint">流量与判官算力（条/秒），下方为卡的分配</span></div>
             <DayChart sim={sim} />
           </div>
         </div>
@@ -286,22 +286,22 @@ export function Capacity() {
             </div>
             <span className="spacer" />
             <button className="btn sm" onClick={() => act(spike)}>突发热点</button>
-            <button className="btn sm" onClick={() => act(failCard)}>拔掉一张卡</button>
-            <button className="btn sm ghost" onClick={() => reset()}>重来</button>
+            <button className="btn sm" onClick={() => act(failCard)}>模拟单卡故障</button>
+            <button className="btn sm ghost" onClick={() => reset()}>重新开始</button>
           </div>
           <details className="cap-flags">
-            <summary>策略开关（切换后从 06:00 重来）</summary>
+            <summary>策略开关（修改后从 06:00 重新开始）</summary>
             <div className="row">
-              <label className="chk"><input type="checkbox" checked={sim.flags.predict} onChange={() => toggle("predict")} />按预测提前借卡</label>
+              <label className="chk"><input type="checkbox" checked={sim.flags.predict} onChange={() => toggle("predict")} />按预测提前借调</label>
               <label className="chk"><input type="checkbox" checked={sim.flags.degrade} onChange={() => toggle("degrade")} />自动降级</label>
-              <label className="chk"><input type="checkbox" checked={sim.flags.evidence} onChange={() => toggle("evidence")} />Kev 带证据复判（agent 15% → 5%）</label>
+              <label className="chk"><input type="checkbox" checked={sim.flags.evidence} onChange={() => toggle("evidence")} />Kev 带证据复判（agent 占比 15% → 5%）</label>
             </div>
           </details>
         </div>
       </section>
 
       <div className="grid g-main cap-gap">
-        <Panel title="一次切换要多久" sub="单张 5060 Ti 实测（python/kevfast/switch_bench.py）">
+        <Panel title="单次切换耗时" sub="单张 5060 Ti 实测，脚本见 python/kevfast/switch_bench.py">
           <SwitchCost sim={sim} />
         </Panel>
         <Panel title="调度日志" sub="模拟时间" flush>
@@ -310,19 +310,19 @@ export function Capacity() {
       </div>
 
       <div className="grid g-2 cap-gap">
-        <Panel title="延迟" sub={`目标：发布到审完 p95 ≤ ${SLO_S} 秒；作者发完自己立刻可见`}>
+        <Panel title="延迟" sub={`目标：发布到审核完成的 p95 不超过 ${SLO_S} 秒；作者本人发布后即可看到`}>
           <Latency sim={sim} />
         </Panel>
-        <Panel title="降级梯子" sub="只有卡池全借完还不够时才升档">
+        <Panel title="降级档位" sub="仅当卡池全部借调仍不足时升档">
           <Ladder sim={sim} />
         </Panel>
       </div>
 
       <div className="grid g-2 cap-gap">
-        <Panel title="离线任务" sub="零点平台任务入队，排在其他团队的批处理前面">
+        <Panel title="离线任务" sub="平台任务于零点入队，优先于其他团队的批处理">
           <Jobs sim={sim} />
         </Panel>
-        <Panel title="实现路线" sub="还没做；每一步都有真卡上的验收标准">
+        <Panel title="实施路线" sub="尚未实施；每一步均设有真机验收标准">
           <Route />
           <p className="small faint" style={{ marginTop: 10 }}>完整方案：docs/gpu-scheduling-plan-2026-10-09.md</p>
         </Panel>
