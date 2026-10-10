@@ -114,7 +114,9 @@ export class HarnessRecordStore {
         over_budget: agentReviews.filter((r) => Number(r["over_budget_micro"] ?? 0) > 0).length },
       recovery: { reacquired: agentReviews.filter((r) => Number(r["attempt"]) > 1).length, yield_prompts: agentReviews.filter((r) => Number(r["yield_continues"]) > 0).length, released },
       latency_ms: { agent_p50: pct(times, 0.5), agent_p95: pct(times, 0.95) },
-      sessions,
+      // only what the replay plays: finished agent sessions, newest first; the page reloads this every 10 s through a
+      // proxy, and the full list (every review) grew past 600 KB at demo rates
+      sessions: sessions.filter((s) => s.route === "agent" && s.steps > 0 && s.state !== "queued" && s.state !== "investigating").reverse().slice(0, 300),
     };
     this.#at = Date.now();
     return this.#summary;

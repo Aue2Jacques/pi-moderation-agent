@@ -269,6 +269,7 @@ export type HarnessRecord = {
   budget: { sessions: number; tools_avg: number; tools_max: number; tools_limit: number; cost_avg_micro: number; cost_max_micro: number; cost_limit_micro: number; over_budget: number };
   recovery: { reacquired: number; yield_prompts: number; released: Record<string, number> };
   latency_ms: { agent_p50: number | null; agent_p95: number | null };
+  /** the finished agent sessions the replay can play, newest first, at most 300 (the counts above cover every row) */
   sessions: RecordSession[];
 };
 

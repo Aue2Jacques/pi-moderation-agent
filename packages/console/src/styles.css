@@ -909,3 +909,4 @@ details.more[open] summary::before { transform: rotate(90deg); }
   .ag-cats { margin: 0 12px 8px; }
   .feed-box { height: 380px; }
 }
+.ag-wait { padding: 18px 22px; }

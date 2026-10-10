@@ -82,25 +82,40 @@ function useFeed(source: Source, cat: string, running: boolean) {
     const push = (r: Row): void => setRows((xs) => [...xs, r].slice(-MAX_ROWS));
     const hold = async (ms: number): Promise<void> => { const end = Date.now() + ms; while (alive && !skip.current && (Date.now() < end || !run.current)) await sleep(100); };
     setRows([]);
+    // timelines are fetched once and the next one while the current plays, so a session never waits on the network
+    const cache = new Map<string, Promise<ContentTimeline | null>>();
+    const fetchT = (id: string): Promise<ContentTimeline | null> => { let p = cache.get(id); if (!p) { p = source.timeline(id).catch(() => null); cache.set(id, p); if (cache.size > 20) cache.delete(cache.keys().next().value!); } return p; };
+    let first = true;
     void (async () => {
       while (alive) {
         const all = await source.list().catch(() => [] as Pick[]);
-        const list = interleave(all.filter((x) => cat === "all" || x.category === cat));
-        if (!list.length) { await sleep(3000); continue; }
+        const list = first ? all.filter((x) => cat === "all" || x.category === cat) : interleave(all.filter((x) => cat === "all" || x.category === cat));
+        if (!list.length) { await sleep(1500); continue; }
         const pick = list[n++ % list.length]!;
-        const t = await source.timeline(pick.content_id).catch(() => null);
+        const ahead = list[n % list.length];
+        if (ahead) void fetchT(ahead.content_id);
+        const t = await fetchT(pick.content_id);
         const r = t?.reviews.find((x) => x.review_id === pick.review_id) ?? t?.reviews.find((x) => x.steps.length > 0);
         if (!alive || !t || !r || !r.steps.length) continue;
         skip.current = false;
         push({ key: `${r.review_id}-h-${n}`, kind: "head", t, r, category: pick.category });
-        setNode("brief"); setCur(undefined);
-        await hold(900);
         const t0 = r.steps[0]!.at;
+        if (first) {
+          // the newest finished session is shown whole at once; the ones after it play step by step
+          first = false;
+          for (const st of r.steps) push({ key: `${r.review_id}-${st.call_id}-${n}`, kind: "step", s: st, t0 });
+          const last = r.steps[r.steps.length - 1]!;
+          setNode(beats(last).at(-1)!); setCur(last);
+          await hold(1500);
+          continue;
+        }
+        setNode("brief"); setCur(undefined);
+        await hold(600);
         for (const st of r.steps) {
-          for (const b of beats(st)) { if (!alive) return; if (!skip.current) { setNode(b); setCur(st); await hold(320); } }
+          for (const b of beats(st)) { if (!alive) return; if (!skip.current) { setNode(b); setCur(st); await hold(300); } }
           push({ key: `${r.review_id}-${st.call_id}-${n}`, kind: "step", s: st, t0 });
         }
-        await hold(1600);
+        await hold(1400);
       }
     })();
     return () => { alive = false; };
@@ -145,7 +160,7 @@ function Live({ rec }: { rec: HarnessRecord | null }) {
   const hasRec = !!rec;
   const source = useMemo<Source>(() => hasRec ? {
     record: true,
-    list: async () => { const rec = recRef.current!; const xs = rec.sessions.filter((x) => x.route === "agent" && x.steps > 0 && x.state !== "investigating" && x.state !== "queued").map((x) => ({ content_id: x.content_id, review_id: x.review_id, category: x.category })); return rec.live ? xs.reverse().slice(0, 300) : xs; },
+    list: async () => recRef.current!.sessions.map((x) => ({ content_id: x.content_id, review_id: x.review_id, category: x.category })),
     timeline: (id) => api.get<ContentTimeline>(`/api/harness/record/contents/${encodeURIComponent(id)}`),
   } : {
     record: false,
@@ -186,7 +201,7 @@ function Live({ rec }: { rec: HarnessRecord | null }) {
       <div className="ag-main">
         <Loop node={node} cur={cur} />
         <div className="ag-session">
-          {rows.length ? <FeedBox rows={rows} /> : <div className="feed-box empty">{rec ? "正在载入记录…" : "暂无已完成的 agent 会话；开启模拟流量后数秒内即会出现"}</div>}
+          {rows.length ? <FeedBox rows={rows} /> : <div className="feed-box empty">{rec ? "正在载入会话…" : "暂无已完成的 agent 会话；开启模拟流量后数秒内即会出现"}</div>}
           <div className="row ag-ctl">
             <button className="btn sm" onClick={() => setRunning(!running)}>{running ? "暂停" : "继续"}</button>
             <button className="btn sm" onClick={next}>跳到下一个会话</button>
@@ -297,15 +312,18 @@ const TOOLS: { name: string; what: string; ev: boolean; ext: boolean }[] = [
 ];
 
 export function Agent() {
-  const rec = usePoll<HarnessRecord | { available: false }>("/api/harness/record", 10_000).data;
+  const recQ = usePoll<HarnessRecord | { available: false }>("/api/harness/record", 10_000);
+  const rec = recQ.data;
   const record = rec && rec.available ? rec : null;
+  // the replay starts once it is known whether a record exists, so it does not start on the fallback and restart
+  const ready = rec !== null || recQ.error !== null;
   return (
     <>
       <div className="cap-head">
         <h1>Agent 与 Harness</h1>
         <p>审核 agent 运行在 Pi 上，每个可疑<Term k="审次" />对应一个持久会话。模型自行决定获取哪些<Term k="证据" />、是否复判；<Term k="harness" /> 在每一步外设置约束，决定它能否执行、能否提交。上半部分回放会话，中间是 harness 在真实运行中的统计，下半部分介绍各项约束的实现与验证。</p>
       </div>
-      <Live rec={record} />
+      {ready ? <Live rec={record} /> : <section className="hero ag-hero ag-wait" aria-busy="true"><div className="feed-box empty">正在载入…</div></section>}
       {record ? <div className="cap-gap"><RecordStats rec={record} /></div> : null}
 
       <div className="cap-gap">
