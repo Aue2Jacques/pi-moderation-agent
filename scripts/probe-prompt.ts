@@ -44,6 +44,14 @@ const cases = new Map(readFileSync(casesPath!, "utf8").split("\n").filter(Boolea
 const db = new DatabaseSync(dbPath!, { readOnly: true });
 const ids = (db.prepare("SELECT content_id FROM review WHERE release_reason IN ('evidence_gap','agent_stalled')").all() as { content_id: string }[]).map((r) => r.content_id);
 
+/** candidate preprocessing: undo the adversarial spacing / emoji splitting the eval set carries (adversarial/space,
+ *  adversarial/emoji) — drop emoji, and whitespace or filler punctuation between two CJK characters */
+const CJK = "\\u3000-\\u303f\\u3400-\\u9fff\\uff00-\\uffef";
+export function restore(t: string): string {
+  return t.replace(/\p{Extended_Pictographic}|\uFE0F|\u200D/gu, "")
+    .replace(new RegExp(`(?<=[${CJK}])[\\s·・._\\-*~]+(?=[${CJK}])`, "gu"), "");
+}
+const PREPROCESS = process.env["PROBE_RESTORE"] === "1";
 type Verdict = "pass" | "act" | "middle" | "error";
 async function verdict(qs: Question[], text: string): Promise<{ v: Verdict; p: Record<string, number> }> {
   const res = await judge.classify({ contentId: "probe", text: core.modelView(text), scene: "comment", evidence: [], questions: qs });
@@ -71,7 +79,7 @@ await Promise.all(Array.from({ length: Number(conc ?? 24) }, async () => {
   while (i < ids.length) {
     const c = cases.get(ids[i++]!);
     if (!c) continue;
-    const [cur, cand] = await Promise.all([verdict(questions, c.target.text), verdict(candidate, c.target.text)]);
+    const [cur, cand] = await Promise.all([verdict(questions, c.target.text), verdict(candidate, PREPROCESS ? restore(c.target.text) : c.target.text)]);
     const exp = c.expected.disposition, want: Verdict | "human" = exp === "pass" ? "pass" : exp === "human" ? "human" : "act";
     const mark = (v: Verdict): string => (v === "middle" || v === "error" ? v : want === "human" ? `${v}_vs_human` : v === want ? "right" : "wrong");
     tally.current.set(mark(cur.v), (tally.current.get(mark(cur.v)) ?? 0) + 1);
@@ -82,4 +90,4 @@ await Promise.all(Array.from({ length: Number(conc ?? 24) }, async () => {
     byKind.set(c.kind, k);
   }
 }));
-console.log(JSON.stringify({ items: ids.length, rulesVer: bundle.rulesVer, current: Object.fromEntries(tally.current), candidate: Object.fromEntries(tally.candidate), byKind: Object.fromEntries(byKind) }, null, 1));
+console.log(JSON.stringify({ items: ids.length, rulesVer: bundle.rulesVer, restore: PREPROCESS, current: Object.fromEntries(tally.current), candidate: Object.fromEntries(tally.candidate), byKind: Object.fromEntries(byKind) }, null, 1));
