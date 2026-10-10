@@ -2,13 +2,13 @@
 // real agent sessions from this deployment (the steps G recorded: tool, arguments, result, hook blocks, submit-check
 // refusals) against the loop diagram; the bottom half lists the guards, the tools and the design record, each with the
 // code and the test that back it.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useConsole } from "../App.tsx";
-import { api, authHeaders, type AgentStep, type ContentTimeline, type ReviewListItem, type ReviewTimeline, type Stats } from "../api.ts";
+import { api, authHeaders, type AgentStep, type ContentTimeline, type HarnessRecord, type ReviewListItem, type ReviewTimeline, type Stats } from "../api.ts";
 import { usePoll } from "../hooks.ts";
 import { reasonText } from "../labels.ts";
 import { StepRow } from "../Timeline.tsx";
-import { ActionBadge, Badge, Id, Panel, duration, yuan, Term } from "../ui.tsx";
+import { ActionBadge, Badge, Id, Kpi, Panel, duration, yuan, Term } from "../ui.tsx";
 
 type Node = "brief" | "model" | "gate" | "tool" | "submit" | "end";
 const NODES: { id: Node; title: string; what: string }[] = [
@@ -29,45 +29,6 @@ function beats(s: AgentStep): Node[] {
   return EVIDENCE_TOOLS.has(s.tool) ? ["model", "gate", "tool"] : ["model", "gate"];
 }
 
-function useSession(demo: boolean) {
-  const { reviewer } = useConsole();
-  const list = usePoll<{ items: ReviewListItem[] }>("/api/review-list?route=agent&limit=40", 8000);
-  const [idx, setIdx] = useState(0);
-  const [t, setT] = useState<ContentTimeline | null>(null);
-  const done = useMemo(() => (list.data?.items ?? []).filter((x) => x.state !== "queued" && x.state !== "investigating"), [list.data]);
-  const pick = done.length ? done[idx % done.length] : undefined;
-  useEffect(() => {
-    if (!pick) return;
-    let live = true;
-    const path = `/api/contents/${encodeURIComponent(pick.content_id)}${demo && reviewer ? "?view=restricted" : ""}`;
-    api.get<ContentTimeline>(path, demo && reviewer ? { ...authHeaders(reviewer), "x-confirm": "yes" } : undefined).then((x) => { if (live) setT(x); }).catch(() => { if (live) setIdx((i) => i + 1); });
-    return () => { live = false; };
-  }, [pick?.review_id]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const review: ReviewTimeline | undefined = t?.reviews.find((r) => r.review_id === pick?.review_id) ?? t?.reviews.find((r) => r.steps.length > 0);
-  return { t, review, next: () => setIdx((i) => i + 1), count: done.length };
-}
-
-/** Reveal a session's steps one by one, three beats each; then hold and move to the next session. */
-function useReplay(review: ReviewTimeline | undefined, running: boolean, onDone: () => void) {
-  const [k, setK] = useState(0);        // steps revealed
-  const [beat, setBeat] = useState(0);  // beat within the step being revealed
-  useEffect(() => { setK(0); setBeat(0); }, [review?.review_id]);
-  useEffect(() => {
-    if (!review || !running) return;
-    const n = review.steps.length;
-    const id = setTimeout(() => {
-      if (k >= n) { onDone(); return; }
-      const bs = beats(review.steps[k]!);
-      if (beat + 1 < bs.length) setBeat(beat + 1);
-      else { setK(k + 1); setBeat(0); }
-    }, k >= n ? 3500 : 420);
-    return () => clearTimeout(id);
-  }, [review, running, k, beat]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const cur = review && k < review.steps.length ? review.steps[k] : undefined;
-  const node: Node = !review ? "brief" : cur ? beats(cur)[beat]! : (review.steps.at(-1) ? beats(review.steps.at(-1)!).at(-1)! : "brief");
-  return { k, node, cur };
-}
-
 function Loop({ node, cur }: { node: Node; cur: AgentStep | undefined }) {
   return (
     <ol className="loop" aria-label="agent 循环">
@@ -82,48 +43,150 @@ function Loop({ node, cur }: { node: Node; cur: AgentStep | undefined }) {
   );
 }
 
-function Live() {
-  const { config } = useConsole();
+const CATS: { id: string; label: string }[] = [
+  { id: "all", label: "全部" }, { id: "normal", label: "正常" }, { id: "hard_negative", label: "易误判" }, { id: "abuse", label: "辱骂" },
+  { id: "adversarial", label: "变形辱骂" }, { id: "marketing", label: "营销引流" }, { id: "injection", label: "注入" },
+];
+const CAT_LABEL: Record<string, string> = Object.fromEntries(CATS.map((c) => [c.id, c.label]));
+
+type Pick = { content_id: string; review_id: string; category: string };
+type Source = { record: boolean; list: () => Promise<Pick[]>; timeline: (id: string) => Promise<ContentTimeline> };
+type Row = { key: string; kind: "head"; t: ContentTimeline; r: ReviewTimeline; category: string } | { key: string; kind: "step"; s: AgentStep; t0: number };
+const MAX_ROWS = 60;
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** Round-robin over categories, so "all" shows every kind in turn. */
+function interleave(xs: Pick[]): Pick[] {
+  const by = new Map<string, Pick[]>();
+  for (const x of xs) by.set(x.category, [...(by.get(x.category) ?? []), x]);
+  const lists = [...by.values()];
+  const out: Pick[] = [];
+  for (let k = 0; out.length < xs.length; k++) for (const l of lists) if (l[k]) out.push(l[k]!);
+  return out;
+}
+
+/**
+ * The replay: one session after another, each step lit up on the loop in beats and appended to the feed; the feed keeps
+ * the last MAX_ROWS rows and only ever grows at the bottom (FeedBox scrolls), so the page below never moves.
+ */
+function useFeed(source: Source, cat: string, running: boolean) {
+  const [rows, setRows] = useState<Row[]>([]);
+  const [node, setNode] = useState<Node>("brief");
+  const [cur, setCur] = useState<AgentStep | undefined>();
+  const run = useRef(running);
+  const skip = useRef(false);
+  run.current = running;
+  useEffect(() => {
+    let alive = true;
+    let n = 0;
+    const push = (r: Row): void => setRows((xs) => [...xs, r].slice(-MAX_ROWS));
+    const hold = async (ms: number): Promise<void> => { const end = Date.now() + ms; while (alive && !skip.current && (Date.now() < end || !run.current)) await sleep(100); };
+    setRows([]);
+    void (async () => {
+      while (alive) {
+        const all = await source.list().catch(() => [] as Pick[]);
+        const list = interleave(all.filter((x) => cat === "all" || x.category === cat));
+        if (!list.length) { await sleep(3000); continue; }
+        const pick = list[n++ % list.length]!;
+        const t = await source.timeline(pick.content_id).catch(() => null);
+        const r = t?.reviews.find((x) => x.review_id === pick.review_id) ?? t?.reviews.find((x) => x.steps.length > 0);
+        if (!alive || !t || !r || !r.steps.length) continue;
+        skip.current = false;
+        push({ key: `${r.review_id}-h-${n}`, kind: "head", t, r, category: pick.category });
+        setNode("brief"); setCur(undefined);
+        await hold(900);
+        const t0 = r.steps[0]!.at;
+        for (const st of r.steps) {
+          for (const b of beats(st)) { if (!alive) return; if (!skip.current) { setNode(b); setCur(st); await hold(320); } }
+          push({ key: `${r.review_id}-${st.call_id}-${n}`, kind: "step", s: st, t0 });
+        }
+        await hold(1600);
+      }
+    })();
+    return () => { alive = false; };
+  }, [source, cat]);
+  return { rows, node, cur, next: () => { skip.current = true; } };
+}
+
+function FeedBox({ rows }: { rows: Row[] }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
+  useEffect(() => { const el = ref.current; if (el && stick.current) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" }); }, [rows]);
+  return (
+    <div className="feed-box" ref={ref} onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60; }}>
+      {rows.map((x) => x.kind === "head" ? <SessionHead key={x.key} t={x.t} r={x.r} category={x.category} /> : <div key={x.key} className="steps feed-step"><StepRow s={x.s} t0={x.t0} i={0} /></div>)}
+    </div>
+  );
+}
+
+function SessionHead({ t, r, category }: { t: ContentTimeline; r: ReviewTimeline; category: string }) {
+  const took = r.ruling && r.steps[0] ? r.ruling.created_at - r.steps[0].at : null;
+  return (
+    <div className="feed-head">
+      <div className="fh-top">
+        {CAT_LABEL[category] ? <Badge>{CAT_LABEL[category]}</Badge> : null}
+        {r.ruling ? <ActionBadge action={r.ruling.action} /> : r.release_reason ? <Badge tone="warn">转人工：{reasonText(r.release_reason)}</Badge> : null}
+        <span className="faint small">{r.agent_model ?? "—"} · 工具 {r.tools_used}/{r.budget_tools} 次 · {yuan(r.used_micro)}{took !== null ? ` · ${duration(took)}` : ""}</span>
+      </div>
+      {t.content.text ? <div className="fh-text">{t.content.text}</div> : <div className="fh-text faint"><Id value={t.content.content_id} /></div>}
+    </div>
+  );
+}
+
+function Live({ rec }: { rec: HarnessRecord | null }) {
+  const { config, reviewer } = useConsole();
   const demo = config.mode === "demo";
   const [running, setRunning] = useState(true);
-  const { t, review, next, count } = useSession(demo);
-  const { k, node, cur } = useReplay(review, running, next);
-  const stats = usePoll<Stats>("/api/stats", 5000).data;
-  const shown = review ? review.steps.slice(0, k + (cur ? 1 : 0)) : [];
-  const took = review?.ruling ? review.ruling.created_at - review.created_at : null;
+  const [cat, setCat] = useState("all");
+  const stats = usePoll<Stats>(rec ? null : "/api/stats", 5000).data;
+  const source = useMemo<Source>(() => rec ? {
+    record: true,
+    list: async () => rec.sessions.filter((x) => x.route === "agent" && x.steps > 0).map((x) => ({ content_id: x.content_id, review_id: x.review_id, category: x.category })),
+    timeline: (id) => api.get<ContentTimeline>(`/api/harness/record/contents/${encodeURIComponent(id)}`),
+  } : {
+    record: false,
+    list: async () => (await api.get<{ items: ReviewListItem[] }>("/api/review-list?route=agent&limit=40")).items.filter((x) => x.state !== "queued" && x.state !== "investigating").map((x) => ({ content_id: x.content_id, review_id: x.review_id, category: "live" })),
+    timeline: (id) => api.get<ContentTimeline>(`/api/contents/${encodeURIComponent(id)}${demo && reviewer ? "?view=restricted" : ""}`, demo && reviewer ? { ...authHeaders(reviewer), "x-confirm": "yes" } : undefined),
+  }, [rec, demo, reviewer]);
+  const { rows, node, cur, next } = useFeed(source, cat, running);
+  const b = rec ? (cat === "all" ? Object.values(rec.by_category).reduce((a, x) => ({ n: a.n + x.n, fast: a.fast + x.fast_pass + x.fast_block, agent: a.agent + x.agent, disposed: a.disposed + x.agent_disposed, released: a.released + x.agent_released }), { n: 0, fast: 0, agent: 0, disposed: 0, released: 0 })
+    : (() => { const x = rec.by_category[cat]; return x ? { n: x.n, fast: x.fast_pass + x.fast_block, agent: x.agent, disposed: x.agent_disposed, released: x.agent_released } : { n: 0, fast: 0, agent: 0, disposed: 0, released: 0 }; })()) : null;
   return (
-    <section className="hero ag-hero" aria-label="实时 agent 会话回放">
+    <section className="hero ag-hero" aria-label="agent 会话回放">
       <div className="ag-top">
         <div className="ag-say">
-          <span className="lbl"><span className={`dot ${running ? "pulse" : ""}`} />回放近期完成的 agent 会话</span>
+          <span className="lbl"><span className={`dot ${running ? "pulse" : ""}`} />{rec ? `回放真实运行记录：${rec.run.contents} 条测试集真实评论，判官 ${rec.run.judge_model}，agent ${rec.run.agent_model ?? "—"}` : "回放近期完成的 agent 会话"}</span>
           <h2>由模型决定查什么，<br className="show-sm-br" />由系统决定它能做什么、能提交什么。</h2>
         </div>
-        <div className="ag-stats">
-          <div><span className="k">agent 处理中</span><span className="v num">{stats?.agent.open ?? "—"}</span></div>
-          <div><span className="k">agent 处置</span><span className="v num">{stats?.agent.disposed ?? "—"}</span></div>
-          <div><span className="k">转人工</span><span className="v num">{stats?.agent.released ?? "—"}</span></div>
-          <div><span className="k">用时 p50 · p95</span><span className="v num">{stats ? `${duration(stats.latency_ms.agent_p50)} · ${duration(stats.latency_ms.agent_p95)}` : "—"}</span></div>
-        </div>
+        {b ? (
+          <div className="ag-stats">
+            <div><span className="k">样本</span><span className="v num">{b.n}</span></div>
+            <div><span className="k">快判直接处理</span><span className="v num">{b.fast}</span></div>
+            <div><span className="k">转 agent</span><span className="v num">{b.agent}</span></div>
+            <div><span className="k">agent 处置</span><span className="v num">{b.disposed}</span></div>
+            <div><span className="k">agent 转人工</span><span className="v num">{b.released}</span></div>
+          </div>
+        ) : (
+          <div className="ag-stats">
+            <div><span className="k">处理中</span><span className="v num">{stats?.agent.open ?? "—"}</span></div>
+            <div><span className="k">agent 处置</span><span className="v num">{stats?.agent.disposed ?? "—"}</span></div>
+            <div><span className="k">转人工</span><span className="v num">{stats?.agent.released ?? "—"}</span></div>
+          </div>
+        )}
       </div>
+      {rec ? (
+        <div className="ag-cats seg" role="radiogroup" aria-label="类别">
+          {CATS.map((c) => <button key={c.id} role="radio" aria-checked={cat === c.id} className={cat === c.id ? "on" : ""} onClick={() => setCat(c.id)}>{c.label}{c.id !== "all" && rec.by_category[c.id] ? <span className="faint"> {rec.by_category[c.id]!.agent}</span> : null}</button>)}
+        </div>
+      ) : null}
       <div className="ag-main">
         <Loop node={node} cur={cur} />
         <div className="ag-session">
-          {review && t ? (
-            <>
-              <div className="ag-sh">
-                <Id value={t.content.content_id} short />
-                {review.ruling ? <ActionBadge action={review.ruling.action} /> : review.release_reason ? <Badge tone="warn">转人工：{reasonText(review.release_reason)}</Badge> : null}
-                <span className="faint small">{review.agent_model ?? "—"} · 工具调用 {review.tools_used}/{review.budget_tools} 次 · 费用 {yuan(review.used_micro)}（上限 {yuan(review.budget_micro, 2)}）{took !== null ? ` · 用时 ${duration(took)}` : ""}</span>
-              </div>
-              {t.content.text ? <div className="ag-text">{t.content.text}</div> : null}
-              <div className="steps ag-steps">{shown.map((s, i) => <StepRow key={s.call_id} s={s} t0={review.created_at} i={i === shown.length - 1 ? 0 : 0} />)}</div>
-            </>
-          ) : <div className="empty">{count ? "正在加载会话…" : "暂无已完成的 agent 会话；开启模拟流量后数秒内即会出现"}</div>}
+          {rows.length ? <FeedBox rows={rows} /> : <div className="feed-box empty">{rec ? "正在载入记录…" : "暂无已完成的 agent 会话；开启模拟流量后数秒内即会出现"}</div>}
           <div className="row ag-ctl">
             <button className="btn sm" onClick={() => setRunning(!running)}>{running ? "暂停" : "继续"}</button>
-            <button className="btn sm" onClick={next}>下一个会话</button>
-            {t ? <a className="btn sm ghost" href={`#/contents/${encodeURIComponent(t.content.content_id)}`}>查看完整时间线</a> : null}
-            <span className="faint small">{demo ? "演示环境中 agent 为按相同协议运行的脚本；harness、工具与提交校验均为正式代码。" : "agent 模型经中转服务调用。"}</span>
+            <button className="btn sm" onClick={next}>跳到下一个会话</button>
+            <span className="faint small">{rec ? "真实模型在正式 harness 上的运行记录，每一步均取自数据库。" : demo ? "演示环境中 agent 为按相同协议运行的脚本；harness、工具与提交校验均为正式代码。" : "agent 模型经中转服务调用。"}</span>
           </div>
         </div>
       </div>
@@ -152,6 +215,72 @@ const GUARDS: { name: string; problem: string; how: string; proof: string; code:
     how: "模型停止时追问一次，要求调用 dispose 或 release；仍未结束则以 model_release 转人工。", proof: "release 测试。", code: "extension.ts" },
 ];
 
+/** What the recorded run shows for each guard (null: nothing that run can show). */
+function guardFact(name: string, rec: HarnessRecord): string | null {
+  const blocked = rec.blocked.reduce((a, x) => a + x.n, 0);
+  const rejected = rec.rejections.reduce((a, x) => a + x.n, 0);
+  const evidence = rec.tools.filter((t) => ["get_thread_context", "get_account_history", "load_rule"].includes(t.tool)).reduce((a, t) => a + t.calls, 0);
+  const judge = rec.tools.find((t) => t.tool === "judge")?.calls ?? 0;
+  const inj = rec.by_category["injection"];
+  switch (name) {
+    case "可恢复的会话": return `${rec.budget.sessions} 个会话全部走完；外部请求 ${rec.requests.external} 次，其中重试 ${rec.requests.retried} 次`;
+    case "租约与代次": return `重新接手的审次 ${rec.recovery.reacquired} 个`;
+    case "执行资格": return `hook 拦截工具调用 ${blocked} 次${rec.blocked[0] ? `（最多的原因：${rec.blocked[0].reason}）` : ""}`;
+    case "预算": return `平均每次审核调用工具 ${rec.budget.tools_avg.toFixed(1)} 次（最多 ${rec.budget.tools_max} 次，上限 ${rec.budget.tools_limit}）；平均费用 ${yuan(rec.budget.cost_avg_micro)}，超出预算 ${rec.budget.over_budget} 次`;
+    case "证据边界": return `取证调用 ${evidence} 次，全部按审次快照查询`;
+    case "判官支持": return `带证据复判 ${judge} 次`;
+    case "提交校验": return `拒绝提交 ${rejected} 次${rec.rejections[0] ? `（最多的错误码：${rec.rejections[0].code}）` : ""}`;
+    case "注入防护": return inj ? `注入类 ${inj.n} 条：快判直接处理 ${inj.fast_pass + inj.fast_block} 条，agent 处置 ${inj.agent_disposed} 条，转人工 ${inj.agent_released + inj.human_direct} 条` : null;
+    case "强制收尾": return `追问收尾 ${rec.recovery.yield_prompts} 次`;
+    default: return null;
+  }
+}
+
+function Bars({ rows }: { rows: [string, number][] }) {
+  const max = Math.max(1, ...rows.map((r) => r[1]));
+  if (!rows.length) return <div className="small faint">无</div>;
+  return <div className="rbars">{rows.map(([k, n]) => <div key={k} className="rbar"><span className="l">{k}</span><span className="t"><i style={{ width: `${(100 * n) / max}%` }} /></span><span className="n num">{n}</span></div>)}</div>;
+}
+
+function RecordStats({ rec }: { rec: HarnessRecord }) {
+  const cats = CATS.filter((c) => c.id !== "all" && rec.by_category[c.id]);
+  const blocked = rec.blocked.reduce((a, x) => a + x.n, 0);
+  const rejected = rec.rejections.reduce((a, x) => a + x.n, 0);
+  return (
+    <Panel title="Harness 在这次运行中做了什么" sub={`${rec.run.contents} 条真实评论，判官 ${rec.run.judge_model}，agent ${rec.run.agent_model ?? "—"}；全部数字取自运行记录`}>
+      <div className="kpis rec-kpis" style={{ ["--n" as string]: 4 }}>
+        <Kpi label="工具调用" value={rec.tools.reduce((a, t) => a + t.calls, 0)} foot={`其中被 hook 拦截 ${blocked} 次`} />
+        <Kpi label="提交被拒" value={rejected} foot="未通过提交校验，agent 修正或转人工" />
+        <Kpi label="模型调用" value={rec.model.calls} foot={`输入 ${Math.round(rec.model.input_tokens / 1000)}k / 输出 ${Math.round(rec.model.output_tokens / 1000)}k token`} />
+        <Kpi label="agent 用时" value={rec.latency_ms.agent_p50 !== null ? duration(rec.latency_ms.agent_p50) : "—"} foot={`中位数；较慢的 5% 为 ${rec.latency_ms.agent_p95 !== null ? duration(rec.latency_ms.agent_p95) : "—"}`} />
+      </div>
+      <div className="rec-grid">
+        <div>
+          <h3 className="ov-h">按类别</h3>
+          <table className="table stackable rec-table">
+            <thead><tr><th>类别</th><th className="num">条数</th><th className="num">快判直接处理</th><th className="num">转 agent</th><th className="num">agent 处置</th><th className="num">agent 转人工</th></tr></thead>
+            <tbody>{cats.map((c) => { const x = rec.by_category[c.id]!; return (
+              <tr key={c.id}><td data-label="类别" className="lead">{c.label}</td><td data-label="条数" className="num">{x.n}</td><td data-label="快判直接处理" className="num">{x.fast_pass + x.fast_block}</td>
+                <td data-label="转 agent" className="num">{x.agent}</td><td data-label="agent 处置" className="num">{x.agent_disposed}</td><td data-label="agent 转人工" className="num">{x.agent_released + x.human_direct}</td></tr>); })}</tbody>
+          </table>
+        </div>
+        <div>
+          <h3 className="ov-h">工具调用次数</h3>
+          <Bars rows={rec.tools.map((t) => [t.tool, t.calls])} />
+          <h3 className="ov-h" style={{ marginTop: 16 }}>转人工原因</h3>
+          <Bars rows={Object.entries(rec.recovery.released).sort((a, b) => b[1] - a[1]).map(([k, n]) => [reasonText(k), n])} />
+        </div>
+        <div>
+          <h3 className="ov-h">hook 拦截原因</h3>
+          <Bars rows={rec.blocked.map((x) => [x.reason, x.n])} />
+          <h3 className="ov-h" style={{ marginTop: 16 }}>提交校验错误码</h3>
+          <Bars rows={rec.rejections.map((x) => [x.code, x.n])} />
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
 const TOOLS: { name: string; what: string; ev: boolean; ext: boolean }[] = [
   { name: "load_rule", what: "按审次的规则版本返回规则正文、例外，以及处置线与放行线", ev: true, ext: false },
   { name: "get_thread_context", what: "父评论、上游回复、直接回复、被 @ 用户的发言，以及前后各 3 条", ev: true, ext: false },
@@ -164,13 +293,16 @@ const TOOLS: { name: string; what: string; ev: boolean; ext: boolean }[] = [
 ];
 
 export function Agent() {
+  const rec = usePoll<HarnessRecord | { available: false }>("/api/harness/record", 0).data;
+  const record = rec && rec.available ? rec : null;
   return (
     <>
       <div className="cap-head">
         <h1>Agent 与 Harness</h1>
-        <p>审核 agent 运行在 Pi 上，每个可疑<Term k="审次" />对应一个持久会话。模型自行决定获取哪些<Term k="证据" />、是否复判；<Term k="harness" /> 在每一步外设置约束，决定它能否执行、能否提交。上半部分回放近期完成的会话，下半部分介绍各项约束的实现与验证。</p>
+        <p>审核 agent 运行在 Pi 上，每个可疑<Term k="审次" />对应一个持久会话。模型自行决定获取哪些<Term k="证据" />、是否复判；<Term k="harness" /> 在每一步外设置约束，决定它能否执行、能否提交。上半部分回放会话，中间是 harness 在真实运行中的统计，下半部分介绍各项约束的实现与验证。</p>
       </div>
-      <Live />
+      <Live rec={record} />
+      {record ? <div className="cap-gap"><RecordStats rec={record} /></div> : null}
 
       <div className="cap-gap">
         <Panel title="Harness 的约束" sub="每项约束防范一个具体问题；点开可查看实现方式与验证方法">
@@ -180,6 +312,7 @@ export function Agent() {
                 <summary>
                   <div className="g-h"><span className="g-n num">{i + 1}</span><h3>{g.name}</h3><span className="g-more" aria-hidden="true">实现与验证</span></div>
                   <p className="g-p">{g.problem}</p>
+                  {record && guardFact(g.name, record) ? <p className="g-r"><span>本次运行</span>{guardFact(g.name, record)}</p> : null}
                 </summary>
                 <p className="g-w"><span className="faint">实现：</span>{g.how}</p>
                 <p className="g-v"><span className="faint">验证：</span>{g.proof}</p>

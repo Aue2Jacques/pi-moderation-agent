@@ -2,7 +2,7 @@
 // usage: node --experimental-strip-types packages/gateway/src/main.ts
 // DEMO=1: demo mode, no .env and no API key: scripted judge, the repository's fitted temperatures, demo prices and demo
 // account history (packages/worker/src/demo.ts); everything else is the normal gateway. Started by scripts/console.ts.
-import { readFileSync, mkdirSync } from "node:fs";
+import { readFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parse } from "yaml";
 import { createModels } from "@earendil-works/pi-ai/models";
@@ -16,6 +16,7 @@ import { createHttpServer } from "./http.ts";
 import { readCalibFiles } from "./console-api.ts";
 import { DemoTraffic, MAX_PER_SEC, SIM_PREFIX, SIM_REVIEWER } from "./demo-traffic.ts";
 import { DemoRetention } from "./demo-retention.ts";
+import { HarnessRecordStore } from "./harness-record.ts";
 import { demoImageChecker, storeImage } from "./demo-images.ts";
 
 export function loadDotEnv(): void {
@@ -107,6 +108,8 @@ async function main(): Promise<void> {
       calibFiles: readCalibFiles(env("CALIB_DIR", "calib"), calibJudge), streamPollMs: envNum("STREAM_POLL_MS", 250), livePollMs: envNum("LIVE_POLL_MS", 500),
       ...(trafficApi ? { traffic: trafficApi, simPrefix: SIM_PREFIX, simReviewer: SIM_REVIEWER } : {}),
       ...(corpus ? { corpus: { judge: corpus.judge, items: corpus.items.length } } : {}),
+      // HARNESS_RECORD_DB: a recorded real harness run for the Agent page (scripts/run-ac.ts output, read only)
+      ...(process.env["HARNESS_RECORD_DB"] && existsSync(env("HARNESS_RECORD_DB")) ? { harnessRecord: new HarnessRecordStore(env("HARNESS_RECORD_DB"), (v) => (v === bundle.rulesVer ? bundle : undefined)) } : {}),
       // image intake: demo -> its data dir + presets; real -> IMAGE_DIR when set (then the existing image channel, or
       // image_unsupported -> a person when IMAGE_MODEL is not set); otherwise images are refused
       ...(demo ? { images: { dir: demoImgDir, note: "演示模式：图片由脚本判官模拟（预置截图按已知内容打分，其他图片给中间带概率）",

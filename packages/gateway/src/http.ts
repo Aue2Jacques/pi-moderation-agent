@@ -10,6 +10,7 @@ import type { Gateway } from "./gateway.ts";
 import { DASHBOARD_HTML, HUMAN_HTML } from "./pages.ts";
 import { LiveHub } from "./live.ts";
 import { ActionError, claimTask, pinnedBundle, humanRule, intakeContent, openAppeal, unclaimTask } from "./console-actions.ts";
+import type { HarnessRecordStore } from "./harness-record.ts";
 import { buildTimeline, humanQueue, listAppeals, listReviews, rulesInfo, stats, type CalibFileInfo, type TimelineImages } from "./console-api.ts";
 import type { ConsoleConfig, DemoSampleInfo, ImageSampleInfo, TrafficStatus } from "./console-types.ts";
 import { MAX_IMAGE_BYTES, decodeImage, storeImage } from "./demo-images.ts";
@@ -36,6 +37,8 @@ export type ConsoleDeps = {
   images?: { dir: string; samples?: (ImageSampleInfo & { ref: string; file: string })[]; note?: string };
   /** demo mode with DEMO_CORPUS: which judge run is replayed and how many real texts the traffic draws from */
   corpus?: { judge: string; items: number };
+  /** HARNESS_RECORD_DB: a recorded real harness run (real judge, real agent model) the Agent page replays; read only */
+  harnessRecord?: HarnessRecordStore;
 };
 
 export type HttpDeps = { db: Db; gateway: Gateway; bundle: PolicyBundle; humanAuth: core.HumanAuth; now: () => number; console?: ConsoleDeps };
@@ -186,6 +189,11 @@ export function createHttpServer(d: HttpDeps): Server {
           ...(g("updated_since") !== undefined && Number.isFinite(Number(g("updated_since"))) ? { updatedSince: Number(g("updated_since")) } : {}) }));
       }
       if (req.method === "GET" && path === "/api/stats") return json(res, 200, stats(db, d.now()));
+      if (req.method === "GET" && path === "/api/harness/record") return json(res, 200, cons.harnessRecord ? cons.harnessRecord.summary() : { available: false });
+      if (req.method === "GET" && (mm0 = m(/^\/api\/harness\/record\/contents\/([^/]+)$/))) {
+        const t = cons.harnessRecord?.timeline(decodeURIComponent(mm0[1]!));
+        return t ? json(res, 200, t) : json(res, 404, { code: "E_CONTENT_NOT_FOUND" });
+      }
       if (req.method === "GET" && path === "/api/rules") {
         return json(res, 200, rulesInfo(db, d.bundle, gateway.d.ruleTexts ?? {}, { calibVer: gateway.d.calibrator.calibVer, calibMode: gateway.d.calibrator.mode, calibFiles: [...(cons.calibFiles ?? [])], ...(gateway.d.candidate ? { candidate: gateway.d.candidate.bundle } : {}) }));
       }

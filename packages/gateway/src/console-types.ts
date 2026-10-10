@@ -240,3 +240,31 @@ export type LiveFrame = {
   /** fast-path contents a second (G's in-memory window); null when the gateway does not report it */
   flow: Flow | null;
 };
+
+// ---------- recorded harness run (harness-record.ts, GET /api/harness/record) ----------
+
+/** the categories of the harness showcase set (scripts/build-harness-set.py), in display order */
+export const RECORD_CATEGORIES = ["normal", "hard_negative", "abuse", "adversarial", "marketing", "injection"] as const;
+export type RecordCategory = (typeof RECORD_CATEGORIES)[number];
+
+export type RecordSession = {
+  content_id: string; review_id: string; category: RecordCategory | "other";
+  route: "fast_pass" | "fast_block" | "agent" | "human_direct"; state: string; action: string | null; actor: string | null;
+  release_reason: string | null; suspect_reason: string | null; steps: number; tools_used: number; used_micro: number | null; agent_ms: number | null;
+};
+
+export type HarnessRecord = {
+  available: true;
+  run: { contents: number; judge_model: string; agent_model: string | null; started: number | null; ended: number | null };
+  by_category: Record<string, { n: number; fast_pass: number; fast_block: number; agent: number; agent_disposed: number; agent_released: number; human_direct: number }>;
+  tools: { tool: string; calls: number; blocked: number }[];
+  blocked: { reason: string; n: number }[];
+  rejections: { code: string; n: number }[];
+  requests: { external: number; retried: number };
+  model: { calls: number; input_tokens: number; output_tokens: number };
+  budget: { sessions: number; tools_avg: number; tools_max: number; tools_limit: number; cost_avg_micro: number; cost_max_micro: number; cost_limit_micro: number; over_budget: number };
+  recovery: { reacquired: number; yield_prompts: number; released: Record<string, number> };
+  latency_ms: { agent_p50: number | null; agent_p95: number | null };
+  sessions: RecordSession[];
+};
+
